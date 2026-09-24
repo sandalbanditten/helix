@@ -8,6 +8,9 @@ Take your time and ask about specification details rather than guessing.
 We want a simple breadcrumb trail as a configurable statusline element.
 It should use treesitter queries that live in `runtime/queries/<lang>/` along with the other queries, and show up on using `helix --health [CATEGORY]`.
 It should be much like `context.hx`, a steel plugin with source code at `~/.local/share/steel/cogs/context`.
+Take the queries from there.
+By default it should be enabled and be placed after the file name.
+A config option for a leading "> " should be present and enabled by default.
 It should be simple and use as much existing code as possible.
 It should be idiomatic rust and follow the way helix does things.
 
