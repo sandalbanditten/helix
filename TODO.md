@@ -4,9 +4,6 @@ Remember to be idiomatic, focus on clean code and architecture.
 Read the files in `docs/`, especially `architecture.md` and `vision.md` and do things the rust and helix way.
 Take your time and ask about specification details rather than guessing.
 
-## Smooth Scroll
-Minor bug where it is impossible to scroll to the bottom of documentation popups with smooth scrolling enabled.
-
 ## Breadcrumb Trail
 We want a simple breadcrumb trail as a configurable statusline element.
 It should use treesitter queries that live in `runtime/queries/<lang>/` along with the other queries, and show up on using `helix --health [CATEGORY]`.
