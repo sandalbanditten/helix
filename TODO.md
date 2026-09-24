@@ -11,11 +11,18 @@ It should respect `editor.scrolloff` and be configurable as `editor.smooth-scrol
 Possibly add a debounce delay for the line/char numbers.
 
 ## Breadcrumb Trail
-We want a simple breacrumb trail as a configurable statusline element.
+We want a simple breadcrumb trail as a configurable statusline element.
 It should use treesitter queries that live in `runtime/queries/<lang>/` along with the other queries, and show up on using `helix --health [CATEGORY]`.
 It should be much like `context.hx`, a steel plugin with source code at `~/.local/share/steel/cogs/context`.
 It should be simple and use as much existing code as possible.
 It should be idiomatic rust and follow the way helix does things.
+
+## Simple Code Folding Plugin
+We want a simple code folding plugin with a keybind to fold/unfold currently selected function, method, class, block, module, etc.
+We want two keybinds to fold all and unfold all.
+We want a config option for starting with everything folded.
+It should be performant, consider the specialized data structures in use by the helix editor.
+It should, if possible, use tree-sitter for performant code analysis.
 
 ## File Tree
 We want a filetree.
