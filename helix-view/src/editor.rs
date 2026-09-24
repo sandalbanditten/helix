@@ -685,6 +685,7 @@ pub struct StatusLineConfig {
     pub mode: ModeConfig,
     pub diagnostics: Vec<Severity>,
     pub workspace_diagnostics: Vec<Severity>,
+    pub breadcrumbs: BreadcrumbsConfig,
 }
 
 impl Default for StatusLineConfig {
@@ -696,6 +697,7 @@ impl Default for StatusLineConfig {
                 E::Mode,
                 E::Spinner,
                 E::FileName,
+                E::Breadcrumbs,
                 E::ReadOnlyIndicator,
                 E::FileModificationIndicator,
             ],
@@ -711,6 +713,7 @@ impl Default for StatusLineConfig {
             mode: ModeConfig::default(),
             diagnostics: vec![Severity::Warning, Severity::Error],
             workspace_diagnostics: vec![Severity::Warning, Severity::Error],
+            breadcrumbs: BreadcrumbsConfig::default(),
         }
     }
 }
@@ -733,6 +736,28 @@ impl Default for ModeConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct BreadcrumbsConfig {
+    /// The string shown between two breadcrumbs.
+    pub separator: String,
+    /// Whether the separator is also shown before the first breadcrumb.
+    pub leading_separator: bool,
+    /// Whether the outermost breadcrumbs are left out when the trail does not fit into the
+    /// statusline.
+    pub truncate: bool,
+}
+
+impl Default for BreadcrumbsConfig {
+    fn default() -> Self {
+        Self {
+            separator: String::from(">"),
+            leading_separator: true,
+            truncate: true,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StatusLineElement {
@@ -747,6 +772,9 @@ pub enum StatusLineElement {
 
     /// The relative file path
     FileName,
+
+    /// The syntax nodes enclosing the cursor, such as the function and the class it is in
+    Breadcrumbs,
 
     /// The file absolute path
     FileAbsolutePath,

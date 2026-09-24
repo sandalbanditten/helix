@@ -11,7 +11,7 @@ use helix_view::{
 
 use crate::ui::ProgressSpinners;
 
-use helix_view::editor::StatusLineElement as StatusLineElementID;
+use helix_view::editor::{BreadcrumbsConfig, StatusLineElement as StatusLineElementID};
 use tui::buffer::Buffer as Surface;
 use tui::text::{Span, Spans};
 
@@ -22,6 +22,11 @@ pub struct RenderContext<'a> {
     pub focused: bool,
     pub spinners: &'a ProgressSpinners,
     pub parts: RenderBuffer<'a>,
+    /// Set by elements that could be rendered narrower, like the breadcrumbs.
+    pub shrinkable: bool,
+    /// How many columns the left and right side of the status line overlap by. Shrinkable elements
+    /// make up for it when the status line is rendered again.
+    pub overflow: usize,
 }
 
 impl<'a> RenderContext<'a> {
@@ -39,6 +44,8 @@ impl<'a> RenderContext<'a> {
             focused,
             spinners,
             parts: RenderBuffer::default(),
+            shrinkable: false,
+            overflow: 0,
         }
     }
 }
@@ -59,16 +66,18 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
 
     surface.set_style(viewport.with_height(1), base_style);
 
-    // Left side of the status line.
+    render_elements(context, base_style);
 
-    let config = context.editor.config();
-
-    for element_id in &config.statusline.left {
-        let render = get_render_function(*element_id);
-        (render)(context, |context, span| {
-            append(&mut context.parts.left, span, base_style)
-        });
+    // If the sides overlap, render again so shrinkable elements make room.
+    let overflow = (context.parts.left.width() + context.parts.right.width())
+        .saturating_sub(viewport.width as usize);
+    if overflow > 0 && context.shrinkable {
+        context.overflow = overflow;
+        context.parts = RenderBuffer::default();
+        render_elements(context, base_style);
     }
+
+    // Left side of the status line.
 
     surface.set_spans(
         viewport.x,
@@ -78,13 +87,6 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
     );
 
     // Right side of the status line.
-
-    for element_id in &config.statusline.right {
-        let render = get_render_function(*element_id);
-        (render)(context, |context, span| {
-            append(&mut context.parts.right, span, base_style)
-        })
-    }
 
     surface.set_spans(
         viewport.x
@@ -97,13 +99,6 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
     );
 
     // Center of the status line.
-
-    for element_id in &config.statusline.center {
-        let render = get_render_function(*element_id);
-        (render)(context, |context, span| {
-            append(&mut context.parts.center, span, base_style)
-        })
-    }
 
     // Width of the empty space between the left and center area and between the center and right area.
     let spacing = 1u16;
@@ -120,6 +115,31 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
     );
 }
 
+fn render_elements(context: &mut RenderContext, base_style: Style) {
+    let config = context.editor.config();
+
+    for element_id in &config.statusline.left {
+        let render = get_render_function(*element_id);
+        (render)(context, |context, span| {
+            append(&mut context.parts.left, span, base_style)
+        });
+    }
+
+    for element_id in &config.statusline.right {
+        let render = get_render_function(*element_id);
+        (render)(context, |context, span| {
+            append(&mut context.parts.right, span, base_style)
+        })
+    }
+
+    for element_id in &config.statusline.center {
+        let render = get_render_function(*element_id);
+        (render)(context, |context, span| {
+            append(&mut context.parts.center, span, base_style)
+        })
+    }
+}
+
 fn append<'a>(buffer: &mut Spans<'a>, mut span: Span<'a>, base_style: Style) {
     span.style = base_style.patch(span.style);
     buffer.0.push(span);
@@ -134,6 +154,7 @@ where
         helix_view::editor::StatusLineElement::Spinner => render_lsp_spinner,
         helix_view::editor::StatusLineElement::FileBaseName => render_file_base_name,
         helix_view::editor::StatusLineElement::FileName => render_file_name,
+        helix_view::editor::StatusLineElement::Breadcrumbs => render_breadcrumbs,
         helix_view::editor::StatusLineElement::FileAbsolutePath => render_file_absolute_path,
         helix_view::editor::StatusLineElement::FileModificationIndicator => {
             render_file_modification_indicator
@@ -459,6 +480,95 @@ where
     write(context, title.into());
 }
 
+fn render_breadcrumbs<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let editor = context.editor;
+    let Some(syntax) = context.doc.syntax() else {
+        return;
+    };
+    let text = context.doc.text().slice(..);
+    let cursor = context
+        .doc
+        .selection(context.view.id)
+        .primary()
+        .cursor(text);
+
+    let breadcrumbs: Vec<_> = syntax
+        .breadcrumbs(
+            text,
+            &editor.syn_loader.load(),
+            text.char_to_byte(cursor) as u32,
+        )
+        .into_iter()
+        .map(|breadcrumb| {
+            let mut spans = Vec::new();
+            for segment in breadcrumb.segments {
+                if !spans.is_empty() {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(segment.text, editor.theme.get(segment.scope)));
+            }
+            Spans(spans)
+        })
+        .collect();
+
+    let config = editor.config();
+    let config = &config.statusline.breadcrumbs;
+    // Truncating drops breadcrumbs but always keeps the innermost one.
+    context.shrinkable |= config.truncate && breadcrumbs.len() > 1;
+
+    let trail = breadcrumb_trail(
+        &breadcrumbs,
+        config,
+        editor.theme.get("ui.statusline.separator"),
+        context.overflow,
+    );
+    for span in trail {
+        write(context, span);
+    }
+}
+
+/// Lays out `breadcrumbs`, outermost first, each after a separator and followed by a space. If
+/// `truncate` is enabled, the outermost breadcrumbs are replaced with an ellipsis until the trail
+/// is `overflow` columns narrower, keeping at least the innermost one.
+fn breadcrumb_trail<'a>(
+    breadcrumbs: &[Spans<'a>],
+    config: &BreadcrumbsConfig,
+    separator_style: Style,
+    overflow: usize,
+) -> Vec<Span<'a>> {
+    let layout = |skip: usize| {
+        let mut trail = Vec::new();
+        if skip > 0 {
+            trail.push(Span::styled("…", separator_style));
+            trail.push(Span::raw(" "));
+        }
+        for (i, breadcrumb) in breadcrumbs.iter().enumerate().skip(skip) {
+            if i > 0 || config.leading_separator {
+                trail.push(Span::styled(config.separator.clone(), separator_style));
+                trail.push(Span::raw(" "));
+            }
+            trail.extend(breadcrumb.0.iter().cloned());
+            trail.push(Span::raw(" "));
+        }
+        Spans(trail)
+    };
+
+    let mut trail = layout(0);
+    if config.truncate && overflow > 0 {
+        let max_width = trail.width().saturating_sub(overflow);
+        for skip in 1..breadcrumbs.len() {
+            trail = layout(skip);
+            if trail.width() <= max_width {
+                break;
+            }
+        }
+    }
+    trail.0
+}
+
 fn render_file_absolute_path<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
@@ -591,5 +701,76 @@ where
 {
     if context.focused && context.doc.code_action_hints(context.view.id) {
         write(context, " ⋮ ".into())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const BREADCRUMBS: [&str; 3] = ["mod a", "impl Editor", "fn render"];
+
+    fn trail(breadcrumbs: &[&str], config: &BreadcrumbsConfig, overflow: usize) -> String {
+        let breadcrumbs: Vec<_> = breadcrumbs.iter().copied().map(Spans::from).collect();
+        breadcrumb_trail(&breadcrumbs, config, Style::default(), overflow)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn breadcrumb_trail_separators() {
+        let config = BreadcrumbsConfig::default();
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 0),
+            "> mod a > impl Editor > fn render "
+        );
+        assert_eq!(trail(&[], &config, 0), "");
+
+        let config = BreadcrumbsConfig {
+            separator: "›".to_string(),
+            leading_separator: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 0),
+            "mod a › impl Editor › fn render "
+        );
+    }
+
+    #[test]
+    fn breadcrumb_trail_truncation() {
+        let config = BreadcrumbsConfig::default();
+        // Replacing "> mod a " with "… " saves six columns.
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 1),
+            "… > impl Editor > fn render "
+        );
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 6),
+            "… > impl Editor > fn render "
+        );
+        assert_eq!(trail(&BREADCRUMBS, &config, 7), "… > fn render ");
+        // The innermost breadcrumb is always kept.
+        assert_eq!(trail(&BREADCRUMBS, &config, 100), "… > fn render ");
+        assert_eq!(trail(&BREADCRUMBS[2..], &config, 100), "> fn render ");
+
+        let config = BreadcrumbsConfig {
+            leading_separator: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 1),
+            "… > impl Editor > fn render "
+        );
+
+        let config = BreadcrumbsConfig {
+            truncate: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            trail(&BREADCRUMBS, &config, 100),
+            "> mod a > impl Editor > fn render "
+        );
     }
 }

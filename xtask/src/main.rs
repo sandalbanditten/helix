@@ -38,6 +38,7 @@ pub mod tasks {
             LanguageData::compile_textobject_query(grammar, config)?;
             LanguageData::compile_tag_query(grammar, config)?;
             LanguageData::compile_rainbow_query(grammar, config)?;
+            LanguageData::compile_breadcrumb_query(grammar, config)?;
         }
 
         println!("Query check succeeded");

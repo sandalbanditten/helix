@@ -2,6 +2,7 @@ pub mod config;
 
 use std::{
     borrow::Cow,
+    cmp::Reverse,
     collections::HashMap,
     fmt, iter,
     ops::{self, RangeBounds},
@@ -28,7 +29,7 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{chars::char_is_line_ending, indent::IndentQuery, tree_sitter, ChangeSet, Language};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -44,6 +45,7 @@ pub struct LanguageData {
     textobject_query: OnceCell<Option<TextObjectQuery>>,
     tag_query: OnceCell<Option<TagQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
+    breadcrumb_query: OnceCell<Option<BreadcrumbQuery>>,
 }
 
 impl LanguageData {
@@ -55,6 +57,7 @@ impl LanguageData {
             textobject_query: OnceCell::new(),
             tag_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
+            breadcrumb_query: OnceCell::new(),
         }
     }
 
@@ -222,6 +225,36 @@ impl LanguageData {
             .get_or_init(|| {
                 let grammar = self.syntax_config(loader)?.grammar;
                 Self::compile_rainbow_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
+    /// Compiles the breadcrumbs.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_breadcrumb_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<BreadcrumbQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "breadcrumbs.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let breadcrumb_query = BreadcrumbQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile breadcrumbs.scm query for '{name}'"))?;
+        Ok(Some(breadcrumb_query))
+    }
+
+    fn breadcrumb_query(&self, loader: &Loader) -> Option<&BreadcrumbQuery> {
+        self.breadcrumb_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_breadcrumb_query(grammar, &self.config)
                     .map_err(|err| {
                         log::error!("{err}");
                     })
@@ -422,6 +455,10 @@ impl Loader {
 
     fn rainbow_query(&self, lang: Language) -> Option<&RainbowQuery> {
         self.language(lang).rainbow_query(self)
+    }
+
+    fn breadcrumb_query(&self, lang: Language) -> Option<&BreadcrumbQuery> {
+        self.language(lang).breadcrumb_query(self)
     }
 
     pub fn language_server_configs(&self) -> &HashMap<String, LanguageServerConfiguration> {
@@ -698,6 +735,68 @@ impl Syntax {
         }
 
         OverlayHighlights::Heterogenous { highlights }
+    }
+
+    /// Returns the breadcrumbs of the syntax nodes that `breadcrumbs.scm` queries match around
+    /// the byte `pos`, from the outermost to the innermost, including those of injected
+    /// languages.
+    pub fn breadcrumbs<'a>(
+        &self,
+        source: RopeSlice,
+        loader: &'a Loader,
+        pos: u32,
+    ) -> Vec<Breadcrumb<'a>> {
+        let mut breadcrumbs = Vec::new();
+
+        for layer in self.layers_for_byte_range(pos, pos) {
+            let layer = self.layer(layer);
+            let (Some(tree), Some(query)) = (layer.tree(), loader.breadcrumb_query(layer.language))
+            else {
+                continue;
+            };
+            let Some(breadcrumb_capture) = query.breadcrumb_capture else {
+                continue;
+            };
+
+            let mut cursor = InactiveQueryCursor::new(pos..pos + 1, TREE_SITTER_MATCH_LIMIT)
+                .execute_query(&query.query, &tree.root_node(), RopeInput::new(source));
+            while let Some(mat) = cursor.next_match() {
+                let Some(range) = mat
+                    .nodes_for_capture(breadcrumb_capture)
+                    .next()
+                    .map(|node| node.byte_range())
+                    // A node that ends at `pos` does not enclose it.
+                    .filter(|range| range.contains(&pos))
+                else {
+                    continue;
+                };
+                let segments: Vec<_> = mat
+                    .matched_nodes()
+                    .filter(|node| node.capture != breadcrumb_capture)
+                    .map(|node| {
+                        let range = node.node.byte_range();
+                        BreadcrumbSegment {
+                            scope: query.query.capture_name(node.capture),
+                            text: flatten_breadcrumb_text(
+                                source.byte_slice(range.start as usize..range.end as usize),
+                            ),
+                        }
+                    })
+                    .filter(|segment| !segment.text.is_empty())
+                    .collect();
+                if !segments.is_empty() {
+                    breadcrumbs.push((range, Breadcrumb { segments }));
+                }
+            }
+        }
+
+        // Nodes that enclose the same position are nested, so they are ordered by their start
+        // and, for nodes starting at the same byte, the larger one first.
+        breadcrumbs.sort_by_key(|(range, _)| (range.start, Reverse(range.end)));
+        breadcrumbs
+            .into_iter()
+            .map(|(_, breadcrumb)| breadcrumb)
+            .collect()
     }
 }
 
@@ -1196,6 +1295,92 @@ impl RainbowQuery {
     }
 }
 
+#[derive(Debug)]
+pub struct BreadcrumbQuery {
+    query: Query,
+    breadcrumb_capture: Option<Capture>,
+}
+
+impl BreadcrumbQuery {
+    fn new(grammar: Grammar, source: &str) -> Result<Self, tree_sitter::query::ParseError> {
+        let query = Query::new(grammar, source, |_pattern, predicate| {
+            Err(InvalidPredicateError::unknown(predicate))
+        })?;
+
+        Ok(Self {
+            breadcrumb_capture: query.get_capture("breadcrumb"),
+            query,
+        })
+    }
+}
+
+/// A syntax node enclosing a position, such as a function or a class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breadcrumb<'a> {
+    /// The captured parts of the node, in document order, e.g. `pub`, `fn` and `render`.
+    pub segments: Vec<BreadcrumbSegment<'a>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BreadcrumbSegment<'a> {
+    /// The name of the capture, which is also the theme scope the segment is styled with.
+    pub scope: &'a str,
+    /// The captured text, flattened into a single line.
+    pub text: String,
+}
+
+/// The number of bytes after which the text of a breadcrumb segment is cut off. Breadcrumbs are
+/// computed on every render, and a capture can be arbitrarily long, such as a C function's
+/// return type that is a struct definition.
+const MAX_BREADCRUMB_SEGMENT_LEN: usize = 512;
+
+/// Flattens the text of a breadcrumb segment, which may span several lines, into one line the
+/// way it would be written if it fit, e.g. `Cache<\n    K,\n    V,\n>` into `Cache<K, V>`:
+///
+/// - Every run of whitespace becomes a single space.
+/// - Whitespace just inside parentheses and square brackets is dropped. Next to angle brackets,
+///   which may also be comparison operators, only a line break is.
+/// - A line break before a comma is dropped, as in `( Text\n, Int\n)`.
+/// - A comma that a line break separates from a closing bracket is dropped. Formatters add these,
+///   though this also turns a one-element tuple split over lines, `(\n    A,\n)`, into `(A)`.
+///
+/// Text longer than [`MAX_BREADCRUMB_SEGMENT_LEN`] is cut off with an ellipsis.
+fn flatten_breadcrumb_text(text: RopeSlice) -> String {
+    let mut flat = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if !ch.is_whitespace() {
+            if flat.len() >= MAX_BREADCRUMB_SEGMENT_LEN {
+                flat.truncate(flat.trim_end().len());
+                flat.push('…');
+                break;
+            }
+            flat.push(ch);
+            continue;
+        }
+
+        let mut has_line_break = char_is_line_ending(ch);
+        while let Some(ch) = chars.next_if(|ch| ch.is_whitespace()) {
+            has_line_break |= char_is_line_ending(ch);
+        }
+        // Leading and trailing whitespace is dropped.
+        let (Some(prev), Some(&next)) = (flat.chars().last(), chars.peek()) else {
+            continue;
+        };
+
+        let after_opening = matches!(prev, '(' | '[') || (has_line_break && prev == '<');
+        let before_closing = matches!(next, ')' | ']') || (has_line_break && next == '>');
+        if before_closing && has_line_break && prev == ',' {
+            flat.pop();
+        } else if !(after_opening || before_closing || (has_line_break && next == ',')) {
+            flat.push(' ');
+        }
+    }
+
+    flat
+}
+
 #[cfg(test)]
 mod test {
     use once_cell::sync::Lazy;
@@ -1389,5 +1574,362 @@ mod test {
             0,
             source.len(),
         );
+    }
+
+    /// Asserts the breadcrumbs around the first occurrence of `cursor` in `source`, each
+    /// written as its `scope:text` segments.
+    #[track_caller]
+    fn assert_breadcrumbs(language_name: &str, source: &str, cursor: &str, expected: &[&str]) {
+        let pos = source.find(cursor).unwrap() as u32;
+        let source = Rope::from_str(source);
+        let language = LOADER.language_for_name(language_name).unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+
+        let breadcrumbs: Vec<_> = syntax
+            .breadcrumbs(source.slice(..), &LOADER, pos)
+            .iter()
+            .map(|breadcrumb| {
+                let segments: Vec<_> = breadcrumb
+                    .segments
+                    .iter()
+                    .map(|segment| format!("{}:{}", segment.scope, segment.text))
+                    .collect();
+                segments.join(" ")
+            })
+            .collect();
+
+        assert_eq!(expected, breadcrumbs);
+    }
+
+    #[test]
+    fn test_breadcrumbs() {
+        let source = indoc::indoc! {"
+            mod editor {
+                impl Cache {
+                    pub fn get(&self) -> Option<V> {
+                        None
+                    }
+                }
+            }
+            fn main() {}
+        "};
+        let trail = [
+            "keyword:mod namespace:editor",
+            "keyword:impl type:Cache",
+            "keyword:pub keyword.function:fn function:get",
+        ];
+        assert_breadcrumbs("rust", source, "None", &trail);
+        assert_breadcrumbs("rust", source, "mod", &trail[..1]);
+        // The node ends before the line break after its closing brace.
+        assert_breadcrumbs("rust", source, "\nfn main", &[]);
+        assert_breadcrumbs(
+            "rust",
+            source,
+            "main",
+            &["keyword.function:fn function:main"],
+        );
+    }
+
+    #[test]
+    fn test_breadcrumbs_injections() {
+        let source = indoc::indoc! {"
+            # Usage
+
+            ## Example
+
+            ```rust
+            fn main() {
+                let x = 1;
+            }
+            ```
+
+            # License
+        "};
+        assert_breadcrumbs(
+            "markdown",
+            source,
+            "let",
+            &[
+                "markup.heading:Usage",
+                "markup.heading:Example",
+                "keyword.function:fn function:main",
+            ],
+        );
+        assert_breadcrumbs("markdown", source, "License", &["markup.heading:License"]);
+    }
+
+    #[test]
+    fn test_breadcrumb_queries() {
+        let cases: &[(&str, &str, &str, &[&str])] = &[
+            (
+                "bash",
+                "greet() {\n  echo hi\n}\n",
+                "echo",
+                &["function:greet"],
+            ),
+            (
+                "gdscript",
+                "class Inner:\n\tfunc run():\n\t\tpass\n",
+                "pass",
+                &[
+                    "keyword:class type:Inner",
+                    "keyword.control:func function:run",
+                ],
+            ),
+            (
+                "go",
+                "type Server struct {\n\tname string\n}\n",
+                "name",
+                &["keyword:type type:Server keyword:struct"],
+            ),
+            (
+                "javascript",
+                "function greet() {\n  return 1;\n}\n",
+                "return",
+                &["keyword.function:function function:greet"],
+            ),
+            (
+                "lua",
+                "function greet()\n  return 1\nend\n",
+                "return",
+                &["keyword.function:function function:greet"],
+            ),
+            (
+                "python",
+                "class Shape:\n    def area(self):\n        pass\n",
+                "pass",
+                &[
+                    "keyword:class type:Shape",
+                    "keyword.function:def function:area",
+                ],
+            ),
+            (
+                "scala",
+                "object Main {\n  def run(): Unit = {\n    println(1)\n  }\n}\n",
+                "println",
+                &[
+                    "keyword:object type:Main",
+                    "keyword.function:def function:run",
+                ],
+            ),
+            (
+                "scheme",
+                "(define (square x)\n  (* x x))\n",
+                "(* x",
+                &["keyword:define function:square"],
+            ),
+            (
+                "scheme",
+                "(define pi 3.14)\n",
+                "3.14",
+                &["keyword:define name:pi"],
+            ),
+            (
+                "typst",
+                "= Intro\n\nSome text\n",
+                "Some",
+                &["markup.heading:Intro"],
+            ),
+            (
+                "zig",
+                "const Point = struct {\n    fn len() void {\n        return;\n    }\n};\n",
+                "return",
+                &[
+                    "type:Point keyword:struct",
+                    "keyword.function:fn function:len",
+                ],
+            ),
+        ];
+        for (language_name, source, cursor, expected) in cases {
+            assert_breadcrumbs(language_name, source, cursor, expected);
+        }
+    }
+
+    /// Captures that span lines, as formatted by each language's usual formatter.
+    #[test]
+    fn test_breadcrumbs_multiline_captures() {
+        // rustfmt
+        let source = indoc::indoc! {"
+            impl<F> From<
+                Box<dyn Fn(&str) -> Result<(), Error> + Send + Sync>,
+            > for Handler<F>
+            {
+                fn from() {}
+            }
+
+            impl<A, B> Pair
+                for (
+                    VeryLongTypeName<A>,
+                    AnotherVeryLongTypeName<B>,
+                )
+            {
+                fn first() {}
+            }
+
+            impl Buffer<{ N + 1 }> {
+                fn len() {}
+            }
+
+            impl<T> Marker for (T,) {
+                fn mark() {}
+            }
+        "};
+        assert_breadcrumbs(
+            "rust",
+            source,
+            "fn from",
+            &[
+                "keyword:impl type:From<Box<dyn Fn(&str) -> Result<(), Error> + Send + Sync>> keyword:for type:Handler<F>",
+                "keyword.function:fn function:from",
+            ],
+        );
+        assert_breadcrumbs(
+            "rust",
+            source,
+            "fn first",
+            &[
+                "keyword:impl type:Pair keyword:for type:(VeryLongTypeName<A>, AnotherVeryLongTypeName<B>)",
+                "keyword.function:fn function:first",
+            ],
+        );
+        assert_breadcrumbs(
+            "rust",
+            source,
+            "fn len",
+            &[
+                "keyword:impl type:Buffer<{ N + 1 }>",
+                "keyword.function:fn function:len",
+            ],
+        );
+        assert_breadcrumbs(
+            "rust",
+            source,
+            "fn mark",
+            &[
+                "keyword:impl type:Marker keyword:for type:(T,)",
+                "keyword.function:fn function:mark",
+            ],
+        );
+
+        // GNU style
+        let source = indoc::indoc! {"
+            static struct point *
+            make_point (int x, int y)
+            {
+              return 0;
+            }
+        "};
+        assert_breadcrumbs(
+            "c",
+            source,
+            "return",
+            &["type.builtin:struct point type.builtin:* function:make_point"],
+        );
+
+        // clang-format
+        let source = indoc::indoc! {"
+            template <typename T>
+            typename std::enable_if<std::is_integral<T>::value,
+                                    T>::type
+            clamp(T value) {
+              return value;
+            }
+
+            std::function<void(int,
+                               int)>
+            make_handler() {
+              return {};
+            }
+
+            std::array<int, (sizeof(Word) >
+                             4)>
+            widen() {
+              return widened;
+            }
+        "};
+        assert_breadcrumbs(
+            "cpp",
+            source,
+            "return value",
+            &["type:typename std::enable_if<std::is_integral<T>::value, T>::type function:clamp"],
+        );
+        assert_breadcrumbs(
+            "cpp",
+            source,
+            "return {}",
+            &["type:std::function<void(int, int)> function:make_handler"],
+        );
+        assert_breadcrumbs(
+            "cpp",
+            source,
+            "widened",
+            &["type:std::array<int, (sizeof(Word) > 4)> function:widen"],
+        );
+
+        // google-java-format
+        let source = indoc::indoc! {"
+            class Index {
+              public static Map<
+                      String, List<Integer>>
+                  build(Corpus corpus) {
+                return null;
+              }
+            }
+        "};
+        assert_breadcrumbs(
+            "java",
+            source,
+            "return",
+            &[
+                "keyword:class type:Index",
+                "type:Map<String, List<Integer>> function:build",
+            ],
+        );
+
+        // gofmt
+        let source = indoc::indoc! {"
+            func (c *Cache[
+            	K,
+            	V,
+            ]) Get(key K) V {
+            	return c.items[key]
+            }
+        "};
+        assert_breadcrumbs(
+            "go",
+            source,
+            "return",
+            &["keyword.function:func type:*Cache[K, V] function:Get"],
+        );
+    }
+
+    #[test]
+    fn test_flatten_breadcrumb_text() {
+        let flatten = |text: &str| flatten_breadcrumb_text(Rope::from_str(text).slice(..));
+
+        assert_eq!(
+            flatten("  Cache<\r\n    K,\r\n    V,\r\n>\n"),
+            "Cache<K, V>"
+        );
+        assert_eq!(flatten("Tree\n  a"), "Tree a");
+        assert_eq!(flatten("(a ->\n  b)"), "(a -> b)");
+        // Haskell instance heads as ormolu and fourmolu format them. They are not parsed here, as
+        // the Haskell grammar currently aborts the test process with heap corruption.
+        assert_eq!(flatten("( Text,\n      Int\n    )"), "(Text, Int)");
+        assert_eq!(flatten("( Text\n        , Int\n        )"), "(Text, Int)");
+        // Whitespace inside parentheses and square brackets is dropped...
+        assert_eq!(flatten("( Text, [ Int ] )"), "(Text, [Int])");
+        // ...but angle brackets may be comparisons and braces are spaced by convention.
+        assert_eq!(
+            flatten("Foo<{ N < 4 }, (N > 0)>"),
+            "Foo<{ N < 4 }, (N > 0)>"
+        );
+        // A trailing comma is only dropped when a formatter put the bracket on its own line.
+        assert_eq!(flatten("(T,)"), "(T,)");
+
+        let max = "x".repeat(MAX_BREADCRUMB_SEGMENT_LEN);
+        assert_eq!(flatten(&max), max);
+        assert_eq!(flatten(&format!("{max}y")), format!("{max}…"));
+        assert_eq!(flatten(&format!("{max}\n  y")), format!("{max}…"));
     }
 }

@@ -200,6 +200,44 @@ mod tests {
     }
 
     #[test]
+    fn parsing_breadcrumbs_config() {
+        use helix_view::editor::{BreadcrumbsConfig, StatusLineElement};
+
+        let breadcrumbs = |config: &str| Config::load_test(config).editor.statusline.breadcrumbs;
+
+        assert_eq!(breadcrumbs(""), BreadcrumbsConfig::default());
+        assert_eq!(
+            breadcrumbs(
+                "[editor.statusline.breadcrumbs]\nseparator = \"›\"\nleading-separator = false\ntruncate = false"
+            ),
+            BreadcrumbsConfig {
+                separator: "›".to_string(),
+                leading_separator: false,
+                truncate: false,
+            }
+        );
+
+        // The example in the book
+        let statusline = Config::load_test(
+            r#"
+            [editor.statusline]
+            left = ["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]
+            right = ["breadcrumbs", "diagnostics", "selections", "register", "position", "file-encoding"]
+
+            [editor.statusline.breadcrumbs]
+            leading-separator = false
+            "#,
+        )
+        .editor
+        .statusline;
+        assert_eq!(statusline.right[0], StatusLineElement::Breadcrumbs);
+        assert!(!statusline.breadcrumbs.leading_separator);
+
+        let typo = "[editor.statusline.breadcrumbs]\nleading-separators = false".to_owned();
+        assert!(Config::load(Ok(&typo), Err(ConfigLoadError::default())).is_err());
+    }
+
+    #[test]
     fn parsing_smooth_scroll_config() {
         use helix_view::editor::SmoothScrollConfig;
         use std::time::Duration;

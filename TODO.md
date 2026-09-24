@@ -5,16 +5,6 @@ Read the files in `docs/`, especially `architecture.md` and `vision.md` and do t
 Take your time and ask about specification details rather than guessing.
 Performance is very important, especially for large files, directories, and projects.
 
-## Breadcrumb Trail
-We want a simple breadcrumb trail as a configurable statusline element.
-It should use treesitter queries that live in `runtime/queries/<lang>/` along with the other queries, and show up on using `helix --health [CATEGORY]`.
-It should be much like `context.hx`, a steel plugin with source code at `~/.local/share/steel/cogs/context`.
-Take the queries from there.
-By default it should be enabled and be placed after the file name.
-A config option for a leading "> " should be present and enabled by default.
-It should be simple and use as much existing code as possible.
-It should be idiomatic rust and follow the way helix does things.
-
 ## Simple Code Folding Plugin
 We want a simple code folding plugin with a keybind to fold/unfold currently selected function, method, class, block, module, etc.
 We want two keybinds to fold all and unfold all.
