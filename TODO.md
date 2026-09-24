@@ -7,6 +7,7 @@ Take your time and ask about specification details rather than guessing.
 ## Smooth Scrolling
 We want smooth scrolling for <C-d>, <C-u>, `PgUp`, `PgDn` `zz`, `zb`, and `zt`.
 Scrolling should be smooth, but it should take approximately the same time to scroll really far and very short.
+Instead of adding new functions like `:half-page-down-smooth`, it should be a config option.
 It should respect `editor.scrolloff` and be configurable as `editor.smooth-scroll = true`.
 Possibly add a debounce delay for the line/char numbers.
 
@@ -31,8 +32,9 @@ It should render and work like `grove.hx` a steel plugin with source at `~/.loca
 It should be idiomatic rust and helix-like, but as performant as possible.
 It should be able to use `LS_COLORS` like grove, and have the same feature-set.
 The theming should be helix-like, e.g. the scroll bar and pane separator.
+Unlike `gove.hx`, the viewport should end _at_ the statusline, rather that pushing the statusline to the right, e.g. the statusline should continue to span the entire width of helix' viewport.
 
-Implement the base file tree before the following expansions, but consider them when making decisions.
+Implement the base file tree before the following expansions, but consider them when making design and implementation decisions.
 Expanding on grove it should have the following features:
 - Trying to go up from the top item should cycle you to the bottom and vice-versa.
 - The view should be scrollable with <C-d> and <C-u>, like for example LSP popups.
