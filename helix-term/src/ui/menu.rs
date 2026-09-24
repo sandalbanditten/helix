@@ -6,7 +6,7 @@ use tui::{buffer::Buffer as Surface, widgets::Table};
 
 pub use tui::widgets::{Cell, Row};
 
-use helix_view::{editor::SmartTabConfig, graphics::Rect, Editor};
+use helix_view::{editor::SmartTabConfig, graphics::Rect, smooth_scroll::SmoothOffset, Editor};
 use tui::layout::Constraint;
 
 pub trait Item: Sync + Send + 'static {
@@ -32,6 +32,7 @@ pub struct Menu<T: Item> {
     callback_fn: MenuCallback<T>,
 
     scroll: usize,
+    smooth_scroll: SmoothOffset,
     size: (u16, u16),
     viewport: (u16, u16),
     recalculate: bool,
@@ -57,6 +58,7 @@ impl<T: Item> Menu<T> {
             widths: Vec::new(),
             callback_fn: Box::new(callback_fn),
             scroll: 0,
+            smooth_scroll: SmoothOffset::default(),
             size: (0, 0),
             viewport: (0, 0),
             recalculate: true,
@@ -67,15 +69,18 @@ impl<T: Item> Menu<T> {
     pub fn reset_cursor(&mut self) {
         self.cursor = None;
         self.scroll = 0;
+        self.smooth_scroll.reset();
         self.recalculate = true;
     }
 
     pub fn update_options(&mut self) -> (&mut Vec<(u32, u32)>, &mut Vec<T>) {
         self.recalculate = true;
+        self.smooth_scroll.reset();
         (&mut self.matches, &mut self.options)
     }
 
     pub fn ensure_cursor_in_bounds(&mut self) {
+        self.smooth_scroll.reset();
         if self.matches.is_empty() {
             self.cursor = None;
             self.scroll = 0;
@@ -94,6 +99,7 @@ impl<T: Item> Menu<T> {
         // reset cursor position
         self.cursor = None;
         self.scroll = 0;
+        self.smooth_scroll.reset();
     }
 
     pub fn move_up(&mut self) {
@@ -333,6 +339,10 @@ impl<T: Item + 'static> Component for Menu<T> {
     }
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        let scroll = self
+            .smooth_scroll
+            .frame(self.scroll, area.height, cx.editor);
+
         let theme = &cx.editor.theme;
         let style = theme
             .try_get("ui.menu")
@@ -340,8 +350,6 @@ impl<T: Item + 'static> Component for Menu<T> {
         let selected = theme.get("ui.menu.selected");
 
         surface.clear_with(area, style);
-
-        let scroll = self.scroll;
 
         let options: Vec<_> = self
             .matches
@@ -356,9 +364,17 @@ impl<T: Item + 'static> Component for Menu<T> {
 
         let win_height = area.height as usize;
 
+        // the table would scroll the selection into view, so hand it only the visible rows
         let rows = options
             .iter()
+            .skip(scroll)
+            .take(win_height)
             .map(|option| option.format(&self.editor_data));
+        // while smoothly scrolling the selected option may be out of view
+        let selected_row = self
+            .cursor
+            .and_then(|cursor| cursor.checked_sub(scroll))
+            .filter(|&row| row < win_height);
         let table = Table::new(rows)
             .style(style)
             .highlight_style(selected)
@@ -371,8 +387,8 @@ impl<T: Item + 'static> Component for Menu<T> {
             area.clip_left(Self::LEFT_PADDING as u16).clip_right(1),
             surface,
             &mut TableState {
-                offset: scroll,
-                selected: self.cursor,
+                offset: 0,
+                selected: selected_row,
             },
             false,
         );
@@ -380,8 +396,7 @@ impl<T: Item + 'static> Component for Menu<T> {
         let render_borders = cx.editor.menu_border();
 
         if !render_borders {
-            if let Some(cursor) = self.cursor {
-                let offset_from_top = cursor - scroll;
+            if let Some(offset_from_top) = selected_row {
                 let left = &mut surface[(area.left(), area.y + offset_from_top as u16)];
                 left.set_style(selected);
                 let right = &mut surface[(

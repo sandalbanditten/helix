@@ -12,6 +12,7 @@ use helix_core::Position;
 use helix_view::{
     graphics::{Margin, Rect},
     input::{MouseEvent, MouseEventKind},
+    smooth_scroll::SmoothOffset,
     Editor,
 };
 
@@ -35,6 +36,7 @@ pub struct Popup<T: Component> {
     area: Rect,
     position_bias: Open,
     scroll_half_pages: usize,
+    smooth_scroll: SmoothOffset,
     auto_close: bool,
     ignore_escape_key: bool,
     id: &'static str,
@@ -49,6 +51,7 @@ impl<T: Component> Popup<T> {
             position_bias: Open::Below,
             area: Rect::new(0, 0, 0, 0),
             scroll_half_pages: 0,
+            smooth_scroll: SmoothOffset::default(),
             auto_close: false,
             ignore_escape_key: false,
             id,
@@ -101,6 +104,20 @@ impl<T: Component> Popup<T> {
 
     pub fn scroll_half_page_up(&mut self) {
         self.scroll_half_pages = self.scroll_half_pages.saturating_sub(1);
+    }
+
+    /// Returns the first row to show of contents `child_height` rows tall in `height` rows,
+    /// clamping the half pages scrolled to the bottom of the contents.
+    fn clamp_scroll(&mut self, child_height: u16, height: u16) -> usize {
+        let max_offset = child_height.saturating_sub(height) as usize;
+        let half_page_size = (height / 2) as usize;
+        let scroll = max_offset.min(self.scroll_half_pages * half_page_size);
+        // round up: rounding down would scroll back to the last whole half page above the
+        // bottom on the next render
+        if half_page_size > 0 {
+            self.scroll_half_pages = scroll.div_ceil(half_page_size);
+        }
+        scroll
     }
 
     /// Toggles the Popup's scrollbar.
@@ -342,12 +359,8 @@ impl<T: Component> Component for Popup<T> {
         }
         let border = usize::from(render_borders);
 
-        let max_offset = child_height.saturating_sub(inner.height) as usize;
-        let half_page_size = (inner.height / 2) as usize;
-        let scroll = max_offset.min(self.scroll_half_pages * half_page_size);
-        self.scroll_half_pages = scroll
-            .checked_div(half_page_size)
-            .unwrap_or(self.scroll_half_pages);
+        let scroll = self.clamp_scroll(child_height, inner.height);
+        let scroll = self.smooth_scroll.frame(scroll, inner.height, cx.editor);
         cx.scroll = Some(scroll);
         self.contents.render(inner, surface, cx);
 
@@ -386,5 +399,31 @@ impl<T: Component> Component for Popup<T> {
 
     fn id(&self) -> Option<&'static str> {
         Some(self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::Text;
+
+    #[test]
+    fn scrolling_down_reaches_the_bottom() {
+        // 17 rows of contents shown in 10 rows: half pages of 5 rows, the bottom 7 rows down
+        let (child_height, height) = (17, 10);
+        let mut popup = Popup::new("test", Text::new(String::new()));
+
+        popup.scroll_half_page_down();
+        assert_eq!(popup.clamp_scroll(child_height, height), 5);
+        popup.scroll_half_page_down();
+        assert_eq!(popup.clamp_scroll(child_height, height), 7);
+        // smooth scrolling renders again for every frame, which must not scroll back up
+        assert_eq!(popup.clamp_scroll(child_height, height), 7);
+
+        // scrolling past the bottom isn't counted, so scrolling up moves at once
+        popup.scroll_half_page_down();
+        assert_eq!(popup.clamp_scroll(child_height, height), 7);
+        popup.scroll_half_page_up();
+        assert_eq!(popup.clamp_scroll(child_height, height), 5);
     }
 }

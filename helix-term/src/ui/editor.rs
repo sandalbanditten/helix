@@ -89,16 +89,17 @@ impl EditorView {
         let config = editor.config();
         let loader = editor.syn_loader.load();
 
-        let view_offset = doc.view_offset(view.id);
+        let view_offset = view.render_offset(doc);
 
-        let text_annotations = view.text_annotations(doc, Some(theme));
+        let text_annotations = view.render_text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
+        let draw_cursor = !view.hides_cursor(doc);
 
-        if is_focused && config.cursorline {
+        if is_focused && draw_cursor && config.cursorline {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
 
-        if is_focused && config.cursorcolumn {
+        if is_focused && draw_cursor && config.cursorcolumn {
             Self::highlight_cursorcolumn(doc, view, surface, theme, inner, &text_annotations);
         }
 
@@ -154,16 +155,18 @@ impl EditorView {
             if let Some(tabstops) = Self::tabstop_highlights(doc, theme) {
                 overlays.push(tabstops);
             }
-            overlays.push(Self::doc_selection_highlights(
-                editor.mode(),
-                doc,
-                view,
-                theme,
-                &config.cursor_shape,
-                self.terminal_focused,
-            ));
-            if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
-                overlays.push(overlay);
+            if draw_cursor {
+                overlays.push(Self::doc_selection_highlights(
+                    editor.mode(),
+                    doc,
+                    view,
+                    theme,
+                    &config.cursor_shape,
+                    self.terminal_focused,
+                ));
+                if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
+                    overlays.push(overlay);
+                }
             }
         }
 
@@ -182,16 +185,15 @@ impl EditorView {
 
         Self::render_rulers(editor, doc, view, inner, surface, theme);
 
-        let primary_cursor = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
+        let text = doc.text().slice(..);
         if is_focused {
             decorations.add_decoration(text_decorations::Cursor {
                 cache: &editor.cursor_cache,
-                primary_cursor,
+                primary_cursor: view.render_selection(doc).primary().cursor(text),
             });
         }
+        // inline diagnostics are laid out for the real cursor by the text annotations
+        let primary_cursor = doc.selection(view.id).primary().cursor(text);
         let width = view.inner_width(doc);
         let config = doc.config.load();
         let enable_cursor_line = view
@@ -264,7 +266,7 @@ impl EditorView {
             .and_then(|config| config.rulers.as_ref())
             .unwrap_or(editor_rulers);
 
-        let view_offset = doc.view_offset(view.id);
+        let view_offset = view.render_offset(doc);
 
         rulers
             .iter()
@@ -537,7 +539,7 @@ impl EditorView {
         is_terminal_focused: bool,
     ) -> OverlayHighlights {
         let text = doc.text().slice(..);
-        let selection = doc.selection(view.id);
+        let selection = view.render_selection(doc);
         let primary_idx = selection.primary_index();
 
         let cursorkind = cursor_shape_config.from_mode(mode);
@@ -644,7 +646,7 @@ impl EditorView {
         let syntax = doc.syntax()?;
         let highlight = theme.find_highlight_exact("ui.cursor.match")?;
         let text = doc.text().slice(..);
-        let pos = doc.selection(view.id).primary().cursor(text);
+        let pos = view.render_selection(doc).primary().cursor(text);
         let pos = helix_core::match_brackets::find_matching_bracket(syntax, text, pos)?;
         Some(OverlayHighlights::single(highlight, pos..pos + 1))
     }
@@ -722,11 +724,14 @@ impl EditorView {
         decoration_manager: &mut DecorationManager<'d>,
     ) {
         let text = doc.text().slice(..);
-        let cursors: Rc<[_]> = doc
-            .selection(view.id)
-            .iter()
-            .map(|range| range.cursor_line(text))
-            .collect();
+        let cursors: Rc<[_]> = if view.hides_cursor(doc) {
+            Rc::new([])
+        } else {
+            view.render_selection(doc)
+                .iter()
+                .map(|range| range.cursor_line(text))
+                .collect()
+        };
 
         let mut offset = 0;
 
@@ -843,8 +848,9 @@ impl EditorView {
     /// Apply the highlighting on the lines where a cursor is active
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
+        let selection = view.render_selection(doc);
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
-        let primary_line = doc.selection(view.id).primary().cursor_line(text);
+        let primary_line = selection.primary().cursor_line(text);
 
         // The secondary_lines do contain the primary_line, it doesn't matter
         // as the else-if clause in the loop later won't test for the
@@ -852,8 +858,7 @@ impl EditorView {
         // It's used inside a loop so the collect isn't needless:
         // https://github.com/rust-lang/rust-clippy/issues/6164
         #[allow(clippy::needless_collect)]
-        let secondary_lines: Vec<_> = doc
-            .selection(view.id)
+        let secondary_lines: Vec<_> = selection
             .iter()
             .map(|range| range.cursor_line(text))
             .collect();
@@ -896,8 +901,8 @@ impl EditorView {
 
         let inner_area = view.inner_area(doc);
 
-        let selection = doc.selection(view.id);
-        let view_offset = doc.view_offset(view.id);
+        let selection = view.render_selection(doc);
+        let view_offset = view.render_offset(doc);
         let primary = selection.primary();
         let text_format = doc.text_format(viewport.width, None);
         for range in selection.iter() {
@@ -1271,7 +1276,7 @@ impl EditorView {
                     return EventResult::Consumed(None);
                 }
 
-                if let Some((coords, view_id)) = gutter_coords_and_view(editor, row, column) {
+                if let Some((_, view_id)) = gutter_coords_and_view(editor, row, column) {
                     editor.focus(view_id);
 
                     let (view, doc) = current!(cxt.editor);
@@ -1281,7 +1286,7 @@ impl EditorView {
                     };
 
                     if let Some(char_idx) =
-                        view.pos_at_visual_coords(doc, coords.row as u16, coords.col as u16, true)
+                        view.pos_at_screen_coords(doc, row, view.inner_area(doc).x, true)
                     {
                         let line = doc.text().char_to_line(char_idx);
                         commands::dap_toggle_breakpoint_impl(cxt, path, line);
@@ -1364,7 +1369,7 @@ impl EditorView {
             }
 
             MouseEventKind::Up(MouseButton::Right) => {
-                if let Some((pos, view_id)) = gutter_coords_and_view(cxt.editor, row, column) {
+                if let Some((_, view_id)) = gutter_coords_and_view(cxt.editor, row, column) {
                     cxt.editor.focus(view_id);
 
                     if let Some((pos, _)) = pos_and_view(cxt.editor, row, column, true) {
@@ -1372,7 +1377,9 @@ impl EditorView {
                     } else {
                         let (view, doc) = current!(cxt.editor);
 
-                        if let Some(pos) = view.pos_at_visual_coords(doc, pos.row as u16, 0, true) {
+                        if let Some(pos) =
+                            view.pos_at_screen_coords(doc, row, view.inner_area(doc).x, true)
+                        {
                             doc.set_selection(view_id, Selection::point(pos));
                             match modifiers {
                                 KeyModifiers::ALT => {
@@ -1636,6 +1643,7 @@ impl Component for EditorView {
 
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
+        cx.editor.update_smooth_scroll();
 
         if use_bufferline {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
@@ -1735,6 +1743,10 @@ impl Component for EditorView {
     }
 
     fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        let (view, doc) = current_ref!(editor);
+        if view.hides_cursor(doc) {
+            return (editor.cursor().0, CursorKind::Hidden);
+        }
         match editor.cursor() {
             // all block cursors are drawn manually
             (pos, CursorKind::Block) => {

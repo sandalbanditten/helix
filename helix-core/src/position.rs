@@ -813,6 +813,69 @@ mod test {
         assert_eq!(pos_at_visual_coords(slice, (10, 10).into(), 4), 0);
     }
 
+    /// Scrolling a view in several steps has to end where a single step of the same total
+    /// distance does, as smooth scrolling walks its frames incrementally.
+    #[test]
+    fn test_char_idx_at_visual_offset_composes() {
+        use crate::text_annotations::LineAnnotation;
+        use quickcheck::{QuickCheck, TestResult};
+
+        struct VirtualLineAfterEveryThirdLine;
+
+        impl LineAnnotation for VirtualLineAfterEveryThirdLine {
+            fn insert_virtual_lines(&mut self, _: usize, _: Position, doc_line: usize) -> Position {
+                Position::new(usize::from(doc_line.is_multiple_of(3)), 0)
+            }
+        }
+
+        fn composes(
+            lines: Vec<String>,
+            start_line: usize,
+            first: i8,
+            second: i8,
+            soft_wrap: bool,
+            virtual_lines: bool,
+        ) -> TestResult {
+            if (first < 0 && second > 0) || (first > 0 && second < 0) {
+                return TestResult::discard();
+            }
+            let text = Rope::from(lines.join("\n"));
+            let text = text.slice(..);
+            let text_fmt = TextFormat {
+                soft_wrap,
+                viewport_width: 7,
+                ..TextFormat::default()
+            };
+            let mut annotations = TextAnnotations::default();
+            if virtual_lines {
+                annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine));
+            }
+            let scroll = |(anchor, vertical_offset): (usize, usize), rows: isize| {
+                char_idx_at_visual_offset(
+                    text,
+                    anchor,
+                    vertical_offset as isize + rows,
+                    0,
+                    &text_fmt,
+                    &annotations,
+                )
+            };
+
+            // Scrolling past the end of the document stops at its last char rather than at the
+            // start of the last row, so compare the rows the positions are on.
+            let row_start = |position| scroll(position, 0);
+
+            let start = (text.line_to_char(start_line % text.len_lines()), 0);
+            let stepped = scroll(scroll(start, first.into()), second.into());
+            let direct = scroll(start, isize::from(first) + isize::from(second));
+            TestResult::from_bool(row_start(stepped) == row_start(direct))
+        }
+
+        QuickCheck::new()
+            .tests(500)
+            .quickcheck(composes as fn(Vec<String>, usize, i8, i8, bool, bool) -> TestResult);
+    }
+
     #[test]
     fn test_char_idx_at_visual_row_offset_inline_annotation() {
         let text = Rope::from("foo\nbar");

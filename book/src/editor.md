@@ -20,6 +20,7 @@
   - [`[editor.gutters.spacer]` Section](#editorguttersspacer-section)
   - [`[editor.gutters.code-action-hint]` Section](#editorgutterscode-action-hint-section)
 - [`[editor.soft-wrap]` Section](#editorsoft-wrap-section)
+- [`[editor.smooth-scroll]` Section](#editorsmooth-scroll-section)
 - [`[editor.smart-tab]` Section](#editorsmart-tab-section)
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
@@ -462,6 +463,34 @@ enable = true
 max-wrap = 25 # increase value to reduce forced mid-word wrapping
 max-indent-retain = 0
 wrap-indicator = ""  # set wrap-indicator to "" to hide it
+```
+
+### `[editor.smooth-scroll]` Section
+
+Animates view movements instead of redrawing the view at its new position at once: scrolling,
+`zz`/`zt`/`zb`, jumps and searches, the mouse wheel, as well as scrolling popups, menus and
+pickers. Every movement takes the same time regardless of its distance, starting fast and
+slowing down as it arrives. Moves of a single line or column, and view changes caused by edits,
+are not animated.
+
+`smooth-scroll = true` in the `[editor]` section is a shorthand for `enable = true`.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `enable` | Whether view movements are animated | `false` |
+| `duration` | Time in milliseconds a movement takes. `0` disables the animation | `150` |
+| `hide-cursor` | Hide the cursor, selections, cursorline and cursorcolumn while a view moves | `false` |
+
+The animation is drawn without tearing only by terminals that support
+[synchronized output](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036).
+
+Example:
+
+```toml
+[editor.smooth-scroll]
+enable = true
+duration = 200
+hide-cursor = true
 ```
 
 ### `[editor.smart-tab]` Section

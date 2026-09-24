@@ -20,7 +20,6 @@ use tui::{
 pub use typed::*;
 
 use helix_core::{
-    char_idx_at_visual_offset,
     chars::char_is_word,
     command_line::{self, Args},
     comment,
@@ -1929,113 +1928,13 @@ fn switch_to_lowercase(cx: &mut Context) {
 }
 
 pub fn scroll(cx: &mut Context, offset: usize, direction: Direction, sync_cursor: bool) {
-    use Direction::*;
-    let config = cx.editor.config();
+    let scrolloff = cx.editor.config().scrolloff;
+    let movement = match cx.editor.mode {
+        Mode::Select => Movement::Extend,
+        _ => Movement::Move,
+    };
     let (view, doc) = current!(cx.editor);
-    let mut view_offset = doc.view_offset(view.id);
-
-    let range = doc.selection(view.id).primary();
-    let text = doc.text().slice(..);
-
-    let cursor = range.cursor(text);
-    let height = view.inner_height();
-
-    let scrolloff = config.scrolloff.min(height.saturating_sub(1) / 2);
-    let offset = match direction {
-        Forward => offset as isize,
-        Backward => -(offset as isize),
-    };
-
-    let doc_text = doc.text().slice(..);
-    let viewport = view.inner_area(doc);
-    let text_fmt = doc.text_format(viewport.width, None);
-    (view_offset.anchor, view_offset.vertical_offset) = char_idx_at_visual_offset(
-        doc_text,
-        view_offset.anchor,
-        view_offset.vertical_offset as isize + offset,
-        0,
-        &text_fmt,
-        // &annotations,
-        &view.text_annotations(&*doc, None),
-    );
-    doc.set_view_offset(view.id, view_offset);
-
-    let doc_text = doc.text().slice(..);
-    let mut annotations = view.text_annotations(&*doc, None);
-
-    if sync_cursor {
-        let movement = match cx.editor.mode {
-            Mode::Select => Movement::Extend,
-            _ => Movement::Move,
-        };
-        // TODO: When inline diagnostics gets merged- 1. move_vertically_visual removes
-        // line annotations/diagnostics so the cursor may jump further than the view.
-        // 2. If the cursor lands on a complete line of virtual text, the cursor will
-        // jump a different distance than the view.
-        let selection = doc.selection(view.id).clone().transform(|range| {
-            move_vertically_visual(
-                doc_text,
-                range,
-                direction,
-                offset.unsigned_abs(),
-                movement,
-                &text_fmt,
-                &mut annotations,
-            )
-        });
-        drop(annotations);
-        doc.set_selection(view.id, selection);
-        return;
-    }
-
-    let view_offset = doc.view_offset(view.id);
-
-    let mut head;
-    match direction {
-        Forward => {
-            let off;
-            (head, off) = char_idx_at_visual_offset(
-                doc_text,
-                view_offset.anchor,
-                (view_offset.vertical_offset + scrolloff) as isize,
-                0,
-                &text_fmt,
-                &annotations,
-            );
-            head += (off != 0) as usize;
-            if head <= cursor {
-                return;
-            }
-        }
-        Backward => {
-            head = char_idx_at_visual_offset(
-                doc_text,
-                view_offset.anchor,
-                (view_offset.vertical_offset + height - scrolloff - 1) as isize,
-                0,
-                &text_fmt,
-                &annotations,
-            )
-            .0;
-            if head >= cursor {
-                return;
-            }
-        }
-    }
-
-    let anchor = if cx.editor.mode == Mode::Select {
-        range.anchor
-    } else {
-        head
-    };
-
-    // replace primary selection with an empty selection at cursor pos
-    let prim_sel = Range::new(anchor, head);
-    let mut sel = doc.selection(view.id).clone();
-    let idx = sel.primary_index();
-    sel = sel.replace(idx, prim_sel);
-    drop(annotations);
-    doc.set_selection(view.id, sel);
+    view.scroll(doc, offset, direction, sync_cursor, movement, scrolloff);
 }
 
 fn page_up(cx: &mut Context) {

@@ -298,6 +298,9 @@ pub struct Config {
     pub scrolloff: usize,
     /// Number of lines to scroll at once. Defaults to 3
     pub scroll_lines: isize,
+    /// Animation of view movements. Defaults to disabled.
+    #[serde(deserialize_with = "deserialize_smooth_scroll")]
+    pub smooth_scroll: SmoothScrollConfig,
     /// Mouse support. Defaults to true.
     pub mouse: bool,
     /// Which register to use for mouse yank.
@@ -1065,6 +1068,77 @@ where
     }
 }
 
+/// Animates view movements: the view glides to its new position instead of being redrawn there
+/// at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SmoothScrollConfig {
+    /// Whether view movements are animated. Defaults to `false`.
+    pub enable: bool,
+    /// Time in milliseconds a movement takes, regardless of its distance. `0` disables the
+    /// animation. Defaults to 150ms.
+    #[serde(
+        serialize_with = "serialize_duration_millis",
+        deserialize_with = "deserialize_duration_millis"
+    )]
+    pub duration: Duration,
+    /// Whether the cursor and its decorations are hidden while a view moves. Defaults to `false`.
+    pub hide_cursor: bool,
+}
+
+impl Default for SmoothScrollConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            duration: Duration::from_millis(150),
+            hide_cursor: false,
+        }
+    }
+}
+
+impl SmoothScrollConfig {
+    /// Whether view movements are animated at all.
+    pub fn is_enabled(&self) -> bool {
+        self.enable && !self.duration.is_zero()
+    }
+}
+
+/// Accepts `smooth-scroll = true` as a shorthand for `[editor.smooth-scroll] enable = true`.
+fn deserialize_smooth_scroll<'de, D>(deserializer: D) -> Result<SmoothScrollConfig, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct SmoothScrollVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for SmoothScrollVisitor {
+        type Value = SmoothScrollConfig;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(formatter, "a boolean or a smooth-scroll configuration")
+        }
+
+        fn visit_bool<E>(self, enable: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(SmoothScrollConfig {
+                enable,
+                ..Default::default()
+            })
+        }
+
+        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+        where
+            M: serde::de::MapAccess<'de>,
+        {
+            let deserializer = serde::de::value::MapAccessDeserializer::new(map);
+            Deserialize::deserialize(deserializer)
+        }
+    }
+
+    deserializer.deserialize_any(SmoothScrollVisitor)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WhitespaceCharacters {
@@ -1177,6 +1251,7 @@ impl Default for Config {
         Self {
             scrolloff: 5,
             scroll_lines: 3,
+            smooth_scroll: SmoothScrollConfig::default(),
             mouse: true,
             mouse_yank_register: '*',
             shell: if cfg!(windows) {
@@ -1529,6 +1604,28 @@ impl Editor {
         self.idle_timer
             .as_mut()
             .reset(Instant::now() + config.idle_timeout);
+    }
+
+    /// Advances every view's smooth scrolling to the frame about to be drawn, and schedules the
+    /// redraw for the next frame.
+    pub fn update_smooth_scroll(&mut self) {
+        let now = Instant::now();
+        let next_frame = self
+            .tree
+            .views_mut()
+            .filter_map(|(view, _)| view.update_smooth_scroll(&self.documents[&view.doc], now))
+            .min();
+        if let Some(next_frame) = next_frame {
+            self.schedule_redraw(next_frame);
+        }
+    }
+
+    /// Redraws no later than `deadline`, sooner than the usual redraw debounce allows. Used to
+    /// draw the frames of animations.
+    pub(crate) fn schedule_redraw(&mut self, deadline: Instant) {
+        if deadline < self.redraw_timer.deadline() {
+            self.redraw_timer.as_mut().reset(deadline);
+        }
     }
 
     pub fn clear_status(&mut self) {

@@ -47,6 +47,7 @@ use helix_core::{
 use helix_view::{
     editor::Action,
     graphics::{CursorKind, Margin, Modifier, Rect},
+    smooth_scroll::SmoothOffset,
     theme::Style,
     view::ViewPosition,
     Document, DocumentId, Editor,
@@ -249,6 +250,7 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     completion_height: u16,
 
     cursor: u32,
+    smooth_scroll: SmoothOffset,
     prompt: Prompt,
     query: PickerQuery,
 
@@ -381,6 +383,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             editor_data,
             version,
             cursor: 0,
+            smooth_scroll: SmoothOffset::default(),
             prompt,
             query,
             truncate_start: true,
@@ -532,6 +535,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     }
 
     fn handle_prompt_change(&mut self, is_paste: bool) {
+        // the matches are replaced, don't glide over them
+        self.smooth_scroll.reset();
         // TODO: better track how the pattern has changed
         let line = self.prompt.line();
         let old_query = self.query.parse(line);
@@ -746,7 +751,16 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let inner = inner.clip_top(2);
         let rows = inner.height.saturating_sub(self.header_height()) as u32;
         let offset = self.cursor - (self.cursor % std::cmp::max(1, rows));
-        let cursor = self.cursor.saturating_sub(offset);
+        let offset = self
+            .smooth_scroll
+            .frame(offset as usize, rows as u16, cx.editor) as u32;
+        // while smoothly scrolling the cursor may be out of view: select past the visible rows,
+        // which highlights none of them but keeps the column of the highlight symbol
+        let cursor = self
+            .cursor
+            .checked_sub(offset)
+            .filter(|&cursor| cursor < rows)
+            .map_or(usize::MAX, |cursor| cursor as usize);
         let end = offset
             .saturating_add(rows)
             .min(snapshot.matched_item_count());
@@ -873,7 +887,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             surface,
             &mut TableState {
                 offset: 0,
-                selected: Some(cursor as usize),
+                selected: Some(cursor),
             },
             self.truncate_start,
         );

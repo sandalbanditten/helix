@@ -200,6 +200,52 @@ mod tests {
     }
 
     #[test]
+    fn parsing_smooth_scroll_config() {
+        use helix_view::editor::SmoothScrollConfig;
+        use std::time::Duration;
+
+        let smooth_scroll = |config: &str| Config::load_test(config).editor.smooth_scroll;
+
+        assert_eq!(smooth_scroll(""), SmoothScrollConfig::default());
+        assert_eq!(
+            smooth_scroll("[editor]\nsmooth-scroll = true"),
+            SmoothScrollConfig {
+                enable: true,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            smooth_scroll(
+                "[editor.smooth-scroll]\nenable = true\nduration = 90\nhide-cursor = true"
+            ),
+            SmoothScrollConfig {
+                enable: true,
+                duration: Duration::from_millis(90),
+                hide_cursor: true,
+            }
+        );
+        assert_eq!(
+            smooth_scroll("[editor.smooth-scroll]\nhide-cursor = true"),
+            SmoothScrollConfig {
+                hide_cursor: true,
+                ..Default::default()
+            }
+        );
+
+        let typo = "[editor.smooth-scroll]\nenabled = true".to_owned();
+        assert!(Config::load(Ok(&typo), Err(ConfigLoadError::default())).is_err());
+    }
+
+    #[test]
+    fn set_smooth_scroll_shorthand() {
+        // `:set smooth-scroll true` replaces the serialized table with a boolean
+        let mut config = serde_json::json!(helix_view::editor::Config::default());
+        *config.pointer_mut("/smooth-scroll").unwrap() = serde_json::Value::Bool(true);
+        let config: helix_view::editor::Config = serde_json::from_value(config).unwrap();
+        assert!(config.smooth_scroll.enable);
+    }
+
+    #[test]
     fn keys_resolve_to_correct_defaults() {
         // From serde default
         let default_keys = Config::load_test("").keys;

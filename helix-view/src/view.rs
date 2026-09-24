@@ -5,14 +5,16 @@ use crate::{
     editor::{GutterConfig, GutterType},
     graphics::Rect,
     handlers::diagnostics::DiagnosticsHandler,
+    smooth_scroll::{SelectionMotion, SmoothScroll},
     Align, Document, DocumentId, Theme, ViewId,
 };
 
 use helix_core::{
     char_idx_at_visual_offset,
     doc_formatter::TextFormat,
+    movement::{move_vertically_visual, Direction, Movement},
     text_annotations::TextAnnotations,
-    visual_offset_from_anchor, visual_offset_from_block, Position, RopeSlice, Selection,
+    visual_offset_from_anchor, visual_offset_from_block, Position, Range, RopeSlice, Selection,
     Transaction,
     VisualOffsetError::{PosAfterMaxRow, PosBeforeAnchorRow},
 };
@@ -21,6 +23,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt,
 };
+use tokio::time::Instant;
 
 const JUMP_LIST_CAPACITY: usize = 30;
 
@@ -172,6 +175,7 @@ pub struct View {
     // left to future work. For now we treat all views as focused and give them
     // each their own handler.
     pub diagnostics_handler: DiagnosticsHandler,
+    smooth_scroll: SmoothScroll,
 }
 
 impl fmt::Debug for View {
@@ -197,6 +201,7 @@ impl View {
             gutters,
             doc_revisions: HashMap::new(),
             diagnostics_handler: DiagnosticsHandler::new(),
+            smooth_scroll: SmoothScroll::default(),
         }
     }
 
@@ -368,6 +373,179 @@ impl View {
         self.offset_coords_to_in_view(doc, scrolloff).is_none()
     }
 
+    /// Scrolls the view `offset` visual rows in `direction`.
+    ///
+    /// With `sync_cursor` all selections move the same distance, keeping their position on
+    /// screen. Otherwise they stay put, unless the primary cursor would leave the `scrolloff`
+    /// margin, in which case it is moved to the edge of the margin.
+    pub fn scroll(
+        &mut self,
+        doc: &mut Document,
+        offset: usize,
+        direction: Direction,
+        sync_cursor: bool,
+        movement: Movement,
+        scrolloff: usize,
+    ) {
+        let rows = match direction {
+            Direction::Forward => offset as isize,
+            Direction::Backward => -(offset as isize),
+        };
+
+        if doc.config.load().smooth_scroll.is_enabled() {
+            let motion = if sync_cursor {
+                SelectionMotion::Synced { rows, movement }
+            } else {
+                SelectionMotion::Pushed {
+                    direction,
+                    movement,
+                }
+            };
+            let drawn = self.render_selection(doc).clone();
+            self.smooth_scroll.hint(drawn, motion, doc);
+        }
+
+        let mut view_offset = doc.view_offset(self.id);
+        let text_fmt = doc.text_format(self.inner_area(doc).width, None);
+        (view_offset.anchor, view_offset.vertical_offset) = char_idx_at_visual_offset(
+            doc.text().slice(..),
+            view_offset.anchor,
+            view_offset.vertical_offset as isize + rows,
+            0,
+            &text_fmt,
+            &self.text_annotations(doc, None),
+        );
+        doc.set_view_offset(self.id, view_offset);
+
+        if sync_cursor {
+            let doc_text = doc.text().slice(..);
+            let mut annotations = self.text_annotations(doc, None);
+            // TODO: When inline diagnostics gets merged- 1. move_vertically_visual removes
+            // line annotations/diagnostics so the cursor may jump further than the view.
+            // 2. If the cursor lands on a complete line of virtual text, the cursor will
+            // jump a different distance than the view.
+            let selection = doc.selection(self.id).clone().transform(|range| {
+                move_vertically_visual(
+                    doc_text,
+                    range,
+                    direction,
+                    offset,
+                    movement,
+                    &text_fmt,
+                    &mut annotations,
+                )
+            });
+            drop(annotations);
+            doc.set_selection(self.id, selection);
+            return;
+        }
+
+        let selection = doc.selection(self.id);
+        if let Some(primary) = self.push_cursor_into_view(
+            doc,
+            view_offset,
+            selection.primary(),
+            direction,
+            movement,
+            scrolloff,
+        ) {
+            // replace primary selection with an empty selection at cursor pos
+            let selection = selection
+                .clone()
+                .replace(selection.primary_index(), primary);
+            doc.set_selection(self.id, selection);
+        }
+    }
+
+    /// Returns where the primary `range` has to move to stay within the `scrolloff` margin of
+    /// the view scrolled to `offset` in `direction`, or `None` if it already is.
+    pub(crate) fn push_cursor_into_view(
+        &self,
+        doc: &Document,
+        offset: ViewPosition,
+        range: Range,
+        direction: Direction,
+        movement: Movement,
+        scrolloff: usize,
+    ) -> Option<Range> {
+        let doc_text = doc.text().slice(..);
+        let height = self.inner_height();
+        let scrolloff = scrolloff.min(height.saturating_sub(1) / 2);
+        let text_fmt = doc.text_format(self.inner_area(doc).width, None);
+        let annotations = self.text_annotations_at(doc, None, offset.horizontal_offset);
+        let cursor = range.cursor(doc_text);
+
+        let head = match direction {
+            Direction::Forward => {
+                let (head, virtual_rows) = char_idx_at_visual_offset(
+                    doc_text,
+                    offset.anchor,
+                    (offset.vertical_offset + scrolloff) as isize,
+                    0,
+                    &text_fmt,
+                    &annotations,
+                );
+                let head = head + (virtual_rows != 0) as usize;
+                (head > cursor).then_some(head)?
+            }
+            Direction::Backward => {
+                let (head, _) = char_idx_at_visual_offset(
+                    doc_text,
+                    offset.anchor,
+                    (offset.vertical_offset + height).saturating_sub(scrolloff + 1) as isize,
+                    0,
+                    &text_fmt,
+                    &annotations,
+                );
+                (head < cursor).then_some(head)?
+            }
+        };
+
+        let anchor = match movement {
+            Movement::Extend => range.anchor,
+            Movement::Move => head,
+        };
+        Some(Range::new(anchor, head))
+    }
+
+    /// The offset to draw the view at: its real offset, or the current frame while it smoothly
+    /// scrolls there. This is also what is on screen, for mapping screen coordinates.
+    pub fn render_offset(&self, doc: &Document) -> ViewPosition {
+        self.smooth_scroll
+            .offset(doc)
+            .unwrap_or_else(|| doc.view_offset(self.id))
+    }
+
+    /// The selection to draw: the real selection, or where a smooth scroll currently shows it.
+    pub fn render_selection<'a>(&'a self, doc: &'a Document) -> &'a Selection {
+        self.smooth_scroll
+            .selection(doc)
+            .unwrap_or_else(|| doc.selection(self.id))
+    }
+
+    /// The text annotations to draw the view with at its [render offset](Self::render_offset).
+    pub fn render_text_annotations<'a>(
+        &self,
+        doc: &'a Document,
+        theme: Option<&Theme>,
+    ) -> TextAnnotations<'a> {
+        self.text_annotations_at(doc, theme, self.render_offset(doc).horizontal_offset)
+    }
+
+    /// Whether the cursor and its decorations are hidden while the view smoothly scrolls.
+    pub fn hides_cursor(&self, doc: &Document) -> bool {
+        doc.config.load().smooth_scroll.hide_cursor && self.smooth_scroll.is_animating(doc)
+    }
+
+    /// Advances the smooth scrolling to the frame drawn at `now`, returning when the next frame
+    /// is due.
+    pub(crate) fn update_smooth_scroll(&mut self, doc: &Document, now: Instant) -> Option<Instant> {
+        let mut smooth_scroll = std::mem::take(&mut self.smooth_scroll);
+        let next_frame = smooth_scroll.update(self, doc, now);
+        self.smooth_scroll = smooth_scroll;
+        next_frame
+    }
+
     /// Estimates the last visible document line on screen.
     /// This estimate is an upper bound obtained by calculating the first
     /// visible line and adding the viewport height.
@@ -460,6 +638,17 @@ impl View {
         doc: &'a Document,
         theme: Option<&Theme>,
     ) -> TextAnnotations<'a> {
+        self.text_annotations_at(doc, theme, doc.view_offset(self.id).horizontal_offset)
+    }
+
+    /// Get the text annotations for the view scrolled to `horizontal_offset`, which the layout
+    /// of inline diagnostics depends on.
+    pub(crate) fn text_annotations_at<'a>(
+        &self,
+        doc: &'a Document,
+        theme: Option<&Theme>,
+        horizontal_offset: usize,
+    ) -> TextAnnotations<'a> {
         let mut text_annotations = TextAnnotations::default();
 
         if let Some(labels) = doc.jump_labels.get(&self.id) {
@@ -523,7 +712,7 @@ impl View {
                 doc,
                 cursor,
                 width,
-                doc.view_offset(self.id).horizontal_offset,
+                horizontal_offset,
                 config,
             ));
         }
@@ -550,8 +739,10 @@ impl View {
             return None;
         }
 
-        self.text_pos_at_visual_coords(
+        // screen coordinates refer to what is on screen, which may be a smooth scroll's frame
+        self.text_pos_at_offset(
             doc,
+            self.render_offset(doc),
             row - inner.y,
             column - inner.x,
             fmt,
@@ -569,8 +760,29 @@ impl View {
         annotations: &TextAnnotations,
         ignore_virtual_text: bool,
     ) -> Option<usize> {
+        self.text_pos_at_offset(
+            doc,
+            doc.view_offset(self.id),
+            row,
+            column,
+            text_fmt,
+            annotations,
+            ignore_virtual_text,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn text_pos_at_offset(
+        &self,
+        doc: &Document,
+        view_offset: ViewPosition,
+        row: u16,
+        column: u16,
+        text_fmt: TextFormat,
+        annotations: &TextAnnotations,
+        ignore_virtual_text: bool,
+    ) -> Option<usize> {
         let text = doc.text().slice(..);
-        let view_offset = doc.view_offset(self.id);
 
         let text_row = row as usize + view_offset.vertical_offset;
         let text_col = column as usize + view_offset.horizontal_offset;
@@ -605,7 +817,7 @@ impl View {
             row,
             column,
             doc.text_format(self.inner_width(doc), None),
-            &self.text_annotations(doc, None),
+            &self.render_text_annotations(doc, None),
             ignore_virtual_text,
         )
     }

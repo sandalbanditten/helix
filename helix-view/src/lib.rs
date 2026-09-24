@@ -15,6 +15,7 @@ pub mod info;
 pub mod input;
 pub mod keyboard;
 pub mod register;
+pub mod smooth_scroll;
 pub mod theme;
 pub mod tree;
 pub mod view;
