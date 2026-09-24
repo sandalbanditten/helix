@@ -8,6 +8,7 @@ Take your time and ask about specification details rather than guessing.
 We want smooth scrolling for <C-d>, <C-u>, `PgUp`, `PgDn` `zz`, `zb`, and `zt`.
 Scrolling should be smooth, but it should take approximately the same time to scroll really far and very short.
 It should respect `editor.scrolloff` and be configurable as `editor.smooth-scroll = true`.
+Possibly add a debounce delay for the line/char numbers.
 
 ## Breadcrumb Trail
 We want a simple breacrumb trail as a configurable statusline element.
