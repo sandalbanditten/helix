@@ -3,6 +3,7 @@
 Remember to be idiomatic, focus on clean code and architecture.
 Read the files in `docs/`, especially `architecture.md` and `vision.md` and do things the rust and helix way.
 Take your time and ask about specification details rather than guessing.
+Performance is very important, especially for large files, directories, and projects.
 
 ## Breadcrumb Trail
 We want a simple breadcrumb trail as a configurable statusline element.
