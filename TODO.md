@@ -14,14 +14,19 @@ It should, if possible, use tree-sitter for performant code analysis.
 
 ## File Tree
 We want a filetree.
-It should be toggleable, configurable in `config.toml`, and be left or right dockable.
-It should render and work like `grove.hx` a steel plugin with source at `~/.local/share/steel/cogs/grove`.
+It should be toggleable, configurable in `config.toml`, and be left (default) or right dockable.
+It should render and work much like `grove.hx` a steel plugin with source at `~/.local/share/steel/cogs/grove`.
 It should be idiomatic rust and helix-like, but as performant as possible.
 It should be able to use `LS_COLORS` like grove, and have the same feature-set.
+Like grove it should render the tree much like `eza -aoTg`.
 The theming should be helix-like, e.g. the scroll bar and pane separator.
 Unlike `grove.hx`, the viewport should end _at_ the statusline, rather that pushing the statusline to the right, e.g. the statusline should continue to span the entire width of helix' viewport.
 
 Implement the base file tree before the following expansions, but consider them when making design and implementation decisions.
+It should preserve the following features from grove:
+- Opening on multiple buffers should have the relevant directories expanded on start.
+- A fit-width `=` keybinding.
+- The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
 Expanding on grove it should have the following features:
 - Trying to go up from the top item should cycle you to the bottom and vice-versa.
 - The view should be scrollable with <C-d> and <C-u>, like for example LSP popups.
