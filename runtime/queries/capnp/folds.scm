@@ -11,4 +11,5 @@
   (struct)
   (struct_shorthand)
   (union)
+  (comment)+
 ] @fold

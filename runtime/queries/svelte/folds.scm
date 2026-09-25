@@ -8,4 +8,5 @@
   (await_branch)
   (key_block)
   (snippet_block)
+  (comment)
 ] @fold

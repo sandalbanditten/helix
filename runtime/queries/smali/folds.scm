@@ -9,4 +9,5 @@
   (sparse_switch_directive)
   (subannotation_directive)
   (list)
+  (comment)+
 ] @fold

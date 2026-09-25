@@ -3,4 +3,5 @@
   (clause_term)
   (arg_list)
   (list_notation)
+  (comment)+
 ] @fold

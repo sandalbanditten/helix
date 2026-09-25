@@ -1,2 +1,5 @@
 (block) @fold
-(comment) @fold
+(argument_list) @fold
+(list) @fold
+(vector) @fold
+(comment)+ @fold

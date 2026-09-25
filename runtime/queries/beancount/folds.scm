@@ -1,4 +1,5 @@
 [
   (transaction)
   (section)
+  (comment)+
 ] @fold

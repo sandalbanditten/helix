@@ -3,9 +3,14 @@
  (while_statement)
  (switch_statement)
  (try_statement)
+ (spmd_statement)
  (function_definition)
+ (arguments_statement)
  (class_definition)
  (enumeration)
  (events)
  (methods)
- (properties)] @fold
+ (properties)
+ (matrix)
+ (cell)
+ (comment)+] @fold

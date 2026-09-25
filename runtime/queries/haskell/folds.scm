@@ -28,7 +28,6 @@
   (case)
   (alternative)
   (list)
-  (record)
   (import)+
   [
     (comment)

@@ -9,7 +9,13 @@
 (record_declaration)
 (interface_declaration)
 (enum_declaration)
+(anon_record)
+(anon_interface)
 (anon_function)
 (table_constructor)
+(comment)+
 ] @fold
+
+(function_call
+(arguments) @fold)
 

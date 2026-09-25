@@ -5,4 +5,5 @@
   (rule_inheritance)
   (module_definition)
   (checkpoint_definition)
+  (directive)
 ] @fold

@@ -3,4 +3,5 @@
   (predicate)
   (grouping)
   (list)
+  (comment)+
 ] @fold

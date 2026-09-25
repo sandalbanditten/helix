@@ -1,6 +1,9 @@
 [
   (function_definition)
   (class_definition)
+  (cdef_statement)
+  (ctypedef_statement)
+  (property_definition)
   (while_statement)
   (for_statement)
   (if_statement)
@@ -20,6 +23,7 @@
   (set)
   (dictionary)
   (string)
+  (comment)+
 ] @fold
 
 [
