@@ -52,6 +52,8 @@ below.
    | `locals.scm` | scope tracking so locals highlight distinctly | [locals.md](./locals.md) |
    | `tags.scm` | document/workspace symbol pickers | [tags.md](./tags.md) |
    | `rainbows.scm` | rainbow brackets | [rainbow_bracket_queries.md](./rainbow_bracket_queries.md) |
+   | `breadcrumbs.scm` | breadcrumbs of the enclosing syntax nodes | [breadcrumbs.md](./breadcrumbs.md) |
+   | `folds.scm` | code folding | [folding.md](./folding.md) |
 
    A query file may reuse another language's with `; inherits: <lang>` on the
    first line. Run `cargo xtask query-check [language]` to check that the queries

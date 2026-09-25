@@ -301,6 +301,8 @@ pub struct Config {
     /// Animation of view movements. Defaults to disabled.
     #[serde(deserialize_with = "deserialize_smooth_scroll")]
     pub smooth_scroll: SmoothScrollConfig,
+    /// Code folding.
+    pub folding: FoldingConfig,
     /// Mouse support. Defaults to true.
     pub mouse: bool,
     /// Which register to use for mouse yank.
@@ -1131,6 +1133,40 @@ impl SmoothScrollConfig {
     }
 }
 
+/// Code folding: text hidden behind a placeholder at the end of its first line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct FoldingConfig {
+    /// Whether everything is folded when a document is first shown in a view. Defaults to
+    /// `false`.
+    pub start_folded: bool,
+    /// The character that folded text is drawn as. Defaults to `…`.
+    #[serde(deserialize_with = "deserialize_fold_placeholder")]
+    pub placeholder: char,
+}
+
+impl Default for FoldingConfig {
+    fn default() -> Self {
+        Self {
+            start_folded: false,
+            placeholder: '…',
+        }
+    }
+}
+
+fn deserialize_fold_placeholder<'de, D>(deserializer: D) -> Result<char, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let placeholder = char::deserialize(deserializer)?;
+    if placeholder.is_control() || helix_core::chars::char_is_line_ending(placeholder) {
+        return Err(serde::de::Error::custom(
+            "the fold placeholder must be a printable character",
+        ));
+    }
+    Ok(placeholder)
+}
+
 /// Accepts `smooth-scroll = true` as a shorthand for `[editor.smooth-scroll] enable = true`.
 fn deserialize_smooth_scroll<'de, D>(deserializer: D) -> Result<SmoothScrollConfig, D::Error>
 where
@@ -1280,6 +1316,7 @@ impl Default for Config {
             scrolloff: 5,
             scroll_lines: 3,
             smooth_scroll: SmoothScrollConfig::default(),
+            folding: FoldingConfig::default(),
             mouse: true,
             mouse_yank_register: '*',
             shell: if cfg!(windows) {

@@ -206,6 +206,10 @@ useful when you're simply looking over text and not actively editing it.
 | `Ctrl-b`, `PageUp`   | Move page up                                              | `page_up`               |
 | `Ctrl-u`             | Move cursor and page half page up                         | `page_cursor_half_up`   |
 | `Ctrl-d`             | Move cursor and page half page down                       | `page_cursor_half_down` |
+| `f`                  | Toggle the fold at each selection                         | `toggle_fold`           |
+| `a`                  | Toggle the fold at each selection and the folds inside it | `toggle_fold_recursive` |
+| `F`                  | Fold everything                                           | `fold_all`              |
+| `U`                  | Unfold everything                                         | `unfold_all`            |
 
 #### Goto mode
 

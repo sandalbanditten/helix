@@ -1,5 +1,7 @@
-use crate::doc_formatter::{DocumentFormatter, TextFormat};
-use crate::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
+use crate::doc_formatter::{DocumentFormatter, FormattedGrapheme, TextFormat};
+use crate::fold::Fold;
+use crate::text_annotations::{InlineAnnotation, LineAnnotation, Overlay, TextAnnotations};
+use crate::Position;
 
 impl TextFormat {
     fn new_test(softwrap: bool) -> Self {
@@ -210,4 +212,176 @@ fn annotation_and_overlay() {
         .collect_to_str(),
         "fooo  bar "
     );
+}
+
+fn fold(start: usize, end: usize) -> Fold {
+    Fold {
+        start,
+        end,
+        pulled_up: false,
+    }
+}
+
+fn folded_text(text: &str, softwrap: bool, folds: &[Fold], char_pos: usize) -> String {
+    DocumentFormatter::new_at_prev_checkpoint(
+        text.into(),
+        &TextFormat::new_test(softwrap),
+        TextAnnotations::default().add_folds(folds, '…'),
+        char_pos,
+    )
+    .collect_to_str()
+}
+
+#[test]
+fn folds() {
+    let text = "fn f() {\n    1\n}\nx\n";
+    let folds = [fold(8, 15)];
+    for softwrap in [false, true] {
+        assert_eq!(folded_text(text, softwrap, &folds, 0), "fn f() {…} \nx \n ");
+    }
+    // a formatter starting inside a fold starts at the fold's row
+    assert_eq!(folded_text(text, false, &folds, 11), "fn f() {…} \nx \n ");
+    assert_eq!(folded_text(text, false, &folds, 15), "fn f() {…} \nx \n ");
+    // a fold hiding the end of the text
+    assert_eq!(
+        folded_text("fn f() {\n    1\n}", false, &[fold(8, 16)], 0),
+        "fn f() {… "
+    );
+    // a fold ending beyond a truncated text is not folded
+    assert_eq!(
+        folded_text("fn f() {\n    1", false, &folds, 0),
+        "fn f() { \n    1 "
+    );
+}
+
+#[test]
+fn chained_folds() {
+    let text = "if a {\n    b\n} else {\n    c\n}\nd\n";
+    let folds = [fold(6, 13), fold(21, 28)];
+    assert_eq!(
+        folded_text(text, false, &folds, 0),
+        "if a {…} else {…} \nd \n "
+    );
+    assert_eq!(
+        folded_text(text, false, &folds, 23),
+        folded_text(text, false, &folds, 0)
+    );
+
+    let mut annotations = TextAnnotations::default();
+    annotations.add_folds(&folds, '…');
+    let text_fmt = TextFormat::new_test(false);
+    let formatter =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0);
+    let lines: Vec<_> = formatter
+        .map(|grapheme| {
+            (
+                grapheme.char_idx,
+                grapheme.line_idx,
+                grapheme.source.is_fold(),
+            )
+        })
+        .filter(|&(char_idx, _, _)| [5, 6, 13, 21, 28, 30].contains(&char_idx))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            (5, 0, false),
+            (6, 0, true),
+            (13, 2, false),
+            (21, 2, true),
+            (28, 4, false),
+            (30, 5, false)
+        ]
+    );
+}
+
+#[test]
+fn soft_wrapped_fold() {
+    // the placeholder is a word of its own, so the row wraps around it
+    assert_eq!(
+        folded_text("aaaa bbbb cccc {\n  x\n} y\n", true, &[fold(16, 21)], 0),
+        "aaaa bbbb cccc {…\n.} y \n "
+    );
+}
+
+#[test]
+fn fold_and_annotations() {
+    let text = "fn f() {\n    1\n}\nx\n";
+    let folds = [fold(8, 15)];
+    let inline = [
+        InlineAnnotation::new(8, "A"),
+        InlineAnnotation::new(10, "B"),
+        InlineAnnotation::new(15, "C"),
+    ];
+    let overlays = [Overlay::new(12, "X"), Overlay::new(17, "Y")];
+    assert_eq!(
+        DocumentFormatter::new_at_prev_checkpoint(
+            text.into(),
+            &TextFormat::new_test(false),
+            TextAnnotations::default()
+                .add_inline_annotations(&inline, None)
+                .add_overlay(&overlays, None)
+                .add_folds(&folds, '…'),
+            0,
+        )
+        .collect_to_str(),
+        // annotations at the fold's start are shown before it, hidden ones are skipped
+        "fn f() {A…C} \nY \n "
+    );
+}
+
+/// Inserts a virtual line after every line containing one of the anchors.
+struct VirtualLineAtAnchors {
+    anchors: Vec<usize>,
+    next: usize,
+    pending: bool,
+}
+
+impl VirtualLineAtAnchors {
+    fn next_anchor(&mut self, char_idx: usize) -> usize {
+        self.next = self.anchors.partition_point(|&anchor| anchor < char_idx);
+        self.anchors.get(self.next).copied().unwrap_or(usize::MAX)
+    }
+}
+
+impl LineAnnotation for VirtualLineAtAnchors {
+    fn reset_pos(&mut self, char_idx: usize) -> usize {
+        self.pending = false;
+        self.next_anchor(char_idx)
+    }
+
+    fn skip_concealed_anchors(&mut self, conceal_end_char_idx: usize) -> usize {
+        self.next_anchor(conceal_end_char_idx)
+    }
+
+    fn process_anchor(&mut self, grapheme: &FormattedGrapheme) -> usize {
+        self.pending = true;
+        self.next_anchor(grapheme.char_idx + 1)
+    }
+
+    fn insert_virtual_lines(&mut self, _: usize, _: Position, _: usize) -> Position {
+        Position::new(std::mem::take(&mut self.pending) as usize, 0)
+    }
+}
+
+#[test]
+fn fold_and_virtual_lines() {
+    let text = "fn f() {\n    1\n}\nx\n";
+    let folds = [fold(8, 15)];
+    let text_fmt = TextFormat::new_test(false);
+    let mut annotations = TextAnnotations::default();
+    annotations.add_folds(&folds, '…');
+    // anchors on the header, inside the fold and after it
+    annotations.add_line_annotation(Box::new(VirtualLineAtAnchors {
+        anchors: vec![2, 12, 17],
+        next: 0,
+        pending: false,
+    }));
+    let rows: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .filter(|grapheme| [0, 8, 15, 17, 19].contains(&grapheme.char_idx))
+            .map(|grapheme| (grapheme.char_idx, grapheme.visual_pos.row))
+            .collect();
+    // the header's anchor adds a line below the fold's row, the hidden one adds none
+    assert_eq!(rows, [(0, 0), (8, 0), (15, 0), (17, 2), (19, 4)]);
 }

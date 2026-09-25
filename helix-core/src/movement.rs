@@ -6,6 +6,7 @@ use crate::{
     char_idx_at_visual_offset,
     chars::{categorize_char, char_is_line_ending, CharCategory},
     doc_formatter::TextFormat,
+    fold,
     graphemes::{
         next_grapheme_boundary, nth_next_grapheme_boundary, nth_prev_grapheme_boundary,
         prev_grapheme_boundary,
@@ -38,14 +39,30 @@ pub fn move_horizontally(
     count: usize,
     behaviour: Movement,
     _: &TextFormat,
-    _: &mut TextAnnotations,
+    annotations: &mut TextAnnotations,
 ) -> Range {
     let pos = range.cursor(slice);
+    let folds = annotations.folds();
 
     // Compute the new position.
-    let new_pos = match dir {
-        Direction::Forward => nth_next_grapheme_boundary(slice, pos, count),
-        Direction::Backward => nth_prev_grapheme_boundary(slice, pos, count),
+    let new_pos = if folds.is_empty() {
+        match dir {
+            Direction::Forward => nth_next_grapheme_boundary(slice, pos, count),
+            Direction::Backward => nth_prev_grapheme_boundary(slice, pos, count),
+        }
+    } else {
+        // a closed fold moves like a single grapheme
+        (0..count).fold(pos, |pos, _| {
+            let next = match dir {
+                Direction::Forward => next_grapheme_boundary(slice, pos),
+                Direction::Backward => prev_grapheme_boundary(slice, pos),
+            };
+            match fold::fold_at(folds, next) {
+                Some(fold) if next > fold.start && dir == Direction::Forward => fold.end,
+                Some(fold) if next > fold.start => fold.start,
+                _ => next,
+            }
+        })
     };
 
     // Compute the final new range.
@@ -113,8 +130,10 @@ pub fn move_vertically(
     annotations: &mut TextAnnotations,
 ) -> Range {
     annotations.clear_line_annotations();
+    let folds = annotations.folds();
     let pos = range.cursor(slice);
-    let line_idx = slice.char_to_line(pos);
+    // a closed fold joins lines into one row, which counts as one line
+    let line_idx = fold::row_start_line(folds, slice, slice.char_to_line(pos));
     let line_start = slice.line_to_char(line_idx);
 
     // Compute the current position's 2d coordinates.
@@ -123,24 +142,23 @@ pub fn move_vertically(
         .old_visual_position
         .map_or((visual_pos.row as u32, visual_pos.col as u32), |pos| pos);
     new_row = new_row.max(visual_pos.row as u32);
-    let line_idx = slice.char_to_line(pos);
 
     // Compute the new position.
-    let mut new_line_idx = match dir {
-        Direction::Forward => line_idx.saturating_add(count),
-        Direction::Backward => line_idx.saturating_sub(count),
+    let new_line_idx = match dir {
+        Direction::Forward => fold::next_row(folds, slice, line_idx, count),
+        Direction::Backward => fold::prev_row(folds, slice, line_idx, count),
     };
+    let new_last_line_idx = fold::row_end_line(folds, slice, new_line_idx);
 
-    let line = if new_line_idx >= slice.len_lines() - 1 {
+    let line = if new_last_line_idx >= slice.len_lines() - 1 {
         // there is no line terminator for the last line
         // so the logic below is not necessary here
-        new_line_idx = slice.len_lines() - 1;
         slice
     } else {
         // char_idx_at_visual_block_offset returns a one-past-the-end index
         // in case it reaches the end of the slice
         // to avoid moving to the nextline in that case the line terminator is removed from the line
-        let new_line_end = prev_grapheme_boundary(slice, slice.line_to_char(new_line_idx + 1));
+        let new_line_end = prev_grapheme_boundary(slice, slice.line_to_char(new_last_line_idx + 1));
         slice.slice(..new_line_end)
     };
 
@@ -156,7 +174,7 @@ pub fn move_vertically(
     );
 
     // Special-case to avoid moving to the end of the last non-empty line.
-    if behaviour == Movement::Extend && slice.line(new_line_idx).len_chars() == 0 {
+    if behaviour == Movement::Extend && slice.line(new_last_line_idx).len_chars() == 0 {
         return range;
     }
 
@@ -719,6 +737,101 @@ mod test {
         パーティーへ行かないか\n\
         The text above is Japanese\n\
     ";
+
+    #[test]
+    fn moves_across_folds() {
+        let text = Rope::from("fn f() {\n    1\n}\nxyzxyzxyzxyz\nabc\n");
+        let slice = text.slice(..);
+        let folds = [crate::fold::Fold {
+            start: 8,
+            end: 15,
+            pulled_up: true,
+        }];
+        type MoveFn = fn(
+            RopeSlice,
+            Range,
+            Direction,
+            usize,
+            Movement,
+            &TextFormat,
+            &mut TextAnnotations,
+        ) -> Range;
+        let moved = |move_fn: MoveFn, range, dir, count, behaviour| {
+            let mut annotations = TextAnnotations::default();
+            annotations.add_folds(&folds, '…');
+            let text_fmt = TextFormat::default();
+            let range = move_fn(
+                slice,
+                range,
+                dir,
+                count,
+                behaviour,
+                &text_fmt,
+                &mut annotations,
+            );
+            (range.anchor, range.head)
+        };
+        use Direction::*;
+        use Movement::*;
+
+        // a folded row counts as one line
+        let move_visually: MoveFn = |slice, range, dir, count, behaviour, text_fmt, annotations| {
+            let text_fmt = TextFormat {
+                soft_wrap: true,
+                ..text_fmt.clone()
+            };
+            move_vertically_visual(slice, range, dir, count, behaviour, &text_fmt, annotations)
+        };
+        for (move_fn, name) in [
+            (move_vertically as MoveFn, "move_vertically"),
+            (move_visually, "move_vertically_visual"),
+        ] {
+            assert_eq!(
+                moved(move_fn, Range::point(3), Forward, 1, Move),
+                (20, 20),
+                "{name}"
+            );
+            assert_eq!(
+                moved(move_fn, Range::point(20), Backward, 1, Move),
+                (3, 3),
+                "{name}"
+            );
+            assert_eq!(
+                moved(move_fn, Range::point(3), Forward, 2, Move),
+                (33, 33),
+                "{name}"
+            );
+            assert_eq!(
+                moved(move_fn, Range::point(33), Backward, 5, Move),
+                (3, 3),
+                "{name}"
+            );
+            // the fold cell and the pulled up closer are columns of the row
+            assert_eq!(
+                moved(move_fn, Range::point(25), Backward, 1, Move),
+                (8, 8),
+                "{name}"
+            );
+            let from_closer = moved(move_fn, Range::point(15), Forward, 1, Move);
+            assert_eq!(from_closer, (26, 26), "{name}");
+            // extending over the fold covers it
+            assert_eq!(
+                moved(move_fn, Range::new(2, 3), Forward, 1, Extend),
+                (2, 20),
+                "{name}"
+            );
+        }
+
+        // a closed fold is one grapheme for horizontal moves
+        let horizontally =
+            |pos, dir, count| moved(move_horizontally, Range::point(pos), dir, count, Move).1;
+        assert_eq!(horizontally(7, Forward, 1), 8);
+        assert_eq!(horizontally(8, Forward, 1), 15);
+        assert_eq!(horizontally(15, Backward, 1), 8);
+        assert_eq!(horizontally(8, Backward, 1), 7);
+        assert_eq!(horizontally(6, Forward, 3), 15);
+        assert_eq!(horizontally(16, Backward, 3), 7);
+    }
 
     #[test]
     fn test_vertical_move() {

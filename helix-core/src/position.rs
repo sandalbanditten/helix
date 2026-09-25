@@ -452,6 +452,7 @@ pub fn char_idx_at_visual_block_offset(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::fold::{Fold, Folds};
     use crate::text_annotations::InlineAnnotation;
     use crate::Rope;
 
@@ -835,6 +836,7 @@ mod test {
             second: i8,
             soft_wrap: bool,
             virtual_lines: bool,
+            fold_lines: Vec<(u8, u8)>,
         ) -> TestResult {
             if (first < 0 && second > 0) || (first > 0 && second < 0) {
                 return TestResult::discard();
@@ -846,7 +848,14 @@ mod test {
                 viewport_width: 7,
                 ..TextFormat::default()
             };
+            let mut folds = Folds::default();
+            folds.close(fold_lines.iter().filter_map(|&(a, b)| {
+                let (a, b) = (a as usize % text.len_lines(), b as usize % text.len_lines());
+                let end = (text.line_to_char(a.max(b)) + 1).min(text.len_chars());
+                Fold::from_region(text, text.line_to_char(a.min(b))..end, None)
+            }));
             let mut annotations = TextAnnotations::default();
+            annotations.add_folds(folds.outermost(), '…');
             if virtual_lines {
                 annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine));
             }
@@ -871,9 +880,48 @@ mod test {
             TestResult::from_bool(row_start(stepped) == row_start(direct))
         }
 
-        QuickCheck::new()
-            .tests(500)
-            .quickcheck(composes as fn(Vec<String>, usize, i8, i8, bool, bool) -> TestResult);
+        QuickCheck::new().tests(500).quickcheck(
+            composes as fn(Vec<String>, usize, i8, i8, bool, bool, Vec<(u8, u8)>) -> TestResult,
+        );
+    }
+
+    #[test]
+    fn test_positions_across_folds() {
+        let text = Rope::from("fn f() {\n    1\n}\nx\n");
+        let slice = text.slice(..);
+        let text_fmt = TextFormat::default();
+        let folds = [Fold {
+            start: 8,
+            end: 15,
+            pulled_up: true,
+        }];
+        let mut annotations = TextAnnotations::default();
+        annotations.add_folds(&folds, '…');
+
+        // hidden positions are drawn on the fold cell
+        let offset =
+            |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
+        assert_eq!(offset(0, 11), (Position::new(0, 8), 0));
+        assert_eq!(offset(0, 15), (Position::new(0, 9), 0));
+        assert_eq!(offset(0, 17), (Position::new(1, 0), 0));
+        // a block starting inside the fold starts at its row
+        assert_eq!(offset(11, 17), (Position::new(1, 0), 0));
+        assert_eq!(offset(15, 15), (Position::new(0, 9), 0));
+        assert_eq!(
+            visual_offset_from_anchor(slice, 11, 17, &text_fmt, &annotations, 10),
+            Ok((Position::new(1, 0), 0))
+        );
+
+        let char_at = |anchor, rows, col| {
+            char_idx_at_visual_offset(slice, anchor, rows, col, &text_fmt, &annotations)
+        };
+        assert_eq!(char_at(0, 0, 8), (8, 0), "the fold cell");
+        assert_eq!(char_at(0, 0, 9), (15, 0), "the pulled up closer");
+        assert_eq!(char_at(0, 0, 20), (16, 0), "the end of the row");
+        assert_eq!(char_at(17, -1, 3), (3, 0), "up across the fold");
+        assert_eq!(char_at(17, -1, 0), (0, 0));
+        assert_eq!(char_at(0, 1, 0), (17, 0), "down across the fold");
+        assert_eq!(char_at(11, 1, 0), (17, 0), "from inside the fold");
     }
 
     #[test]

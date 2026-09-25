@@ -46,6 +46,7 @@ pub struct LanguageData {
     tag_query: OnceCell<Option<TagQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
     breadcrumb_query: OnceCell<Option<BreadcrumbQuery>>,
+    fold_query: OnceCell<Option<FoldQuery>>,
 }
 
 impl LanguageData {
@@ -58,6 +59,7 @@ impl LanguageData {
             tag_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
             breadcrumb_query: OnceCell::new(),
+            fold_query: OnceCell::new(),
         }
     }
 
@@ -264,6 +266,36 @@ impl LanguageData {
             .as_ref()
     }
 
+    /// Compiles the folds.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_fold_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<FoldQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "folds.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let fold_query = FoldQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile folds.scm query for '{name}'"))?;
+        Ok(Some(fold_query))
+    }
+
+    fn fold_query(&self, loader: &Loader) -> Option<&FoldQuery> {
+        self.fold_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_fold_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
     fn reconfigure(&self, scopes: &[String]) {
         if let Some(Some(config)) = self.syntax.get() {
             reconfigure_highlights(config, scopes);
@@ -459,6 +491,10 @@ impl Loader {
 
     fn breadcrumb_query(&self, lang: Language) -> Option<&BreadcrumbQuery> {
         self.language(lang).breadcrumb_query(self)
+    }
+
+    fn fold_query(&self, lang: Language) -> Option<&FoldQuery> {
+        self.language(lang).fold_query(self)
     }
 
     pub fn language_server_configs(&self) -> &HashMap<String, LanguageServerConfiguration> {
@@ -664,13 +700,30 @@ impl Syntax {
         )
     }
 
+    /// Highlights the brackets in the byte `ranges`. The scopes enclosing a range intersect it,
+    /// so each range is colored correctly without querying the text before it.
     pub fn rainbow_highlights(
         &self,
         source: RopeSlice,
         rainbow_length: usize,
         loader: &Loader,
-        range: impl RangeBounds<u32>,
+        ranges: impl IntoIterator<Item = ops::Range<u32>>,
     ) -> OverlayHighlights {
+        let mut highlights = Vec::new();
+        for range in ranges {
+            self.rainbow_highlights_in(source, rainbow_length, loader, range, &mut highlights);
+        }
+        OverlayHighlights::Heterogenous { highlights }
+    }
+
+    fn rainbow_highlights_in(
+        &self,
+        source: RopeSlice,
+        rainbow_length: usize,
+        loader: &Loader,
+        range: ops::Range<u32>,
+        highlights: &mut Vec<(Highlight, ops::Range<usize>)>,
+    ) {
         struct RainbowScope<'tree> {
             end: u32,
             node: Option<Node<'tree>>,
@@ -678,7 +731,6 @@ impl Syntax {
         }
 
         let mut scope_stack = Vec::<RainbowScope>::new();
-        let mut highlights = Vec::new();
         let mut query_iter = self.query_iter::<_, (), _>(
             source,
             |lang| loader.rainbow_query(lang).map(|q| &q.query),
@@ -733,8 +785,6 @@ impl Syntax {
                 }
             }
         }
-
-        OverlayHighlights::Heterogenous { highlights }
     }
 
     /// Returns the breadcrumbs of the syntax nodes that `breadcrumbs.scm` queries match around
@@ -797,6 +847,40 @@ impl Syntax {
             .into_iter()
             .map(|(_, breadcrumb)| breadcrumb)
             .collect()
+    }
+
+    /// Iterates the regions that `folds.scm` queries capture with `@fold` in `range`, including
+    /// those of injected languages, as the first and the last node of each match. A quantified
+    /// capture such as `(use_declaration)+ @fold` forms one region.
+    pub fn fold_regions<'a>(
+        &'a self,
+        source: RopeSlice<'a>,
+        loader: &'a Loader,
+        range: ops::Range<u32>,
+    ) -> impl Iterator<Item = (Node<'a>, Node<'a>)> + 'a {
+        let mut matches = QueryMatchIter::<_, ()>::new(
+            &self.inner,
+            source,
+            |lang| loader.fold_query(lang).map(|query| &query.query),
+            range,
+        );
+        iter::from_fn(move || loop {
+            let QueryMatchIterEvent::Match(mat) = matches.next()? else {
+                continue;
+            };
+            let Some(capture) = loader
+                .fold_query(matches.current_language())
+                .and_then(|query| query.fold_capture)
+            else {
+                continue;
+            };
+            let mut nodes = mat.nodes_for_capture(capture);
+            let Some(first) = nodes.next() else {
+                continue;
+            };
+            let last = nodes.last().unwrap_or(first);
+            return Some((first.clone(), last.clone()));
+        })
     }
 }
 
@@ -1309,6 +1393,28 @@ impl BreadcrumbQuery {
 
         Ok(Self {
             breadcrumb_capture: query.get_capture("breadcrumb"),
+            query,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct FoldQuery {
+    query: Query,
+    fold_capture: Option<Capture>,
+}
+
+impl FoldQuery {
+    fn new(grammar: Grammar, source: &str) -> Result<Self, tree_sitter::query::ParseError> {
+        let query = Query::new(grammar, source, |_pattern, predicate| match predicate {
+            // nvim-treesitter's `#trim!` keeps trailing blank lines out of a fold, which folds
+            // always do.
+            UserPredicate::Other(predicate) if predicate.name() == "trim!" => Ok(()),
+            _ => Err(InvalidPredicateError::unknown(predicate)),
+        })?;
+
+        Ok(Self {
+            fold_capture: query.get_capture("fold"),
             query,
         })
     }

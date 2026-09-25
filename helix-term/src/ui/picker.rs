@@ -974,8 +974,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             let loader = cx.editor.syn_loader.load();
             let config = cx.editor.config();
 
-            let syntax_highlighter =
-                EditorView::doc_syntax_highlighter(doc, offset.anchor, area.height, &loader);
+            let syntax_highlighting =
+                EditorView::doc_syntax_highlighting(doc, &[], offset.anchor, area.height, &loader);
             let mut overlay_highlights = Vec::new();
             if doc
                 .language_config()
@@ -984,6 +984,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             {
                 if let Some(overlay) = EditorView::doc_rainbow_highlights(
                     doc,
+                    &[],
                     offset.anchor,
                     area.height,
                     &cx.editor.theme,
@@ -1028,7 +1029,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 offset,
                 // TODO: compute text annotations asynchronously here (like inlay hints)
                 &TextAnnotations::default(),
-                syntax_highlighter,
+                syntax_highlighting,
                 overlay_highlights,
                 &cx.editor.theme,
                 decorations,

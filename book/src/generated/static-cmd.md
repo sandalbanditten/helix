@@ -255,6 +255,10 @@
 | `align_view_top` | Align view top | normal: `` Zt ``, `` zt ``, select: `` Zt ``, `` zt `` |
 | `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zc ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zc ``, `` zz `` |
 | `align_view_bottom` | Align view bottom | normal: `` Zb ``, `` zb ``, select: `` Zb ``, `` zb `` |
+| `toggle_fold` | Toggle fold at selections | normal: `` Zf ``, `` zf ``, select: `` Zf ``, `` zf `` |
+| `toggle_fold_recursive` | Toggle fold at selections with the folds inside it | normal: `` Za ``, `` za ``, select: `` Za ``, `` za `` |
+| `fold_all` | Fold all | normal: `` ZF ``, `` zF ``, select: `` ZF ``, `` zF `` |
+| `unfold_all` | Unfold all | normal: `` ZU ``, `` zU ``, select: `` ZU ``, `` zU `` |
 | `scroll_up` | Scroll view up | normal: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> ``, select: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> `` |
 | `scroll_down` | Scroll view down | normal: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> ``, select: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> `` |
 | `match_brackets` | Goto matching bracket | normal: `` mm ``, select: `` mm `` |

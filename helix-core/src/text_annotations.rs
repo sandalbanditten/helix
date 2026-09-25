@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::ptr::NonNull;
 
 use crate::doc_formatter::FormattedGrapheme;
+use crate::fold::Fold;
 use crate::syntax::{Highlight, OverlayHighlights};
 use crate::{Position, Tendril};
 
@@ -272,6 +273,15 @@ impl<T: ?Sized> Drop for RawBox<T> {
     }
 }
 
+/// Closed folds, which the document formatter draws as a single placeholder grapheme.
+#[derive(Debug, Default)]
+struct FoldLayer<'a> {
+    /// Sorted and disjoint.
+    folds: &'a [Fold],
+    next: Cell<usize>,
+    placeholder: Tendril,
+}
+
 /// Annotations that change that is displayed when the document is render.
 /// Also commonly called virtual text.
 #[derive(Default)]
@@ -279,6 +289,7 @@ pub struct TextAnnotations<'a> {
     inline_annotations: Vec<Layer<'a, InlineAnnotation, Option<Highlight>>>,
     overlays: Vec<Layer<'a, Overlay, Option<Highlight>>>,
     line_annotations: Vec<(Cell<usize>, RawBox<dyn LineAnnotation + 'a>)>,
+    folds: FoldLayer<'a>,
 }
 
 impl Debug for TextAnnotations<'_> {
@@ -286,6 +297,7 @@ impl Debug for TextAnnotations<'_> {
         f.debug_struct("TextAnnotations")
             .field("inline_annotations", &self.inline_annotations)
             .field("overlays", &self.overlays)
+            .field("folds", &self.folds)
             .finish_non_exhaustive()
     }
 }
@@ -298,19 +310,39 @@ impl<'a> TextAnnotations<'a> {
         for (next_anchor, layer) in &self.line_annotations {
             next_anchor.set(unsafe { layer.get().reset_pos(char_idx) });
         }
+        let folds = &self.folds;
+        folds
+            .next
+            .set(folds.folds.partition_point(|fold| fold.start < char_idx));
     }
 
     pub fn collect_overlay_highlights(&self, char_range: Range<usize>) -> OverlayHighlights {
-        let mut highlights = Vec::new();
-        self.reset_pos(char_range.start);
-        for char_idx in char_range {
-            if let Some((_, Some(highlight))) = self.overlay_at(char_idx) {
-                // we don't know the number of chars the original grapheme takes
-                // however it doesn't matter as highlight boundaries are automatically
-                // aligned to grapheme boundaries in the rendering code
-                highlights.push((highlight, char_idx..char_idx + 1));
-            }
+        let mut overlays = Vec::new();
+        for layer in &self.overlays {
+            let first = layer
+                .annotations
+                .partition_point(|overlay| overlay.char_idx < char_range.start);
+            let in_range = layer.annotations[first..]
+                .iter()
+                .take_while(|overlay| overlay.char_idx < char_range.end);
+            overlays.extend(in_range.map(|overlay| (overlay.char_idx, layer.metadata)));
         }
+        // the overlay of the layer added last is shown, so keep the last one at each position
+        overlays.sort_by_key(|&(char_idx, _)| char_idx);
+        overlays.dedup_by(|next, prev| {
+            let same_position = next.0 == prev.0;
+            if same_position {
+                *prev = *next;
+            }
+            same_position
+        });
+        let highlights = overlays
+            .into_iter()
+            // we don't know the number of chars the original grapheme takes
+            // however it doesn't matter as highlight boundaries are automatically
+            // aligned to grapheme boundaries in the rendering code
+            .filter_map(|(char_idx, highlight)| Some((highlight?, char_idx..char_idx + 1)))
+            .collect();
 
         OverlayHighlights::Heterogenous { highlights }
     }
@@ -368,6 +400,49 @@ impl<'a> TextAnnotations<'a> {
     /// so that virtual text lines are automatically skipped.
     pub fn clear_line_annotations(&mut self) {
         self.line_annotations.clear();
+    }
+
+    /// Adds closed folds, which are drawn as `placeholder`, replacing any added before.
+    ///
+    /// The folds **must be sorted** by their start and **must not overlap**, like
+    /// [`Folds::outermost`](crate::fold::Folds::outermost).
+    pub fn add_folds(&mut self, folds: &'a [Fold], placeholder: char) -> &mut Self {
+        debug_assert!(folds.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        self.folds = FoldLayer {
+            folds,
+            next: Cell::new(0),
+            placeholder: placeholder.encode_utf8(&mut [0; 4]).into(),
+        };
+        self
+    }
+
+    /// The closed folds, sorted and disjoint.
+    pub fn folds(&self) -> &'a [Fold] {
+        self.folds.folds
+    }
+
+    /// Returns the fold starting at `char_idx` of a text with `len_chars` chars, if it ends
+    /// within the text.
+    pub(crate) fn fold_at(&self, char_idx: usize, len_chars: usize) -> Option<&'a Fold> {
+        let layer = &self.folds;
+        let fold = layer.folds.get(layer.next.get())?;
+        debug_assert!(fold.start >= char_idx);
+        if fold.start != char_idx {
+            return None;
+        }
+        layer.next.set(layer.next.get() + 1);
+        (fold.end <= len_chars).then_some(fold)
+    }
+
+    pub(crate) fn fold_placeholder(&self) -> &str {
+        &self.folds.placeholder
+    }
+
+    /// Skips the inline annotations and overlays of the text hidden by a fold ending at `end`.
+    /// Line annotations skip their concealed anchors by themselves.
+    pub(crate) fn skip_folded(&self, end: usize) {
+        reset_pos(&self.inline_annotations, end, |annot| annot.char_idx);
+        reset_pos(&self.overlays, end, |annot| annot.char_idx);
     }
 
     pub(crate) fn next_inline_annotation_at(

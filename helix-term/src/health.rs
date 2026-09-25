@@ -18,6 +18,7 @@ pub enum TsFeature {
     Tags,
     RainbowBracket,
     Breadcrumbs,
+    Folds,
 }
 
 impl TsFeature {
@@ -29,6 +30,7 @@ impl TsFeature {
             Self::Tags,
             Self::RainbowBracket,
             Self::Breadcrumbs,
+            Self::Folds,
         ]
     }
 
@@ -40,6 +42,7 @@ impl TsFeature {
             Self::Tags => "tags.scm",
             Self::RainbowBracket => "rainbows.scm",
             Self::Breadcrumbs => "breadcrumbs.scm",
+            Self::Folds => "folds.scm",
         }
     }
 
@@ -51,6 +54,7 @@ impl TsFeature {
             Self::Tags => "Code Navigation Tags",
             Self::RainbowBracket => "Rainbow Brackets",
             Self::Breadcrumbs => "Breadcrumbs",
+            Self::Folds => "Code Folding",
         }
     }
 
@@ -62,6 +66,7 @@ impl TsFeature {
             Self::Tags => "Tags",
             Self::RainbowBracket => "Rainbow",
             Self::Breadcrumbs => "Breadcrumbs",
+            Self::Folds => "Folds",
         }
     }
 }

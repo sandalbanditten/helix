@@ -12,6 +12,7 @@ use crate::{
 use helix_core::{
     char_idx_at_visual_offset,
     doc_formatter::TextFormat,
+    fold,
     movement::{move_vertically_visual, Direction, Movement},
     text_annotations::TextAnnotations,
     visual_offset_from_anchor, visual_offset_from_block, Position, Range, RopeSlice, Selection,
@@ -402,7 +403,7 @@ impl View {
                 }
             };
             let drawn = self.render_selection(doc).clone();
-            self.smooth_scroll.hint(drawn, motion, doc);
+            self.smooth_scroll.hint(drawn, motion, doc, self.id);
         }
 
         let mut view_offset = doc.view_offset(self.id);
@@ -512,14 +513,14 @@ impl View {
     /// scrolls there. This is also what is on screen, for mapping screen coordinates.
     pub fn render_offset(&self, doc: &Document) -> ViewPosition {
         self.smooth_scroll
-            .offset(doc)
+            .offset(doc, self.id)
             .unwrap_or_else(|| doc.view_offset(self.id))
     }
 
     /// The selection to draw: the real selection, or where a smooth scroll currently shows it.
     pub fn render_selection<'a>(&'a self, doc: &'a Document) -> &'a Selection {
         self.smooth_scroll
-            .selection(doc)
+            .selection(doc, self.id)
             .unwrap_or_else(|| doc.selection(self.id))
     }
 
@@ -534,7 +535,7 @@ impl View {
 
     /// Whether the cursor and its decorations are hidden while the view smoothly scrolls.
     pub fn hides_cursor(&self, doc: &Document) -> bool {
-        doc.config.load().smooth_scroll.hide_cursor && self.smooth_scroll.is_animating(doc)
+        doc.config.load().smooth_scroll.hide_cursor && self.smooth_scroll.is_animating(doc, self.id)
     }
 
     /// Advances the smooth scrolling to the frame drawn at `now`, returning when the next frame
@@ -555,10 +556,15 @@ impl View {
     pub fn estimate_last_doc_line(&self, doc: &Document) -> usize {
         let doc_text = doc.text().slice(..);
         let line = doc_text.char_to_line(doc.view_offset(self.id).anchor.min(doc_text.len_chars()));
-        // Saturating subs to make it inclusive zero indexing.
-        (line + self.inner_height())
-            .min(doc_text.len_lines())
-            .saturating_sub(1)
+        let folds = doc.outermost_folds(self.id);
+        if folds.is_empty() {
+            // Saturating subs to make it inclusive zero indexing.
+            return (line + self.inner_height())
+                .min(doc_text.len_lines())
+                .saturating_sub(1);
+        }
+        let rows = self.inner_height().saturating_sub(1);
+        fold::row_end_line(folds, doc_text, fold::next_row(folds, doc_text, line, rows))
     }
 
     /// Calculates the last non-empty visual line on screen
@@ -681,6 +687,7 @@ impl View {
                 .add_inline_annotations(padding_after_inlay_hints, None);
         };
         let config = doc.config.load();
+        text_annotations.add_folds(doc.outermost_folds(self.id), config.folding.placeholder);
 
         if config.lsp.display_color_swatches {
             if let Some(DocumentColorSwatches {

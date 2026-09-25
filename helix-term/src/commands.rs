@@ -24,7 +24,7 @@ use helix_core::{
     command_line::{self, Args},
     comment,
     doc_formatter::TextFormat,
-    encoding, find_workspace,
+    encoding, find_workspace, fold,
     graphemes::{self, next_grapheme_boundary},
     history::UndoKind,
     increment,
@@ -557,6 +557,10 @@ impl MappableCommand {
         align_view_top, "Align view top",
         align_view_center, "Align view center",
         align_view_bottom, "Align view bottom",
+        toggle_fold, "Toggle fold at selections",
+        toggle_fold_recursive, "Toggle fold at selections with the folds inside it",
+        fold_all, "Fold all",
+        unfold_all, "Unfold all",
         scroll_up, "Scroll view up",
         scroll_down, "Scroll view down",
         match_brackets, "Goto matching bracket",
@@ -818,10 +822,12 @@ fn extend_visual_line_down(cx: &mut Context) {
 
 fn goto_line_end_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id).outermost();
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
-        let line_start = text.line_to_char(line);
+        // a row of lines joined by closed folds ends on its last line
+        let (first_line, line) = fold::row_lines(folds, text, range.cursor_line(text));
+        let line_start = text.line_to_char(first_line);
 
         let pos = graphemes::prev_grapheme_boundary(text, line_end_char_index(&text, line))
             .max(line_start);
@@ -851,9 +857,10 @@ fn extend_to_line_end(cx: &mut Context) {
 
 fn goto_line_end_newline_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id).outermost();
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let (_, line) = fold::row_lines(folds, text, range.cursor_line(text));
         let pos = line_end_char_index(&text, line);
 
         range.put_cursor(text, pos, movement == Movement::Extend)
@@ -881,9 +888,10 @@ fn extend_to_line_end_newline(cx: &mut Context) {
 
 fn goto_line_start_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id).outermost();
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = fold::row_start_line(folds, text, range.cursor_line(text));
 
         // adjust to start of the line
         let pos = text.line_to_char(line);
@@ -1011,9 +1019,10 @@ fn extend_to_first_nonwhitespace(cx: &mut Context) {
 
 fn goto_first_nonwhitespace_impl(view: &mut View, doc: &mut Document, movement: Movement) {
     let text = doc.text().slice(..);
+    let folds = doc.folds(view.id).outermost();
 
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
+        let line = fold::row_start_line(folds, text, range.cursor_line(text));
 
         if let Some(pos) = text.line(line).first_non_whitespace_char() {
             let pos = pos + text.line_to_char(line);
@@ -2714,31 +2723,31 @@ fn extend_line_impl(cx: &mut Context, extend: Extend) {
     let (view, doc) = current!(cx.editor);
 
     let text = doc.text();
+    let slice = text.slice(..);
+    let folds = doc.folds(view.id).outermost();
+    // a row of lines joined by closed folds is extended over as one line
+    let row_start = |line, rows| text.line_to_char(fold::prev_row(folds, slice, line, rows));
+    let row_end = |line, rows| {
+        let (_, last_line) =
+            fold::row_lines(folds, slice, fold::next_row(folds, slice, line, rows));
+        text.line_to_char((last_line + 1).min(text.len_lines()))
+    };
     let selection = doc.selection(view.id).clone().transform(|range| {
-        let (start_line, end_line) = range.line_range(text.slice(..));
+        let (start_line, end_line) = fold::row_line_range(folds, slice, &range);
 
         let start = text.line_to_char(start_line);
-        let end = text.line_to_char(
-            (end_line + 1) // newline of end_line
-                .min(text.len_lines()),
-        );
+        let end = row_end(end_line, 0);
 
         // extend to previous/next line if current line is selected
         let (anchor, head) = if range.from() == start && range.to() == end {
             match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count + 1).min(text.len_lines())),
-                ),
+                Extend::Above => (end, row_start(start_line, count)),
+                Extend::Below => (start, row_end(end_line, count)),
             }
         } else {
             match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count - 1))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count).min(text.len_lines())),
-                ),
+                Extend::Above => (end, row_start(start_line, count - 1)),
+                Extend::Below => (start, row_end(end_line, count - 1)),
             }
         };
 
@@ -2808,8 +2817,9 @@ fn extend_to_line_bounds(cx: &mut Context) {
         view.id,
         doc.selection(view.id).clone().transform(|range| {
             let text = doc.text();
+            let folds = doc.folds(view.id).outermost();
 
-            let (start_line, end_line) = range.line_range(text.slice(..));
+            let (start_line, end_line) = fold::row_line_range(folds, text.slice(..), &range);
             let start = text.line_to_char(start_line);
             let end = text.line_to_char((end_line + 1).min(text.len_lines()));
 
@@ -2825,12 +2835,17 @@ fn shrink_to_line_bounds(cx: &mut Context) {
         view.id,
         doc.selection(view.id).clone().transform(|range| {
             let text = doc.text();
+            let slice = text.slice(..);
+            // a row of lines joined by closed folds counts as one line
+            let folds = doc.folds(view.id).outermost();
 
-            let (start_line, end_line) = range.line_range(text.slice(..));
+            let (start_line, end_line) = fold::row_line_range(folds, slice, &range);
+            let (_, start_row_end) = fold::row_lines(folds, slice, start_line);
+            let end_row_start = fold::row_start_line(folds, slice, end_line);
 
             // Do nothing if the selection is within one line to prevent
             // conditional logic for the behavior of this command
-            if start_line == end_line {
+            if start_line == end_row_start {
                 return range;
             }
 
@@ -2843,11 +2858,11 @@ fn shrink_to_line_bounds(cx: &mut Context) {
             let mut end = text.line_to_char((end_line + 1).min(text.len_lines()));
 
             if start != range.from() {
-                start = text.line_to_char((start_line + 1).min(text.len_lines()));
+                start = text.line_to_char((start_row_end + 1).min(text.len_lines()));
             }
 
             if end != range.to() {
-                end = text.line_to_char(end_line);
+                end = text.line_to_char(end_row_start);
             }
 
             Range::new(start, end).with_direction(range.direction())
@@ -2882,7 +2897,10 @@ enum YankAction {
 fn delete_selection_impl(cx: &mut Context, op: Operation, yank: YankAction) {
     let (view, doc) = current!(cx.editor);
 
-    let selection = doc.selection(view.id);
+    // a cursor on a fold cell acts on the text hidden behind it
+    let selection = &doc
+        .folds(view.id)
+        .widen_cells(doc.text().slice(..), doc.selection(view.id).clone());
     let only_whole_lines = selection_is_linewise(selection, doc.text());
 
     if cx.register != Some('_') && matches!(yank, YankAction::Yank) {
@@ -3610,8 +3628,14 @@ fn insert_with_indent(cx: &mut Context, cursor_fallback: IndentFallbackPos) {
     let mut ranges = SmallVec::with_capacity(selection.len());
     let mut offs = 0;
 
+    let folds = doc.folds(view.id).outermost();
     let mut transaction = Transaction::change_by_selection(contents, selection, |range| {
-        let cursor_line = range.cursor_line(text);
+        // a row of lines joined by closed folds starts on its first and ends on its last line
+        let (first_line, last_line) = fold::row_lines(folds, text, range.cursor_line(text));
+        let cursor_line = match cursor_fallback {
+            IndentFallbackPos::LineStart => first_line,
+            IndentFallbackPos::LineEnd => last_line,
+        };
         let cursor_line_start = text.line_to_char(cursor_line);
 
         if line_end_char_index(&text, cursor_line) == cursor_line_start {
@@ -3761,12 +3785,17 @@ fn open(cx: &mut Context, open: Open, comment_continuation: CommentContinuation)
 
     let mut ranges = SmallVec::with_capacity(selection.len());
 
+    let folds = doc.folds(view.id).outermost();
     let mut transaction = Transaction::change_by_selection(contents, selection, |range| {
-        // the line number, where the cursor is currently
-        let curr_line_num = text.char_to_line(match open {
-            Open::Below => graphemes::prev_grapheme_boundary(text, range.to()),
-            Open::Above => range.from(),
-        });
+        // the line number, where the cursor is currently: a new line goes below or above the
+        // whole row of lines that closed folds join
+        let curr_line_num = match open {
+            Open::Below => {
+                let line = text.char_to_line(graphemes::prev_grapheme_boundary(text, range.to()));
+                fold::row_lines(folds, text, line).1
+            }
+            Open::Above => fold::row_start_line(folds, text, text.char_to_line(range.from())),
+        };
 
         // the next line number, where the cursor will be, after finishing the transaction
         let next_new_line_num = match open {
@@ -4742,8 +4771,10 @@ fn yank_impl(editor: &mut Editor, register: char) {
     let (view, doc) = current!(editor);
     let text = doc.text().slice(..);
 
+    // a cursor on a fold cell yanks the text hidden behind it
     let values: Vec<String> = doc
-        .selection(view.id)
+        .folds(view.id)
+        .widen_cells(text, doc.selection(view.id).clone())
         .fragments(text)
         .map(Cow::into_owned)
         .collect();
@@ -4876,6 +4907,8 @@ fn paste_impl(
 
     let text = doc.text();
     let selection = doc.selection(view.id);
+    // lines are pasted before or after the whole row of lines that closed folds join
+    let folds = doc.folds(view.id).outermost();
 
     let mut offset = 0;
     let mut ranges = SmallVec::with_capacity(selection.len());
@@ -4883,10 +4916,13 @@ fn paste_impl(
     let mut transaction = Transaction::change_by_selection(text, selection, |range| {
         let pos = match (action, linewise) {
             // paste linewise before
-            (Paste::Before, true) => text.line_to_char(text.char_to_line(range.from())),
+            (Paste::Before, true) => {
+                let line = text.char_to_line(range.from());
+                text.line_to_char(fold::row_start_line(folds, text.slice(..), line))
+            }
             // paste linewise after
             (Paste::After, true) => {
-                let line = range.line_range(text.slice(..)).1;
+                let line = fold::row_line_range(folds, text.slice(..), range).1;
                 text.line_to_char((line + 1).min(text.len_lines()))
             }
             // paste insert
@@ -5049,9 +5085,10 @@ fn paste_before(cx: &mut Context) {
 fn get_lines(doc: &Document, view_id: ViewId) -> Vec<usize> {
     let mut lines = Vec::new();
 
-    // Get all line numbers
+    // Get all line numbers, including those that closed folds join into the selected rows
+    let folds = doc.folds(view_id).outermost();
     for range in doc.selection(view_id) {
-        let (start, end) = range.line_range(doc.text().slice(..));
+        let (start, end) = fold::row_line_range(folds, doc.text().slice(..), range);
 
         for line in start..=end {
             lines.push(line)
@@ -5226,9 +5263,11 @@ fn join_selections_impl(cx: &mut Context, select_space: bool) {
 
     let mut changes = Vec::new();
 
+    let folds = doc.folds(view.id).outermost();
     for selection in doc.selection(view.id) {
-        let (start, mut end) = selection.line_range(slice);
-        if start == end {
+        // the lines that closed folds join into the selected rows are joined too
+        let (start, mut end) = fold::row_line_range(folds, slice, selection);
+        if start == fold::row_start_line(folds, slice, end) {
             end = (end + 1).min(text.len_lines() - 1);
         }
         let lines = start..end;
@@ -5446,8 +5485,19 @@ fn toggle_comments_impl(cx: &mut Context, comment_transaction: CommentTransactio
         .and_then(|lc| lc.block_comment_tokens.as_ref())
         .map(|tc| &tc[..]);
 
-    let transaction =
-        comment_transaction(line_token, block_tokens, doc.text(), doc.selection(view.id));
+    // a selection on a row of lines joined by closed folds comments all of the row's lines
+    let text = doc.text().slice(..);
+    let folds = doc.folds(view.id).outermost();
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let (first_line, last_line) = fold::row_line_range(folds, text, &range);
+        if (first_line, last_line) == range.line_range(text) {
+            return range;
+        }
+        let end = line_end_char_index(&text, last_line);
+        Range::new(text.line_to_char(first_line), end).with_direction(range.direction())
+    });
+
+    let transaction = comment_transaction(line_token, block_tokens, doc.text(), &selection);
 
     doc.apply(&transaction, view.id);
     exit_select_mode(cx);
@@ -5880,11 +5930,13 @@ fn split(editor: &mut Editor, action: Action) {
     let id = doc.id();
     let selection = doc.selection(view.id).clone();
     let offset = doc.view_offset(view.id);
+    let folds = doc.folds(view.id).clone();
 
     editor.switch(id, action);
 
-    // match the selection in the previous view
+    // match the folds and the selection in the previous view
     let (view, doc) = current!(editor);
+    doc.set_folds(view.id, folds);
     doc.set_selection(view.id, selection);
     // match the view scroll offset (switch doesn't handle this fully
     // since the selection is only matched after the split)
@@ -6023,6 +6075,26 @@ fn align_view_center(cx: &mut Context) {
 fn align_view_bottom(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
     align_view(doc, view, Align::Bottom);
+}
+
+fn toggle_fold(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.toggle_folds(view.id, false);
+}
+
+fn toggle_fold_recursive(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.toggle_folds(view.id, true);
+}
+
+fn fold_all(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.fold_all(view.id);
+}
+
+fn unfold_all(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    doc.unfold_all(view.id);
 }
 
 fn align_view_middle(cx: &mut Context) {
@@ -6692,8 +6764,9 @@ fn add_newline_impl(cx: &mut Context, open: Open) {
     let text = doc.text();
     let slice = text.slice(..);
 
+    let folds = doc.folds(view.id).outermost();
     let changes = selection.into_iter().map(|range| {
-        let (start, end) = range.line_range(slice);
+        let (start, end) = fold::row_line_range(folds, slice, range);
         let line = match open {
             Open::Above => start,
             Open::Below => end + 1,
@@ -7015,6 +7088,10 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
     let start = text.line_to_char(text.char_to_line(doc.view_offset(view.id).anchor));
     let end = text.line_to_char(view.estimate_last_doc_line(doc) + 1);
 
+    // words hidden by closed folds get no labels
+    let folds = doc.folds(view.id);
+    let hidden = |pos| folds.fold_at(pos).filter(|fold| pos > fold.start);
+
     let primary_selection = doc.selection(view.id).primary();
     let cursor = primary_selection.cursor(text);
     let mut cursor_fwd = Range::point(cursor);
@@ -7034,6 +7111,10 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
         let mut changed = false;
         while cursor_fwd.head < end {
             cursor_fwd = movement::move_next_word_end(text, cursor_fwd, 1);
+            if let Some(fold) = hidden(cursor_fwd.head.saturating_sub(1)) {
+                cursor_fwd = Range::point(fold.end);
+                continue;
+            }
             // The cursor is on a word that is atleast two graphemes long and
             // madeup of word characters. The latter condition is needed because
             // move_next_word_end simply treats a sequence of characters from
@@ -7062,6 +7143,10 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
         }
         while cursor_rev.head > start {
             cursor_rev = movement::move_prev_word_start(text, cursor_rev, 1);
+            if let Some(fold) = hidden(cursor_rev.head) {
+                cursor_rev = Range::point(fold.start);
+                continue;
+            }
             // The cursor is on a word that is atleast two graphemes long and
             // madeup of word characters. The latter condition is needed because
             // move_prev_word_start simply treats a sequence of characters from

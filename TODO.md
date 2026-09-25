@@ -8,13 +8,6 @@ Look online for examples of similar features and implementations.
 Ask when in doubt about specification or implementation, don't guess.
 Performance is very important, especially for large files, directories, and projects.
 
-## Simple Code Folding Feature
-We want a simple code folding feature with a keybind to fold/unfold currently selected function, method, class, block, module, etc.
-We want two keybinds to fold all and unfold all.
-We want a config option for starting with everything folded.
-It should be performant, consider the specialized data structures in use by the helix editor.
-It should, if possible, use tree-sitter for performant code analysis.
-
 ## File Tree
 We want a filetree.
 It should be toggleable, configurable in `config.toml`, and be left (default) or right dockable.

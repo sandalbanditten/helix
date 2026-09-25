@@ -22,6 +22,7 @@
   - [`[editor.gutters.code-action-hint]` Section](#editorgutterscode-action-hint-section)
 - [`[editor.soft-wrap]` Section](#editorsoft-wrap-section)
 - [`[editor.smooth-scroll]` Section](#editorsmooth-scroll-section)
+- [`[editor.folding]` Section](#editorfolding-section)
 - [`[editor.smart-tab]` Section](#editorsmart-tab-section)
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
@@ -517,6 +518,35 @@ Example:
 enable = true
 duration = 200
 hide-cursor = true
+```
+
+### `[editor.folding]` Section
+
+Code folding hides functions, types, blocks and other regions behind their first line, which then
+ends in a placeholder: `fn new() -> Self {…}`. A closing bracket that starts the region's last
+line is pulled onto that line, so `if a {…} else {…}` stays on one line. The regions come from
+the language's `folds.scm` query (see [Adding fold queries](./guides/folding.md)); `hx --health`
+lists the languages that have one.
+
+Folds belong to a view: two splits of a document fold independently, and a new split starts with
+the folds of the view it was split from. See the [view mode](./keymap.md#view-mode) for the
+commands. A selection that lands inside a fold, such as a search match, opens it; moving the
+cursor up, down, left or right steps over folds, and line-wise commands such as `x`, `o` or `>`
+treat a folded line as one line.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `start-folded` | Fold everything when a document is first shown in a view | `false` |
+| `placeholder` | The character that folded text is drawn as | `"…"` |
+
+The placeholder is styled with the `ui.virtual.fold` theme scope.
+
+Example:
+
+```toml
+[editor.folding]
+start-folded = true
+placeholder = "⋯"
 ```
 
 ### `[editor.smart-tab]` Section

@@ -1,11 +1,12 @@
 use std::cmp::min;
+use std::ops;
 
 use helix_core::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSource, TextFormat};
 use helix_core::graphemes::Grapheme;
 use helix_core::str_utils::char_to_byte_idx;
 use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
 use helix_core::text_annotations::TextAnnotations;
-use helix_core::{visual_offset_from_block, Position, RopeSlice};
+use helix_core::{visual_offset_from_block, Position, RopeSlice, Syntax};
 use helix_stdx::rope::RopeSliceExt;
 use helix_view::editor::{WhitespaceConfig, WhitespaceRenderValue};
 use helix_view::graphics::Rect;
@@ -27,6 +28,13 @@ pub struct LinePos {
     pub visual_line: u16,
 }
 
+/// The syntax tree whose highlights `render_text` draws for the byte `range`.
+pub struct SyntaxHighlighting<'a> {
+    pub syntax: &'a Syntax,
+    pub loader: &'a syntax::Loader,
+    pub range: ops::Range<u32>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_document(
     surface: &mut Surface,
@@ -34,7 +42,7 @@ pub fn render_document(
     doc: &Document,
     offset: ViewPosition,
     doc_annotations: &TextAnnotations,
-    syntax_highlighter: Option<Highlighter<'_>>,
+    syntax_highlighting: Option<SyntaxHighlighting<'_>>,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     decorations: DecorationManager,
@@ -52,7 +60,7 @@ pub fn render_document(
         offset.anchor,
         &doc.text_format(viewport.width, Some(theme)),
         doc_annotations,
-        syntax_highlighter,
+        syntax_highlighting,
         overlay_highlights,
         theme,
         decorations,
@@ -60,13 +68,13 @@ pub fn render_document(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn render_text(
+pub fn render_text<'a>(
     renderer: &mut TextRenderer,
-    text: RopeSlice<'_>,
+    text: RopeSlice<'a>,
     anchor: usize,
     text_fmt: &TextFormat,
     text_annotations: &TextAnnotations,
-    syntax_highlighter: Option<Highlighter<'_>>,
+    syntax_highlighting: Option<SyntaxHighlighting<'a>>,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     mut decorations: DecorationManager,
@@ -78,7 +86,7 @@ pub fn render_text(
     let mut formatter =
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, text_annotations, anchor);
     let mut syntax_highlighter =
-        SyntaxHighlighter::new(syntax_highlighter, text, theme, renderer.text_style);
+        SyntaxHighlighter::new(syntax_highlighting, text, theme, renderer.text_style);
     let mut overlay_highlighter = OverlayHighlighter::new(overlay_highlights, theme);
 
     let mut last_line_pos = LinePos {
@@ -90,11 +98,20 @@ pub fn render_text(
     let mut is_in_indent_area = true;
     let mut last_line_indent_level = 0;
     let mut reached_view_top = false;
+    // A row, which closed folds can make span several document lines, is identified by the
+    // line it starts on, also when it is soft wrapped after a fold.
+    let mut row_line = 0;
+    let mut starts_row = true;
 
     loop {
         let Some(mut grapheme) = formatter.next() else {
             break;
         };
+        let is_row_start = starts_row;
+        if is_row_start {
+            row_line = grapheme.line_idx;
+        }
+        starts_row = grapheme.raw == Grapheme::Newline && !grapheme.is_virtual();
 
         // skip any graphemes on visual lines before the block start
         if grapheme.visual_pos.row < row_off {
@@ -124,8 +141,8 @@ pub fn render_text(
                 decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
             }
             last_line_pos = LinePos {
-                first_visual_line: grapheme.line_idx != last_line_pos.doc_line,
-                doc_line: grapheme.line_idx,
+                first_visual_line: is_row_start || last_line_pos.doc_line == usize::MAX,
+                doc_line: row_line,
                 visual_line: grapheme.visual_pos.row as u16,
             };
             decorations.decorate_line(renderer, last_line_pos);
@@ -139,20 +156,26 @@ pub fn render_text(
             overlay_highlighter.advance();
         }
 
-        let grapheme_style = if let GraphemeSource::VirtualText { highlight } = grapheme.source {
-            let mut style = renderer.text_style;
-            if let Some(highlight) = highlight {
-                style = style.patch(theme.highlight(highlight));
+        let grapheme_style = match grapheme.source {
+            GraphemeSource::VirtualText { highlight } => {
+                let mut style = renderer.text_style;
+                if let Some(highlight) = highlight {
+                    style = style.patch(theme.highlight(highlight));
+                }
+                GraphemeStyle {
+                    syntax_style: style,
+                    overlay_style: Style::default(),
+                }
             }
-            GraphemeStyle {
-                syntax_style: style,
-                overlay_style: Style::default(),
-            }
-        } else {
-            GraphemeStyle {
+            // the fold cell shows the selection and cursor of the header's line break
+            GraphemeSource::Fold { .. } => GraphemeStyle {
+                syntax_style: renderer.fold_style,
+                overlay_style: overlay_highlighter.style,
+            },
+            GraphemeSource::Document { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter.style,
                 overlay_style: overlay_highlighter.style,
-            }
+            },
         };
         decorations.decorate_grapheme(renderer, &grapheme);
 
@@ -166,6 +189,11 @@ pub fn render_text(
             grapheme.visual_pos,
         );
         last_line_end = grapheme.visual_pos.col + grapheme_width;
+
+        if grapheme.source.is_fold() {
+            // never highlight hidden text, a fold may hide most of the document
+            syntax_highlighter.skip_to(grapheme.char_idx + grapheme.doc_chars());
+        }
     }
 
     renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
@@ -177,6 +205,7 @@ pub struct TextRenderer<'a> {
     surface: &'a mut Surface,
     pub text_style: Style,
     pub whitespace_style: Style,
+    pub fold_style: Style,
     pub indent_guide_char: String,
     pub indent_guide_style: Style,
     pub newline: String,
@@ -256,6 +285,7 @@ impl<'a> TextRenderer<'a> {
             tab,
             virtual_tab,
             whitespace_style: theme.get("ui.virtual.whitespace"),
+            fold_style: text_style.patch(theme.get("ui.virtual.fold")),
             indent_width,
             starting_indent: offset.col / indent_width as usize
                 + !offset.col.is_multiple_of(indent_width as usize) as usize
@@ -479,9 +509,10 @@ impl<'a> TextRenderer<'a> {
     }
 }
 
-struct SyntaxHighlighter<'h, 'r, 't> {
-    inner: Option<Highlighter<'h>>,
-    text: RopeSlice<'r>,
+struct SyntaxHighlighter<'a, 't> {
+    highlighting: Option<SyntaxHighlighting<'a>>,
+    inner: Option<Highlighter<'a>>,
+    text: RopeSlice<'a>,
     /// The character index of the next highlight event, or `usize::MAX` if the highlighter is
     /// finished.
     pos: usize,
@@ -490,14 +521,23 @@ struct SyntaxHighlighter<'h, 'r, 't> {
     style: Style,
 }
 
-impl<'h, 'r, 't> SyntaxHighlighter<'h, 'r, 't> {
+impl<'a, 't> SyntaxHighlighter<'a, 't> {
     fn new(
-        inner: Option<Highlighter<'h>>,
-        text: RopeSlice<'r>,
+        highlighting: Option<SyntaxHighlighting<'a>>,
+        text: RopeSlice<'a>,
         theme: &'t Theme,
         text_style: Style,
     ) -> Self {
+        let inner = highlighting.as_ref().map(|highlighting| {
+            let SyntaxHighlighting {
+                syntax,
+                loader,
+                range,
+            } = highlighting;
+            syntax.highlighter(text, loader, range.clone())
+        });
         let mut highlighter = Self {
+            highlighting,
             inner,
             text,
             pos: 0,
@@ -507,6 +547,22 @@ impl<'h, 'r, 't> SyntaxHighlighter<'h, 'r, 't> {
         };
         highlighter.update_pos();
         highlighter
+    }
+
+    /// Continues highlighting at `char_idx`, skipping the text before it.
+    fn skip_to(&mut self, char_idx: usize) {
+        let Some(SyntaxHighlighting {
+            syntax,
+            loader,
+            range,
+        }) = &self.highlighting
+        else {
+            return;
+        };
+        let start = (self.text.char_to_byte(char_idx) as u32).min(range.end);
+        self.inner = Some(syntax.highlighter(self.text, loader, start..range.end));
+        self.style = self.text_style;
+        self.update_pos();
     }
 
     fn update_pos(&mut self) {

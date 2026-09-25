@@ -1860,7 +1860,7 @@ source = { git = "https://codeberg.org/foxy/tree-sitter-prolog", subpath = "gram
 [[language]]
 name = "tsq"
 scope = "source.tsq"
-file-types = [{ glob = "queries/*.scm" }, { glob = "injections.scm" },  { glob = "highlights.scm" },  { glob = "indents.scm" },  { glob = "textobjects.scm" },  { glob = "locals.scm" },  { glob = "tags.scm" }]
+file-types = [{ glob = "queries/*.scm" }, { glob = "injections.scm" },  { glob = "highlights.scm" },  { glob = "indents.scm" },  { glob = "textobjects.scm" },  { glob = "locals.scm" },  { glob = "tags.scm" },  { glob = "rainbows.scm" },  { glob = "breadcrumbs.scm" },  { glob = "folds.scm" }]
 comment-token = ";"
 injection-regex = "tsq"
 language-servers = ["ts_query_ls"]

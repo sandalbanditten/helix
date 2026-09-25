@@ -160,9 +160,12 @@ pub fn line_numbers<'doc>(
     let linenr = theme.get("ui.linenr");
     let linenr_select = theme.get("ui.linenr.selected");
 
-    let current_line = doc
-        .text()
-        .char_to_line(view.render_selection(doc).primary().cursor(text));
+    // relative numbers count the lines that closed folds join into a row as one, like `j` does
+    let folds = doc.folds(view.id);
+    let current_row = folds.row(
+        text,
+        text.char_to_line(view.render_selection(doc).primary().cursor(text)),
+    );
 
     let line_number = editor.config().line_number;
     let mode = editor.mode;
@@ -175,13 +178,14 @@ pub fn line_numbers<'doc>(
             } else {
                 use crate::{document::Mode, editor::LineNumber};
 
+                let row = folds.row(text, line);
                 let relative = line_number == LineNumber::Relative
                     && mode != Mode::Insert
                     && is_focused
-                    && current_line != line;
+                    && current_row != row;
 
                 let display_num = if relative {
-                    current_line.abs_diff(line)
+                    current_row.abs_diff(row)
                 } else {
                     line + 1
                 };

@@ -9,6 +9,7 @@ use helix_core::command_line::Token;
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
+use helix_core::fold::{Fold, Folds};
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
@@ -1395,12 +1396,81 @@ impl Document {
     /// Select text within the [`Document`].
     pub fn set_selection(&mut self, view_id: ViewId, selection: Selection) {
         // TODO: use a transaction?
-        self.selections
-            .insert(view_id, selection.ensure_invariants(self.text().slice(..)));
+        let selection = selection.ensure_invariants(self.text().slice(..));
+        self.reveal(view_id, &selection);
+        self.selections.insert(view_id, selection);
         helix_event::dispatch(SelectionDidChange {
             doc: self,
             view: view_id,
         })
+    }
+
+    /// Opens the folds of the view that `selection` would otherwise partly hide.
+    fn reveal(&mut self, view_id: ViewId, selection: &Selection) {
+        if let Some(view_data) = self.view_data.get_mut(&view_id) {
+            view_data.folds.reveal(self.text.slice(..), selection);
+        }
+    }
+
+    /// The folds of the document in the view.
+    pub fn folds(&self, view_id: ViewId) -> &Folds {
+        &self.view_data(view_id).folds
+    }
+
+    /// The folds hidden in the view, if the document is shown in it.
+    pub(crate) fn outermost_folds(&self, view_id: ViewId) -> &[Fold] {
+        self.view_data
+            .get(&view_id)
+            .map_or(&[], |view_data| view_data.folds.outermost())
+    }
+
+    /// Changes whenever the folds of the view do.
+    pub(crate) fn fold_revision(&self, view_id: ViewId) -> usize {
+        self.view_data
+            .get(&view_id)
+            .map_or(0, |view_data| view_data.folds.revision())
+    }
+
+    /// Replaces the folds of the view, e.g. with those of the view it was split from.
+    pub fn set_folds(&mut self, view_id: ViewId, folds: Folds) {
+        let view_data = self.view_data_mut(view_id);
+        view_data.folds = folds;
+        view_data.folds_initialized = true;
+        self.set_selection(view_id, self.selection(view_id).clone());
+    }
+
+    /// Toggles a fold at every selection of the view, see [`Folds::toggle`].
+    pub fn toggle_folds(&mut self, view_id: ViewId, recursive: bool) {
+        let Some(syntax) = &self.syntax else {
+            return;
+        };
+        let loader = self.syn_loader.load();
+        let selection = self.selections[&view_id].clone();
+        let view_data = self.view_data.entry(view_id).or_default();
+        let selection =
+            view_data
+                .folds
+                .toggle(self.text.slice(..), syntax, &loader, selection, recursive);
+        self.set_selection(view_id, selection);
+    }
+
+    /// Folds every foldable region in the view.
+    pub fn fold_all(&mut self, view_id: ViewId) {
+        let Some(syntax) = &self.syntax else {
+            return;
+        };
+        let loader = self.syn_loader.load();
+        let selection = self.selections[&view_id].clone();
+        let view_data = self.view_data.entry(view_id).or_default();
+        let selection = view_data
+            .folds
+            .close_all(self.text.slice(..), syntax, &loader, selection);
+        self.set_selection(view_id, selection);
+    }
+
+    /// Opens every fold in the view.
+    pub fn unfold_all(&mut self, view_id: ViewId) {
+        self.view_data_mut(view_id).folds.clear();
     }
 
     /// Find the origin selection of the text in a document, i.e. where
@@ -1428,7 +1498,12 @@ impl Document {
             self.reset_selection(view_id);
         }
 
-        self.view_data_mut(view_id);
+        let view_data = self.view_data_mut(view_id);
+        if !std::mem::replace(&mut view_data.folds_initialized, true)
+            && self.config.load().folding.start_folded
+        {
+            self.fold_all(view_id);
+        }
     }
 
     /// Mark document as recent used for MRU sorting
@@ -1465,14 +1540,7 @@ impl Document {
 
         if changes.is_empty() {
             if let Some(selection) = transaction.selection() {
-                self.selections.insert(
-                    view_id,
-                    selection.clone().ensure_invariants(self.text.slice(..)),
-                );
-                helix_event::dispatch(SelectionDidChange {
-                    doc: self,
-                    view: view_id,
-                });
+                self.set_selection(view_id, selection.clone());
             }
             return true;
         }
@@ -1489,10 +1557,14 @@ impl Document {
                 .ensure_invariants(self.text.slice(..));
         }
 
-        for view_data in self.view_data.values_mut() {
+        for (view_id, view_data) in &mut self.view_data {
             view_data.view_position.anchor = transaction
                 .changes()
                 .map_pos(view_data.view_position.anchor, Assoc::Before);
+            view_data.folds.map(self.text.slice(..), changes);
+            if let Some(selection) = self.selections.get(view_id) {
+                view_data.folds.reveal(self.text.slice(..), selection);
+            }
         }
 
         // generate revert to savepoint
@@ -1629,14 +1701,7 @@ impl Document {
 
         // if specified, the current selection should instead be replaced by transaction.selection
         if let Some(selection) = transaction.selection() {
-            self.selections.insert(
-                view_id,
-                selection.clone().ensure_invariants(self.text.slice(..)),
-            );
-            helix_event::dispatch(SelectionDidChange {
-                doc: self,
-                view: view_id,
-            });
+            self.set_selection(view_id, selection.clone());
         }
 
         true
@@ -2496,6 +2561,9 @@ impl Document {
 #[derive(Debug, Default)]
 pub struct ViewData {
     view_position: ViewPosition,
+    folds: Folds,
+    /// Whether the view's folds have been set up, e.g. by folding everything.
+    folds_initialized: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2534,6 +2602,50 @@ mod test {
     use arc_swap::ArcSwap;
 
     use super::*;
+
+    fn folded_doc() -> (Document, ViewId) {
+        let text = Rope::from("fn f() {\n    1\n}\nx\n");
+        let mut doc = Document::from(
+            text,
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view = ViewId::default();
+        doc.ensure_view_init(view);
+        let mut folds = Folds::default();
+        let region = Fold::from_region(doc.text().slice(..), 0..16, Some(15));
+        folds.close(region);
+        doc.set_folds(view, folds);
+        (doc, view)
+    }
+
+    #[test]
+    fn folds_follow_edits() {
+        let (mut doc, view) = folded_doc();
+        let transaction = Transaction::insert(doc.text(), &Selection::point(0), "pub ".into());
+        doc.apply(&transaction, view);
+        let fold = doc.folds(view).outermost()[0];
+        assert_eq!((fold.start, fold.end), (12, 19));
+
+        // an edit whose selection lands inside the fold opens it
+        let transaction = Transaction::insert(doc.text(), &Selection::point(17), "2".into())
+            .with_selection(Selection::point(18));
+        doc.apply(&transaction, view);
+        assert!(doc.folds(view).is_empty());
+    }
+
+    #[test]
+    fn selections_reveal_folds() {
+        let (mut doc, view) = folded_doc();
+        // the fold cell and a range covering the fold keep it closed
+        doc.set_selection(view, Selection::point(8));
+        doc.set_selection(view, Selection::single(0, 17));
+        assert!(!doc.folds(view).is_empty());
+        // a cursor inside the fold opens it
+        doc.set_selection(view, Selection::point(11));
+        assert!(doc.folds(view).is_empty());
+    }
 
     #[test]
     fn changeset_to_changes_ignore_line_endings() {

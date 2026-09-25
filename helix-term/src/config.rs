@@ -275,6 +275,35 @@ mod tests {
     }
 
     #[test]
+    fn parsing_folding_config() {
+        use helix_view::editor::FoldingConfig;
+
+        let folding = |config: &str| Config::load_test(config).editor.folding;
+
+        assert_eq!(folding(""), FoldingConfig::default());
+        assert_eq!(
+            folding("[editor.folding]\nstart-folded = true\nplaceholder = \"⋯\""),
+            FoldingConfig {
+                start_folded: true,
+                placeholder: '⋯',
+            }
+        );
+
+        for invalid in [
+            "[editor.folding]\nstart-fold = true",
+            "[editor.folding]\nplaceholder = \"...\"",
+            "[editor.folding]\nplaceholder = \"\\n\"",
+            "[editor.folding]\nplaceholder = \"\\t\"",
+        ] {
+            let invalid = invalid.to_owned();
+            assert!(
+                Config::load(Ok(&invalid), Err(ConfigLoadError::default())).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn set_smooth_scroll_shorthand() {
         // `:set smooth-scroll true` replaces the serialized table with a boolean
         let mut config = serde_json::json!(helix_view::editor::Config::default());

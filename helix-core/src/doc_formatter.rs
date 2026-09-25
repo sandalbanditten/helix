@@ -24,7 +24,7 @@ use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 use crate::graphemes::{Grapheme, GraphemeStr};
 use crate::syntax::Highlight;
 use crate::text_annotations::TextAnnotations;
-use crate::{Position, RopeSlice};
+use crate::{fold, Position, RopeSlice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum GraphemeSource {
@@ -37,12 +37,21 @@ pub enum GraphemeSource {
     VirtualText {
         highlight: Option<Highlight>,
     },
+    /// A closed fold: document text shown as a placeholder, see [`fold`].
+    Fold {
+        codepoints: u32,
+    },
 }
 
 impl GraphemeSource {
     /// Returns whether this grapheme is virtual inline text
     pub fn is_virtual(self) -> bool {
         matches!(self, GraphemeSource::VirtualText { .. })
+    }
+
+    /// Returns whether this grapheme is the placeholder of a closed fold
+    pub fn is_fold(self) -> bool {
+        matches!(self, GraphemeSource::Fold { .. })
     }
 
     pub fn is_eof(self) -> bool {
@@ -52,7 +61,9 @@ impl GraphemeSource {
 
     pub fn doc_chars(self) -> usize {
         match self {
-            GraphemeSource::Document { codepoints } => codepoints as usize,
+            GraphemeSource::Document { codepoints } | GraphemeSource::Fold { codepoints } => {
+                codepoints as usize
+            }
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
@@ -171,6 +182,7 @@ impl Default for TextFormat {
 
 #[derive(Debug)]
 pub struct DocumentFormatter<'t> {
+    text: RopeSlice<'t>,
     text_fmt: &'t TextFormat,
     annotations: &'t TextAnnotations<'t>,
 
@@ -202,7 +214,8 @@ pub struct DocumentFormatter<'t> {
 impl<'t> DocumentFormatter<'t> {
     /// Creates a new formatter at the last block before `char_idx`.
     /// A block is a chunk which always ends with a linebreak.
-    /// This is usually just a normal line break.
+    /// This is usually just a normal line break, or the row of a closed fold that
+    /// spans several lines.
     /// However very long lines are always wrapped at constant intervals that can be cheaply calculated
     /// to avoid pathological behaviour.
     pub fn new_at_prev_checkpoint(
@@ -212,11 +225,13 @@ impl<'t> DocumentFormatter<'t> {
         char_idx: usize,
     ) -> Self {
         // TODO divide long lines into blocks to avoid bad performance for long lines
-        let block_line_idx = text.char_to_line(char_idx.min(text.len_chars()));
+        let line_idx = text.char_to_line(char_idx.min(text.len_chars()));
+        let block_line_idx = fold::row_start_line(annotations.folds(), text, line_idx);
         let block_char_idx = text.line_to_char(block_line_idx);
         annotations.reset_pos(block_char_idx);
 
         DocumentFormatter {
+            text,
             text_fmt,
             annotations,
             visual_pos: Position { row: 0, col: 0 },
@@ -262,6 +277,15 @@ impl<'t> DocumentFormatter<'t> {
         let (grapheme, source) =
             if let Some((grapheme, highlight)) = self.next_inline_annotation_grapheme(char_pos) {
                 (grapheme.into(), GraphemeSource::VirtualText { highlight })
+            } else if let Some(fold) = self.annotations.fold_at(char_pos, self.text.len_chars()) {
+                self.graphemes = self.text.slice(fold.end..).graphemes();
+                self.annotations.skip_folded(fold.end);
+                let codepoints = u32::try_from(fold.end - fold.start)
+                    .expect("folds come from syntax trees, which are smaller than 4 GiB");
+                (
+                    self.annotations.fold_placeholder().into(),
+                    GraphemeSource::Fold { codepoints },
+                )
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
 
@@ -457,6 +481,10 @@ impl<'t> Iterator for DocumentFormatter<'t> {
         };
 
         self.char_pos += grapheme.doc_chars();
+        if grapheme.source.is_fold() {
+            // the row continues on the fold's last line
+            self.line_pos = self.text.char_to_line(self.char_pos);
+        }
         if !grapheme.is_virtual() {
             self.annotations.process_virtual_text_anchors(&grapheme);
         }

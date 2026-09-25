@@ -36,3 +36,4 @@
   - [Adding tags queries](./guides/tags.md)
   - [Adding rainbow bracket queries](./guides/rainbow_bracket_queries.md)
   - [Adding breadcrumb queries](./guides/breadcrumbs.md)
+  - [Adding fold queries](./guides/folding.md)

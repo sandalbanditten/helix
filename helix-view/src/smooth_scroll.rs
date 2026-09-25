@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::{
     editor::SmoothScrollConfig, graphics::Rect, view::ViewPosition, Document, DocumentId, Editor,
-    View,
+    View, ViewId,
 };
 
 /// Minimum time between two frames of an animation, about 120 frames per second.
@@ -218,6 +218,8 @@ struct FrameKey {
     version: i32,
     area: Rect,
     soft_wrap: bool,
+    /// Opening or closing folds changes the layout.
+    folds: usize,
 }
 
 impl FrameKey {
@@ -228,6 +230,7 @@ impl FrameKey {
             version: doc.version(),
             area,
             soft_wrap: doc.text_format(area.width, None).soft_wrap,
+            folds: doc.fold_revision(view.id),
         }
     }
 }
@@ -285,10 +288,11 @@ struct Animation {
 enum Path {
     /// Walk this many visual rows, upwards if negative.
     Rows(isize),
-    /// Too far to lay out every row: cover `lines` document lines from `start_line` (upwards if
-    /// negative), then walk `rows` visual rows from `approach` to the target.
+    /// Too far to lay out every row: cover `lines` document lines from the row `start_row`
+    /// (upwards if negative), counting the lines of a folded row as one, then walk `rows` visual
+    /// rows from `approach` to the target.
     Far {
-        start_line: usize,
+        start_row: usize,
         lines: isize,
         approach: ViewPosition,
         rows: isize,
@@ -312,7 +316,13 @@ struct SelectionAnimation {
 impl SmoothScroll {
     /// Records that `View::scroll` moves the selections by `motion`, `drawn` being the selection
     /// on screen.
-    pub(crate) fn hint(&mut self, drawn: Selection, motion: SelectionMotion, doc: &Document) {
+    pub(crate) fn hint(
+        &mut self,
+        drawn: Selection,
+        motion: SelectionMotion,
+        doc: &Document,
+        view: ViewId,
+    ) {
         let hint = match self.hint.take() {
             // several scrolls since the last frame: the screen still shows the first one's start
             Some(pending) => ScrollHint {
@@ -321,7 +331,7 @@ impl SmoothScroll {
             },
             None => {
                 let remaining = self
-                    .current(doc)
+                    .current(doc, view)
                     .and_then(|animation| animation.selection.as_ref())
                     .map(SelectionAnimation::remaining);
                 ScrollHint {
@@ -377,24 +387,27 @@ impl SmoothScroll {
         next_frame
     }
 
-    /// The animation drawn for `doc`, unless `doc` changed since the last frame.
-    fn current(&self, doc: &Document) -> Option<&Animation> {
+    /// The animation drawn for `doc` in the view, unless `doc` or its folds changed since the
+    /// last frame.
+    fn current(&self, doc: &Document, view: ViewId) -> Option<&Animation> {
         self.animation.as_ref().filter(|animation| {
-            animation.key.doc == doc.id() && animation.key.version == doc.version()
+            animation.key.doc == doc.id()
+                && animation.key.version == doc.version()
+                && animation.key.folds == doc.fold_revision(view)
         })
     }
 
-    pub(crate) fn offset(&self, doc: &Document) -> Option<ViewPosition> {
-        self.current(doc).map(|animation| animation.offset)
+    pub(crate) fn offset(&self, doc: &Document, view: ViewId) -> Option<ViewPosition> {
+        self.current(doc, view).map(|animation| animation.offset)
     }
 
-    pub(crate) fn selection(&self, doc: &Document) -> Option<&Selection> {
-        let selection = self.current(doc)?.selection.as_ref()?;
+    pub(crate) fn selection(&self, doc: &Document, view: ViewId) -> Option<&Selection> {
+        let selection = self.current(doc, view)?.selection.as_ref()?;
         Some(&selection.drawn)
     }
 
-    pub(crate) fn is_animating(&self, doc: &Document) -> bool {
-        self.current(doc).is_some()
+    pub(crate) fn is_animating(&self, doc: &Document, view: ViewId) -> bool {
+        self.current(doc, view).is_some()
     }
 }
 
@@ -535,10 +548,12 @@ impl Path {
             &text_fmt,
             &annotations,
         );
-        let start_line = text.char_to_line(from.anchor);
+        // closed folds join lines into one row, so count rows rather than lines
+        let folds = doc.folds(view.id);
+        let start_row = folds.row(text, text.char_to_line(from.anchor));
         Self::Far {
-            start_line,
-            lines: text.char_to_line(anchor) as isize - start_line as isize,
+            start_row,
+            lines: folds.row(text, text.char_to_line(anchor)) as isize - start_row as isize,
             approach: ViewPosition {
                 anchor,
                 vertical_offset,
@@ -589,7 +604,7 @@ impl Path {
                 walk_rows(offset, rows.signum() * steps_between(from_step, to_step))
             }
             Self::Far {
-                start_line,
+                start_row,
                 lines,
                 approach,
                 rows,
@@ -597,9 +612,10 @@ impl Path {
                 let bulk = lines.unsigned_abs();
                 if to_step <= bulk {
                     // cover the bulk of the distance in whole document lines, which is cheap
-                    let line = start_line as isize + lines.signum() * to_step as isize;
+                    let row = start_row as isize + lines.signum() * to_step as isize;
+                    let line = doc.folds(view.id).row_start(text, row as usize);
                     let line_start = ViewPosition {
-                        anchor: text.line_to_char(line as usize),
+                        anchor: text.line_to_char(line),
                         vertical_offset: 0,
                         ..offset
                     };
@@ -728,7 +744,7 @@ mod tests {
     use std::sync::Arc;
 
     use arc_swap::ArcSwap;
-    use helix_core::{syntax, Rope, Transaction};
+    use helix_core::{fold::Fold, syntax, Rope, Transaction};
 
     use super::*;
     use crate::editor::{Config, GutterConfig};
@@ -1059,5 +1075,49 @@ mod tests {
         doc.apply(&transaction, view.id);
         assert_eq!(view.render_offset(&doc), doc.view_offset(view.id));
         assert!(!view.hides_cursor(&doc));
+    }
+
+    /// Folds the lines after `header` up to and including the start of `last`.
+    fn fold_lines(view: &View, doc: &mut Document, header: usize, last: usize) {
+        let text = doc.text().slice(..);
+        let region = text.line_to_char(header)..text.line_to_char(last) + 1;
+        let mut folds = doc.folds(view.id).clone();
+        folds.close(Fold::from_region(text, region, None));
+        doc.set_folds(view.id, folds);
+    }
+
+    #[test]
+    fn view_snaps_when_folds_change() {
+        let (mut view, mut doc) = setup(500, smooth_scroll(true, false));
+        let now = Instant::now();
+        view.update_smooth_scroll(&doc, now);
+        scroll_to_line(&view, &mut doc, 300);
+        view.update_smooth_scroll(&doc, now);
+        assert_ne!(view.render_offset(&doc), doc.view_offset(view.id));
+
+        // a fold changes the layout under the animation, so its frames are stale
+        fold_lines(&view, &mut doc, 10, 20);
+        assert_eq!(view.render_offset(&doc), doc.view_offset(view.id));
+        assert_eq!(view.update_smooth_scroll(&doc, now), None);
+        assert_eq!(top_line(&view, &doc), 300);
+    }
+
+    #[test]
+    fn view_glides_across_folds_row_by_row() {
+        let (mut view, mut doc) = setup(2000, smooth_scroll(true, false));
+        fold_lines(&view, &mut doc, 0, 1900);
+        let now = Instant::now();
+        view.update_smooth_scroll(&doc, now);
+
+        scroll_to_line(&view, &mut doc, 1960);
+        let rows = frames(&mut view, &doc, now, |view, doc| {
+            doc.folds(view.id)
+                .row(doc.text().slice(..), top_line(view, doc))
+        });
+        // no frame lands inside the fold and every frame moves, rather than stalling on the
+        // lines the fold hides
+        assert!(rows.windows(2).all(|rows| rows[0] < rows[1]), "{rows:?}");
+        assert_eq!(rows.last(), Some(&60));
+        assert_eq!(top_line(&view, &doc), 1960);
     }
 }

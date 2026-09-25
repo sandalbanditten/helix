@@ -6,7 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
-        document::{render_document, LinePos, TextRenderer},
+        document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         Completion, ProgressSpinners,
@@ -15,6 +15,7 @@ use crate::{
 
 use helix_core::{
     diagnostic::NumberOrString,
+    fold::{self, Fold},
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
     movement::Direction,
     syntax::{self, OverlayHighlights},
@@ -117,8 +118,9 @@ impl EditorView {
             decorations.add_decoration(line_decoration);
         }
 
-        let syntax_highlighter =
-            Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, &loader);
+        let folds = text_annotations.folds();
+        let syntax_highlighting =
+            Self::doc_syntax_highlighting(doc, folds, view_offset.anchor, inner.height, &loader);
         let mut overlays = Vec::new();
 
         overlays.push(Self::overlay_syntax_highlights(
@@ -133,9 +135,14 @@ impl EditorView {
             .and_then(|config| config.rainbow_brackets)
             .unwrap_or(config.rainbow_brackets)
         {
-            if let Some(overlay) =
-                Self::doc_rainbow_highlights(doc, view_offset.anchor, inner.height, theme, &loader)
-            {
+            if let Some(overlay) = Self::doc_rainbow_highlights(
+                doc,
+                folds,
+                view_offset.anchor,
+                inner.height,
+                theme,
+                &loader,
+            ) {
                 overlays.push(overlay);
             }
         }
@@ -213,7 +220,7 @@ impl EditorView {
             doc,
             view_offset,
             &text_annotations,
-            syntax_highlighter,
+            syntax_highlighting,
             overlays,
             theme,
             decorations,
@@ -278,38 +285,50 @@ impl EditorView {
             .for_each(|area| surface.set_style(area, ruler_theme))
     }
 
+    /// The bytes of the lines shown on `height` rows starting at `row`, where closed `folds`
+    /// can put several lines on one row.
     fn viewport_byte_range(
         text: helix_core::RopeSlice,
+        folds: &[Fold],
         row: usize,
         height: u16,
     ) -> std::ops::Range<usize> {
         // Calculate viewport byte ranges:
         // Saturating subs to make it inclusive zero indexing.
         let last_line = text.len_lines().saturating_sub(1);
-        let last_visible_line = (row + height as usize).saturating_sub(1).min(last_line);
-        let start = text.line_to_byte(row.min(last_line));
+        let row = row.min(last_line);
+        let last_visible_line = if folds.is_empty() {
+            (row + height as usize).saturating_sub(1).min(last_line)
+        } else {
+            let last_row = fold::next_row(folds, text, row, (height as usize).saturating_sub(1));
+            fold::row_end_line(folds, text, last_row)
+        };
+        let start = text.line_to_byte(row);
         let end = text.line_to_byte(last_visible_line + 1);
 
         start..end
     }
 
-    /// Get the syntax highlighter for a document in a view represented by the first line
+    /// Get the syntax highlighting for a document in a view represented by the first line
     /// and column (`offset`) and the last line. This is done instead of using a view
     /// directly to enable rendering syntax highlighted docs anywhere (eg. picker preview)
-    pub fn doc_syntax_highlighter<'editor>(
+    pub fn doc_syntax_highlighting<'editor>(
         doc: &'editor Document,
+        folds: &[Fold],
         anchor: usize,
         height: u16,
         loader: &'editor syntax::Loader,
-    ) -> Option<syntax::Highlighter<'editor>> {
+    ) -> Option<SyntaxHighlighting<'editor>> {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
-        let range = Self::viewport_byte_range(text, row, height);
-        let range = range.start as u32..range.end as u32;
+        let range = Self::viewport_byte_range(text, folds, row, height);
 
-        let highlighter = syntax.highlighter(text, loader, range);
-        Some(highlighter)
+        Some(SyntaxHighlighting {
+            syntax,
+            loader,
+            range: range.start as u32..range.end as u32,
+        })
     }
 
     pub fn overlay_syntax_highlights(
@@ -321,7 +340,7 @@ impl EditorView {
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
 
-        let mut range = Self::viewport_byte_range(text, row, height);
+        let mut range = Self::viewport_byte_range(text, text_annotations.folds(), row, height);
         range = text.byte_to_char(range.start)..text.byte_to_char(range.end);
 
         text_annotations.collect_overlay_highlights(range)
@@ -329,6 +348,7 @@ impl EditorView {
 
     pub fn doc_rainbow_highlights(
         doc: &Document,
+        folds: &[Fold],
         anchor: usize,
         height: u16,
         theme: &Theme,
@@ -337,15 +357,15 @@ impl EditorView {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
-        let visible_range = Self::viewport_byte_range(text, row, height);
-        let start = syntax::child_for_byte_range(
-            &syntax.tree().root_node(),
-            visible_range.start as u32..visible_range.end as u32,
-        )
-        .map_or(visible_range.start as u32, |node| node.start_byte());
-        let range = start..visible_range.end as u32;
+        let visible_range = Self::viewport_byte_range(text, folds, row, height);
+        let visible_range =
+            text.byte_to_char(visible_range.start)..text.byte_to_char(visible_range.end);
+        // brackets hidden by folds are not colored
+        let ranges = fold::visible_ranges(folds, visible_range).map(|range| {
+            text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32
+        });
 
-        Some(syntax.rainbow_highlights(text, theme.rainbow_length(), loader, range))
+        Some(syntax.rainbow_highlights(text, theme.rainbow_length(), loader, ranges))
     }
 
     /// Get highlight spans for document diagnostics
@@ -724,12 +744,14 @@ impl EditorView {
         decoration_manager: &mut DecorationManager<'d>,
     ) {
         let text = doc.text().slice(..);
+        let folds = doc.folds(view.id).outermost();
         let cursors: Rc<[_]> = if view.hides_cursor(doc) {
             Rc::new([])
         } else {
             view.render_selection(doc)
                 .iter()
-                .map(|range| range.cursor_line(text))
+                // a row of several lines is identified by its first line
+                .map(|range| fold::row_start_line(folds, text, range.cursor_line(text)))
                 .collect()
         };
 
@@ -849,8 +871,11 @@ impl EditorView {
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
         let selection = view.render_selection(doc);
+        // a row of several lines, joined by closed folds, is identified by its first line
+        let folds = doc.folds(view.id).outermost();
+        let cursor_row = |range: &Range| fold::row_start_line(folds, text, range.cursor_line(text));
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
-        let primary_line = selection.primary().cursor_line(text);
+        let primary_line = cursor_row(&selection.primary());
 
         // The secondary_lines do contain the primary_line, it doesn't matter
         // as the else-if clause in the loop later won't test for the
@@ -858,10 +883,7 @@ impl EditorView {
         // It's used inside a loop so the collect isn't needless:
         // https://github.com/rust-lang/rust-clippy/issues/6164
         #[allow(clippy::needless_collect)]
-        let secondary_lines: Vec<_> = selection
-            .iter()
-            .map(|range| range.cursor_line(text))
-            .collect();
+        let secondary_lines: Vec<_> = selection.iter().map(cursor_row).collect();
 
         let primary_style = theme.get("ui.cursorline.primary");
         let secondary_style = theme.get("ui.cursorline.secondary");
