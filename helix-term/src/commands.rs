@@ -558,7 +558,7 @@ impl MappableCommand {
         align_view_center, "Align view center",
         align_view_bottom, "Align view bottom",
         toggle_fold, "Toggle fold at selections",
-        toggle_fold_recursive, "Toggle fold at selections with the folds inside it",
+        toggle_fold_recursive, "Toggle fold at selections recursively",
         fold_all, "Fold all",
         unfold_all, "Unfold all",
         scroll_up, "Scroll view up",
