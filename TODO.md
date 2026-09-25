@@ -1,12 +1,15 @@
 # TODO
 
 Remember to be idiomatic, focus on clean code and architecture.
+Follow design principles like loose coupling and high cohesion.
 Read the files in `docs/`, especially `architecture.md` and `vision.md` and do things the rust and helix way.
 Take your time and ask about specification details rather than guessing.
+Look online for examples of similar features and implementations.
+Ask when in doubt about specification or implementation, don't guess.
 Performance is very important, especially for large files, directories, and projects.
 
-## Simple Code Folding Plugin
-We want a simple code folding plugin with a keybind to fold/unfold currently selected function, method, class, block, module, etc.
+## Simple Code Folding Feature
+We want a simple code folding feature with a keybind to fold/unfold currently selected function, method, class, block, module, etc.
 We want two keybinds to fold all and unfold all.
 We want a config option for starting with everything folded.
 It should be performant, consider the specialized data structures in use by the helix editor.
