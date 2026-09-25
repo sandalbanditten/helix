@@ -1,0 +1,21 @@
+[
+  (function_definition)
+  (if_statement)
+  (elif_clause)
+  (else_clause)
+  (case_statement)
+  (case_item)
+  (for_statement)
+  (while_statement)
+  (c_style_for_statement)
+  (compound_statement)
+  (subshell)
+  (command_substitution)
+  (heredoc_redirect)
+  (array)
+  (pipeline)
+  (command)
+  (string)
+  (raw_string)
+  (comment)+
+] @fold

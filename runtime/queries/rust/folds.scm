@@ -1,0 +1,27 @@
+[
+  (mod_item)
+  (foreign_mod_item)
+  (function_item)
+  (struct_item)
+  (trait_item)
+  (enum_item)
+  (impl_item)
+  (type_item)
+  (union_item)
+  (const_item)
+  (static_item)
+  (let_declaration)
+  (match_expression)
+  (match_arm)
+  (arguments)
+  (array_expression)
+  (struct_expression)
+  (tuple_expression)
+  (macro_definition)
+  (macro_invocation)
+  (attribute_item)
+  (block)
+  (block_comment)
+  (use_declaration)+
+  (line_comment)+
+] @fold

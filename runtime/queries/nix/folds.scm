@@ -23,8 +23,13 @@
 
 ; Additions over the nvim-treesitter reference set ---------------------
 
-; Multi-line block / doc comments.
+; A function's argument set, which otherwise only folds together with the
+; whole function body.
+(formals) @fold
+
+; Multi-line block / doc comments and runs of line comments.
 [
   (block_comment)
   (doc_comment)
+  (line_comment)+
 ] @fold
