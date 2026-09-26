@@ -10,44 +10,51 @@ Performance is very important, especially for large files, directories, and proj
 
 ## File Tree
 We want a filetree.
-It should be toggleable, configurable in `config.toml`, and be left (default) or right dockable.
+It should be toggleable, configurable in `config.toml` (`[editor.file-tree]`), and be left (default) or right dockable.
 It should render and work much like `grove.hx` a steel plugin with (modified by me) source at `~/.local/share/steel/cogs/grove`.
 It should be idiomatic rust and helix-like, but as performant as possible.
 It should be able to use `LS_COLORS` like grove, and have the same feature-set.
 Like `grove` it should render the tree much like `eza -aoTg`.
-The theming should be helix-like, e.g. the scroll bar and pane separator.
-Unlike `grove.hx`, the viewport should end _at_ the statusline, rather that pushing the statusline to the right, e.g. the statusline should continue to span the entire width of helix' viewport.
+The theming should be helix-like: the pane separator is a `│` rail in `ui.window` (like split separators) that carries the scrollbar thumb in `ui.menu.scroll` (like popups).
+The panel starts at the top row (the bufferline only spans the editor columns) and ends _above_ the statusline, so the bottom statusline and the command line continue to span the entire width of helix' viewport.
 
 Consider these wanted features when making design and implementation decisions:
 
 It should preserve the following features from `grove`:
 - Opening `helix` on multiple buffers should have the relevant directories expanded on start.
 - A fit-width `=` keybinding (to fit the longest file exactly in the view), like my local changed `grove`
-  - On startup the viewport width should always be fitted
+  - On startup (first time the tree is shown) the viewport width should always be fitted
 - `+`/`-` for growing/shrinking the view.
 - The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
 - Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
+- The rest of grove: git marks, unsaved `+` marks, icons, guides, pinned ancestor rows, splits (`C-s`/`C-v`), delete (`d`), mouse support.
 
 Expanding on `grove` it should have the following features:
 - Trying to go up from the top item should cycle you to the bottom and vice-versa.
 - The view should be scrollable with <C-d>, <C-u>, and `zz`/`zb`/`zt` like for example LSP-popups.
 - Add a viewport only `?` keybind to list possible keybinds in the viewport
-- Add a `o` keybind to run `xdg-open` on a file. Switch `enter` and `o` so `enter` is `xdg-open` and `o` will open in a buffer.
+- `enter` runs `xdg-open` on the entry (files and directories), `o` opens a file in a buffer (and toggles a directory). `space` is not bound in the tree.
 - Add an element showing which of the files currently are open in different buffers, with a differently colored `*` to the one showing the currently _focused_ buffer.
-- The keybinds to toggle and focus it should be configurable.
+- The keybinds to toggle and focus it should be configurable: commands `focus_file_tree` (default `space e`) and `toggle_file_tree` (default `space E`).
+  - Toggle switches between "always shown" and "shown only while focused". Focusing a hidden tree shows it until focus leaves it.
+- While the tree is focused, a key it does not bind returns focus to the editor and runs there (the toggle/focus commands still work from the tree).
 - Add a config option for when to start with the file tree open:
-  - Never (`"never"`)
+  - Never (`"never"`, default)
   - Always (`"always"`)
-  - On opening helix on multiple buffers (`"multiple"`)
-- For renaming files we want two keybinds:
+  - On opening helix on multiple buffers (`"multiple"`: two or more files on the command line)
+  - `hx <dir>` shows the tree (unfocused) and still opens the file picker.
+- For renaming files we want three keybinds:
   - `r` to change just the name and extension of the file, e.g. `r` on `~/Code/test/src/test.rs` should expose only `test.rs` for editing and change only that. The view for this should be inline in the viewport.
-  - `R` to change the path after the workspace, e.g. `R` on `~/Code/test/src/test.rs` should expose `src/test.rs`.
-  - `<C-r>` to change the _full_ path , e.g. `<C-r>` on `~/Code/test/src/test.rs` should expose `/home/<USER>/Code/test/src/test.rs`.
+  - `R` to change the path after the workspace, e.g. `R` on `~/Code/test/src/test.rs` should expose `src/test.rs`, in the bottom command-line prompt.
+  - `<C-r>` to change the _full_ path , e.g. `<C-r>` on `~/Code/test/src/test.rs` should expose `/home/<USER>/Code/test/src/test.rs`, in the bottom command-line prompt. Moves across filesystems fall back to copy+delete.
+  - Open buffers follow the rename.
+- `a` creates a file and `A` a directory, inline: the input row appears inside the target directory (the parent of the file under the cursor, or the directory under the cursor, expanded). For `a` it sits after that directory's subdirectories and before its files; for `A` it sits above the existing subdirectories. With alphabetical sorting it is the first child.
 - At the top should be a fuzzy search, working much like helix' existing file picker.
   - No file preview
   - Reuse as much of the code for fuzzy searching and the like as possible.
-  - It should be opened with `/` for search and `?` for rev-search.
-  - A config option should be exposed
+  - `/` opens the search prompt at the top of the tree. As you type, the cursor jumps to the next match below it in tree order (wrapping), expanding directories to reveal it. `n`/`N` go to the next/previous match. The candidates are all workspace files (the file picker's walker).
+  - No reverse search (`?` is the help key) and no search config options for now.
+- External changes are picked up by watching the loaded directories and the repository's `.git` directory (`notify`).
 
 Note that all these keybinds, except for the two to toggle and focus the file tree should only work when the file tree is focused
 
