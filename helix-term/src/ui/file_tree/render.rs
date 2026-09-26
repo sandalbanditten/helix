@@ -38,6 +38,8 @@ pub fn natural_width(row: &Row, root: bool, icons: bool) -> usize {
 pub struct Styles {
     base: Style,
     selected: Style,
+    /// The color of the cursor's `>` mark.
+    mark: Style,
     pinned: Style,
     active: Style,
     guide: Style,
@@ -74,12 +76,15 @@ impl Styles {
             "ui.file-tree.guide",
             &["ui.virtual.indent-guide", "ui.virtual.whitespace"],
         );
+        // Next to its `>` mark the cursor row is bold, keeping the colors of its entry.
+        let selected = theme
+            .try_get_exact("ui.file-tree.selected")
+            .unwrap_or_else(|| Style::default().add_modifier(Modifier::BOLD));
         Self {
             base,
-            // Next to its `>` mark the cursor row is bold, keeping the colors of its entry.
-            selected: theme
-                .try_get_exact("ui.file-tree.selected")
-                .unwrap_or_else(|| Style::default().add_modifier(Modifier::BOLD)),
+            selected,
+            // The same on every row, also on the focused buffer's.
+            mark: Style::default().fg(base.patch(selected).fg.unwrap_or(Color::Reset)),
             // Pinned rows look like the others unless the theme says otherwise.
             pinned: theme
                 .try_get_exact("ui.file-tree.pinned")
@@ -172,8 +177,8 @@ pub struct Scene<'a> {
     pub expanders: Option<[&'a str; 2]>,
     pub side: FileTreeSide,
     pub edit: Option<EditRow<'a>>,
-    /// A row and the characters of its label that match the search, in order.
-    pub highlight: Option<(usize, &'a [usize])>,
+    /// The rows matching the search, in order, with the characters of their labels that match.
+    pub matches: &'a [(usize, Vec<usize>)],
 }
 
 impl Scene<'_> {
@@ -263,10 +268,11 @@ impl Scene<'_> {
             Some(status) => ("▍", row_style.patch(styles.git(status))),
             None => (" ", row_style),
         });
-        parts.push((
-            if self.cursor == Some(index) { ">" } else { " " },
-            row_style,
-        ));
+        parts.push(if self.cursor == Some(index) {
+            (">", row_style.patch(styles.mark))
+        } else {
+            (" ", row_style)
+        });
 
         let guide = row_style.patch(styles.guide);
         if !root {
@@ -333,13 +339,18 @@ impl Scene<'_> {
         } else if !root {
             parts.push((" ", row_style));
         }
-        match (edit, self.highlight) {
+        let matched = self
+            .matches
+            .binary_search_by_key(&index, |(index, _)| *index)
+            .ok();
+        match (edit, matched) {
             (Some(_), _) => {}
-            (None, Some((highlighted, chars))) if highlighted == index => {
+            (None, Some(matched)) => {
+                let chars = &self.matches[matched].1;
                 let matched = label_style.patch(styles.matched);
                 push_highlighted(&mut parts, &row.label, chars, label_style, matched);
             }
-            (None, _) => parts.push((&row.label, label_style)),
+            (None, None) => parts.push((&row.label, label_style)),
         }
 
         let last = area.right() - 1;
@@ -467,9 +478,20 @@ mod tests {
             .collect()
     }
 
+    fn render(width: u16, height: u16, icons: bool, side: FileTreeSide) -> Vec<String> {
+        lines(&draw(width, height, icons, side, &Theme::default(), 1))
+    }
+
     /// root: `docs/guide.md` (expanded, modified), `src/main` (a run), `README.md` (focused,
     /// changed in git).
-    fn render(width: u16, height: u16, icons: bool, side: FileTreeSide) -> Vec<String> {
+    fn draw(
+        width: u16,
+        height: u16,
+        icons: bool,
+        side: FileTreeSide,
+        theme: &Theme,
+        cursor: usize,
+    ) -> Surface {
         let mut tree = tree_with(vec![run("src", &["main"]), dir("docs"), file("README.md")]);
         let docs = tree.find("docs".as_ref()).unwrap();
         tree.expand(docs);
@@ -487,8 +509,7 @@ mod tests {
         marks
             .modified
             .extend(Path::new("docs/guide.md").ancestors());
-        let theme = Theme::default();
-        let styles = Styles::new(&theme);
+        let styles = Styles::new(theme);
         let area = Rect::new(0, 0, width, height);
         let mut surface = Surface::empty(area);
         Scene {
@@ -498,17 +519,17 @@ mod tests {
             marks: &marks,
             palette: None,
             styles: &styles,
-            cursor: Some(1),
+            cursor: Some(cursor),
             start: 0,
             icons,
             guides: true,
             expanders: Some(["▸", "▾"]),
             side,
             edit: None,
-            highlight: None,
+            matches: &[],
         }
         .render(area, &mut surface);
-        lines(&surface)
+        surface
     }
 
     #[test]
@@ -532,6 +553,16 @@ mod tests {
                 "│ >├─▾ \u{f115} docs      +",
             ]
         );
+    }
+
+    #[test]
+    fn the_cursor_mark_keeps_its_color_on_the_focused_buffer() {
+        let theme: toml::Value =
+            toml::from_str("'ui.text' = 'white'\n'ui.file-tree.active' = 'green'").unwrap();
+        let surface = draw(20, 6, false, FileTreeSide::Left, &theme.into(), 4);
+        assert_eq!(lines(&surface)[4], "▍>└─* README.md    │");
+        assert_eq!(surface[(1, 4)].fg, Color::White);
+        assert_eq!(surface[(6, 4)].fg, Color::Green);
     }
 
     #[test]

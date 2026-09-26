@@ -4,6 +4,7 @@
 use std::{
     cell::RefCell,
     collections::HashSet,
+    ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -28,7 +29,7 @@ use super::{
     order::Group,
     render::EditRow,
     rows::{InputRow, Rows},
-    search::{Candidates, Hit},
+    search::{Candidates, Hit, Matching},
     tree::{Kind, NodeId, Reveal, Tree},
     viewport::{self, Align},
     watch::Watcher,
@@ -102,8 +103,49 @@ pub(super) struct Search {
     pub(super) origin: Option<Origin>,
     /// Tells the latest search from older ones still running.
     pub(super) generation: u64,
-    /// The latest match of the query being typed.
-    pub(super) hit: Option<Hit>,
+    /// The query being typed, ready to match the rows in view.
+    pub(super) matching: Option<(String, Option<Matching>)>,
+}
+
+impl Search {
+    fn matches(
+        &mut self,
+        query: &str,
+        rows: &Rows,
+        range: Range<usize>,
+    ) -> Vec<(usize, Vec<usize>)> {
+        let Some(candidates) = &self.candidates else {
+            return Vec::new();
+        };
+        if self
+            .matching
+            .as_ref()
+            .is_none_or(|(matched, _)| matched != query)
+        {
+            self.matching = Some((query.to_owned(), Matching::new(query)));
+        }
+        let Some((_, Some(matching))) = &mut self.matching else {
+            return Vec::new();
+        };
+        range
+            .filter_map(|index| {
+                let row = rows.get(index)?;
+                // Only the files the search goes to, which leaves out ignored ones.
+                if !candidates.contains(&row.path) {
+                    return None;
+                }
+                let path = row.path.to_string_lossy();
+                let indices = matching.indices(&path)?;
+                // The label is the end of the path.
+                let offset = path.chars().count() - row.label.chars().count();
+                let chars = indices
+                    .iter()
+                    .filter_map(|&i| (i as usize).checked_sub(offset))
+                    .collect();
+                Some((index, chars))
+            })
+            .collect()
+    }
 }
 
 pub(super) struct Origin {
@@ -207,9 +249,6 @@ impl Workspace {
             }
             None => editor.set_error("No more matches"),
         }
-        if incremental {
-            self.search.hit = hit;
-        }
     }
 
     /// Ends the query being typed. Unless it is `kept`, the cursor and the scroll position go
@@ -219,7 +258,7 @@ impl Workspace {
         let Some(origin) = self.search.origin.take() else {
             return;
         };
-        self.search.hit = None;
+        self.search.matching = None;
         if !kept {
             self.search.generation += 1;
             self.reveals
@@ -244,19 +283,16 @@ impl Workspace {
         self.dirty = true;
     }
 
-    /// The row of the latest match and the characters of its label that matched.
-    pub(super) fn highlight(&self) -> Option<(usize, Vec<usize>)> {
-        let hit = self.search.hit.as_ref()?;
-        let index = self.rows.index_of(self.tree.find(&hit.path)?)?;
-        // The label is the end of the matched path.
-        let path_len = hit.path.to_string_lossy().chars().count();
-        let offset = path_len - self.rows[index].label.chars().count();
-        let chars = hit
-            .indices
-            .iter()
-            .filter_map(|&i| (i as usize).checked_sub(offset))
-            .collect();
-        Some((index, chars))
+    /// The rows among `rows` of files matching the query being typed, in order, each with the
+    /// characters of its label that match.
+    pub(super) fn matches(&mut self, rows: Range<usize>) -> Vec<(usize, Vec<usize>)> {
+        match &self.edit {
+            Some(Edit {
+                kind: EditKind::Search,
+                prompt,
+            }) => self.search.matches(prompt.line(), &self.rows, rows),
+            _ => Vec::new(),
+        }
     }
 
     /// The row the cursor is on: the input row while a new entry is named.
@@ -841,6 +877,29 @@ pub(super) mod tests {
             workspace.cursor,
             workspace.tree.find("docs/guide.md".as_ref()).unwrap()
         );
+    }
+
+    #[test]
+    fn every_matching_file_in_view_is_highlighted() {
+        let mut workspace = searched_into_docs();
+        workspace.rebuild_rows();
+        let paths = ["a", "b", "docs/guide.md"].map(PathBuf::from).to_vec();
+        workspace.search.candidates = Some(Arc::new(Candidates::new(
+            paths,
+            FileTreeSort::DirectoriesFirst,
+        )));
+        let (search, rows) = (&mut workspace.search, &workspace.rows);
+        let labels: Vec<_> = rows.iter().map(|row| &*row.label).collect();
+        assert_eq!(labels, ["root", "docs", "guide.md", "src/main", "a", "b"]);
+
+        // Matched characters in the directory leave the label as it is.
+        assert_eq!(
+            search.matches("docguide", rows, 0..rows.len()),
+            [(2, vec![0, 1, 2, 3, 4])]
+        );
+        assert_eq!(search.matches("a", rows, 0..rows.len()), [(4, vec![0])]);
+        assert_eq!(search.matches("a", rows, 0..4), []);
+        assert_eq!(search.matches("", rows, 0..rows.len()), []);
     }
 
     #[test]

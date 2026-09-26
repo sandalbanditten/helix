@@ -28,7 +28,7 @@ It should preserve the following features from `grove`:
 - The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
   - `ls-colors = true` is the default: entries are colored like `eza` shows them, with the colors of GNU `ls` when neither variable is set.
   - The `▸`/`▾` marks of collapsed and expanded directories are configurable: `expanders = true` (default), `false` for none, or two characters like `["+", "-"]`.
-  - The cursor row keeps its background and colors and only turns bold (next to its `>` mark); the focused buffer's file keeps the color of its bufferline tab under it.
+  - The cursor row keeps its background and colors and only turns bold (next to its `>` mark, which has the same color on every row); the focused buffer's file keeps the color of its bufferline tab under it.
   - Pinned ancestor rows keep the regular background.
   - Icons are `eza`'s, except that an expanded directory always shows the open folder `` (U+F115), even one with an icon of its own; collapsed directories keep theirs.
 - Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
@@ -57,10 +57,10 @@ Expanding on `grove` it should have the following features:
   - `<C-r>` to change the _full_ path , e.g. `<C-r>` on `~/Code/test/src/test.rs` should expose `/home/<USER>/Code/test/src/test.rs`, in the bottom command-line prompt. Moves across filesystems fall back to copy+delete.
   - Open buffers follow the rename.
 - `a` creates a file and `A` a directory, inline: the input row appears inside the target directory (the parent of the file under the cursor, or the directory under the cursor, expanded). For `a` it sits after that directory's subdirectories and before its files; for `A` it sits above the existing subdirectories. With alphabetical sorting it is the first child.
-- At the top should be a fuzzy search, working much like helix' existing file picker.
+- There should be a fuzzy search, working much like helix' existing file picker.
   - No file preview
   - Reuse as much of the code for fuzzy searching and the like as possible.
-  - `/` opens the search prompt at the top of the tree. As you type, the cursor jumps to the next match below it in tree order (wrapping), expanding directories to reveal it. `n`/`N` go to the next/previous match. The candidates are all workspace files (the file picker's walker).
+  - `/` opens the `file search:` prompt in the command line, like the editor's search. As you type, the cursor jumps to the next match below it in tree order (wrapping), expanding directories to reveal it, and the matched characters of every matching file in view are highlighted. `n`/`N` go to the next/previous match. The candidates are all workspace files (the file picker's walker).
   - No reverse search (`?` is the help key) and no search config options for now.
 - External changes are picked up by watching the loaded directories and the repository's `.git` directory (`notify`).
 

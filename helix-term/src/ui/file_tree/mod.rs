@@ -40,7 +40,7 @@ use tui::buffer::Buffer as Surface;
 
 use self::{
     background::{in_background, spawn_lister, ListRequest, Lister},
-    edit::{Edit, EditEvent, EditKind, Placement},
+    edit::{EditEvent, EditKind, Placement},
     git::GitStatuses,
     keys::{Action, Lookup},
     ls_colors::LsColors,
@@ -62,9 +62,6 @@ const MIN_WIDTH: u16 = 16;
 const MAX_WIDTH: u16 = 64;
 /// The columns the panel always leaves to the editor; with fewer it yields.
 const MIN_EDITOR_WIDTH: u16 = 20;
-/// The columns an inline edit gets at least, reaching over the editor if the panel is narrower.
-const MIN_EDIT_WIDTH: u16 = 30;
-
 /// When the panel is shown.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Visibility {
@@ -477,7 +474,6 @@ impl FileTree {
         let (from, from_dir) = (origin.path.clone(), origin.is_dir);
         if query.trim().is_empty() {
             workspace.search.generation += 1;
-            workspace.search.hit = None;
             workspace
                 .reveals
                 .retain(|reveal| reveal.purpose != Purpose::Match);
@@ -556,14 +552,6 @@ impl FileTree {
         };
         workspace.update(&lister, &config.file_tree);
 
-        // The search line goes above the rows.
-        let placement = workspace.edit.as_ref().map(Edit::placement);
-        let (top, area) = match placement {
-            Some(Placement::Top) if area.height > 1 => {
-                (Some(area.with_height(1)), area.clip_top(1))
-            }
-            _ => (None, area),
-        };
         let height = area.height as usize;
         workspace.height = height;
         if let Some(target) = workspace.scroll_to.take() {
@@ -580,7 +568,7 @@ impl FileTree {
 
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
-        let highlight = workspace.highlight();
+        let matches = workspace.matches(start..start + height);
         let expanders = config
             .file_tree
             .expanders
@@ -602,20 +590,11 @@ impl FileTree {
                 .map(|[collapsed, expanded]| [collapsed.as_str(), expanded.as_str()]),
             side: config.file_tree.side,
             edit: workspace.edit_row(),
-            highlight: highlight
-                .as_ref()
-                .map(|(index, chars)| (*index, chars.as_slice())),
+            matches: &matches,
         }
         .render(area, surface);
 
-        // A panel fitted to its rows leaves little room to type in.
-        let edit_area = top.or(edit_area).map(|edit_area| {
-            let width = edit_area
-                .width
-                .max(MIN_EDIT_WIDTH)
-                .min(surface.area.right().saturating_sub(edit_area.x));
-            Rect { width, ..edit_area }
-        });
+        // A name typed in a row stays in it and scrolls.
         workspace.edit_area = edit_area;
         if let (Some(edit_area), Some(edit)) = (edit_area, &mut workspace.edit) {
             edit.prompt.render(edit_area, surface, cx);

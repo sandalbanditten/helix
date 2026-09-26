@@ -23,10 +23,42 @@ pub struct Candidates {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub path: PathBuf,
-    /// The indices of the characters of `path` that matched, in order.
-    pub indices: Vec<u32>,
     /// Whether the search went past the end of the tree to find it.
     pub wrapped: bool,
+}
+
+/// A query ready to match paths.
+pub struct Matching {
+    pattern: Pattern,
+    matcher: Matcher,
+}
+
+impl Matching {
+    /// `None` for a query without anything to match.
+    pub fn new(query: &str) -> Option<Self> {
+        let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+        (!pattern.atoms.is_empty()).then(|| Self {
+            pattern,
+            matcher: Matcher::new(Config::DEFAULT.match_paths()),
+        })
+    }
+
+    fn matches(&mut self, haystack: &Utf32String) -> bool {
+        self.pattern
+            .score(haystack.slice(..), &mut self.matcher)
+            .is_some()
+    }
+
+    /// The indices of the characters of `path` that match, in order, if it matches.
+    pub fn indices(&mut self, path: &str) -> Option<Vec<u32>> {
+        let haystack = Utf32String::from(path);
+        let mut indices = Vec::new();
+        self.pattern
+            .indices(haystack.slice(..), &mut self.matcher, &mut indices)?;
+        indices.sort_unstable();
+        indices.dedup();
+        Some(indices)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +76,7 @@ impl Candidates {
         Self::new(paths, sort)
     }
 
-    fn new(mut paths: Vec<PathBuf>, sort: FileTreeSort) -> Self {
+    pub fn new(mut paths: Vec<PathBuf>, sort: FileTreeSort) -> Self {
         paths.sort_by(|a, b| path_cmp(sort, a, false, b, false));
         let haystacks = paths
             .iter()
@@ -57,6 +89,12 @@ impl Candidates {
         }
     }
 
+    pub fn contains(&self, path: &Path) -> bool {
+        self.paths
+            .binary_search_by(|candidate| path_cmp(self.sort, candidate, false, path, false))
+            .is_ok()
+    }
+
     /// The first file matching `query` after the entry at `from` (a directory or not), going in
     /// `direction` and wrapping around.
     pub fn find(
@@ -66,18 +104,14 @@ impl Candidates {
         is_dir: bool,
         direction: Direction,
     ) -> Option<Hit> {
-        let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-        if pattern.atoms.is_empty() {
-            return None;
-        }
-        let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+        let mut matching = Matching::new(query)?;
         let len = self.paths.len();
-        let found = match direction {
+        let mut matches = |&i: &usize| matching.matches(&self.haystacks[i]);
+        let (index, wrapped) = match direction {
             Direction::Forward => {
                 let start = self
                     .paths
                     .partition_point(|path| path_cmp(self.sort, path, false, from, is_dir).is_le());
-                let mut matches = |&i: &usize| self.matches(&pattern, &mut matcher, i);
                 (start..len)
                     .find(&mut matches)
                     .map(|i| (i, false))
@@ -87,30 +121,17 @@ impl Candidates {
                 let start = self
                     .paths
                     .partition_point(|path| path_cmp(self.sort, path, false, from, is_dir).is_lt());
-                let mut matches = |&i: &usize| self.matches(&pattern, &mut matcher, i);
                 (0..start)
                     .rev()
                     .find(&mut matches)
                     .map(|i| (i, false))
                     .or_else(|| (start..len).rev().find(&mut matches).map(|i| (i, true)))
             }
-        };
-        let (index, wrapped) = found?;
-        let mut indices = Vec::new();
-        pattern.indices(self.haystacks[index].slice(..), &mut matcher, &mut indices);
-        indices.sort_unstable();
-        indices.dedup();
+        }?;
         Some(Hit {
             path: self.paths[index].clone(),
-            indices,
             wrapped,
         })
-    }
-
-    fn matches(&self, pattern: &Pattern, matcher: &mut Matcher, index: usize) -> bool {
-        pattern
-            .score(self.haystacks[index].slice(..), matcher)
-            .is_some()
     }
 }
 
@@ -166,12 +187,14 @@ mod tests {
     }
 
     #[test]
-    fn hits_carry_the_matched_characters() {
-        let hit = candidates()
-            .find("main", "".as_ref(), true, Direction::Forward)
-            .unwrap();
-        assert_eq!(hit.path, Path::new("helix-term/src/main.rs"));
-        assert_eq!(hit.indices, [15, 16, 17, 18]);
+    fn matching_tells_the_matched_characters() {
+        let mut matching = Matching::new("main").unwrap();
+        assert_eq!(
+            matching.indices("helix-term/src/main.rs"),
+            Some(vec![15, 16, 17, 18])
+        );
+        assert_eq!(matching.indices("helix-term/src/lib.rs"), None);
+        assert!(Matching::new(" ").is_none());
         assert!(candidates()
             .find("", "".as_ref(), true, Direction::Forward)
             .is_none());

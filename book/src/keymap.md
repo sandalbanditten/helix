@@ -523,9 +523,9 @@ there.
 | `?`                  | Show these keys |
 | `Escape`             | Return focus to the editor |
 
-The search moves the cursor to the first file after it, in the order of the tree, whose path
-matches like in the [file picker](./pickers.md) as you type; `Enter` keeps it and `Escape` goes
-back. New files are created in the directory under the cursor, or in the one holding the file under
+The search, typed in the command line, moves the cursor to the first file after it, in the order
+of the tree, whose path matches like in the [file picker](./pickers.md) as you type, and highlights
+every matching file in view; `Enter` keeps the cursor there and `Escape` goes back. New files are created in the directory under the cursor, or in the one holding the file under
 it, and open in a buffer. Renaming and moving keep open buffers on their files.
 
 ## Prompt

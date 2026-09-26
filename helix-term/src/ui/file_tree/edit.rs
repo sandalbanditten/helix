@@ -35,8 +35,6 @@ pub enum EditKind {
 pub enum Placement {
     /// In place of the label of a row.
     Row,
-    /// Above the rows of the tree.
-    Top,
     /// In the command line, below the statusline.
     CommandLine,
 }
@@ -71,7 +69,7 @@ impl Edit {
                 |_, _, _| {},
             ),
             EditKind::Search => {
-                Prompt::new("search:".into(), None, |_, _| Vec::new(), |_, _, _| {})
+                Prompt::new("file search:".into(), None, |_, _| Vec::new(), |_, _, _| {})
             }
             EditKind::Rename { .. } | EditKind::Create { .. } => {
                 Prompt::new("".into(), None, |_, _| Vec::new(), |_, _, _| {})
@@ -86,8 +84,9 @@ impl Edit {
     pub fn placement(&self) -> Placement {
         match self.kind {
             EditKind::Rename { .. } | EditKind::Create { .. } => Placement::Row,
-            EditKind::Search => Placement::Top,
-            EditKind::Move { .. } | EditKind::Delete { .. } => Placement::CommandLine,
+            EditKind::Move { .. } | EditKind::Delete { .. } | EditKind::Search => {
+                Placement::CommandLine
+            }
         }
     }
 
