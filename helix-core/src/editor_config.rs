@@ -21,7 +21,7 @@ use globset::{GlobBuilder, GlobMatcher};
 
 use crate::{
     indent::{IndentStyle, MAX_INDENT},
-    LineEnding,
+    LineEnding, SpellingLanguage,
 };
 
 /// Configuration declared for a path in `.editorconfig` files.
@@ -31,7 +31,7 @@ pub struct EditorConfig {
     pub tab_width: Option<NonZeroU8>,
     pub line_ending: Option<LineEnding>,
     pub encoding: Option<&'static Encoding>,
-    // pub spelling_language: Option<SpellingLanguage>,
+    pub spelling_language: Option<SpellingLanguage>,
     pub trim_trailing_whitespace: Option<bool>,
     pub insert_final_newline: Option<bool>,
     pub max_line_length: Option<NonZeroU16>,
@@ -144,6 +144,17 @@ impl EditorConfig {
             "utf-16be" => Some(encoding_rs::UTF_16BE),
             _ => None,
         });
+        // The format is `ss` or `ss-TT`. Values are lowercased when parsed, so the territory is
+        // uppercased again to name the dictionary the way Hunspell does (`en-US` is `en_US`).
+        let spelling_language = pairs.get("spelling_language").and_then(|value| {
+            match value.split_once(['-', '_']) {
+                Some((language, territory)) => {
+                    format!("{language}_{}", territory.to_uppercase()).parse()
+                }
+                None => value.parse(),
+            }
+            .ok()
+        });
         let trim_trailing_whitespace =
             pairs
                 .get("trim_trailing_whitespace")
@@ -170,6 +181,7 @@ impl EditorConfig {
             tab_width,
             line_ending,
             encoding,
+            spelling_language,
             trim_trailing_whitespace,
             insert_final_newline,
             max_line_length,
@@ -380,5 +392,18 @@ mod test {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn spelling_language_test() {
+        let spelling_language = |value: &str| {
+            editor_config("a.md", &format!("[*]\nspelling_language = {value}"))
+                .spelling_language
+                .map(|language| language.to_string())
+        };
+        assert_eq!(spelling_language("en-US").as_deref(), Some("en_US"));
+        assert_eq!(spelling_language("da-dk").as_deref(), Some("da_DK"));
+        assert_eq!(spelling_language("de").as_deref(), Some("de"));
+        assert_eq!(spelling_language("../en").as_deref(), None);
     }
 }

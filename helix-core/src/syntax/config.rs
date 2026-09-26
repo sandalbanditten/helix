@@ -67,6 +67,9 @@ pub struct LanguageConfiguration {
     /// If set, overrides `editor.word-completion`.
     pub word_completion: Option<WordCompletion>,
 
+    /// Layers over `editor.spelling` for this language.
+    pub spelling: Option<SpellingConfig>,
+
     #[serde(default)]
     pub diagnostic_severity: Severity,
 
@@ -610,6 +613,112 @@ pub struct WordCompletion {
     pub trigger_length: Option<NonZeroU8>,
 }
 
+/// Spell-checking configuration. The same shape is used globally (`[editor.spelling]`) and
+/// per-language in `languages.toml`; a language's settings layer over the global ones (see
+/// [`SpellingConfig::merged`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SpellingConfig {
+    /// The dictionaries to check a document against; unset inherits (and the global default is
+    /// none, i.e. spell checking off). A word is flagged only when every dictionary rejects it.
+    pub languages: Option<Vec<crate::SpellingLanguage>>,
+    /// Extra accepted words, checked case-insensitively. A language's `words` are *added* to the
+    /// global ones rather than replacing them.
+    pub words: Vec<String>,
+    /// Tokens matching any of these regexes are not checked (e.g. `"^[A-Z0-9_]+$"` to skip
+    /// SCREAMING_CASE). A language's regexes are *added* to the global ones.
+    pub ignore_regexes: Vec<String>,
+    /// Tokens shorter than this are not checked. Unset inherits; the global default is 1 (check
+    /// everything).
+    pub min_word_length: Option<usize>,
+    /// Whether misspellings are shown like other diagnostics (messages, gutter, statusline,
+    /// pickers) rather than only underlined. Unset inherits; the global default is `false`.
+    pub messages: Option<bool>,
+}
+
+impl SpellingConfig {
+    /// Layers a language's `spelling` settings over these (global) ones: `languages`,
+    /// `min-word-length` and `messages` replace, while `words` and `ignore-regexes` are unioned.
+    pub fn merged(&self, language: Option<&SpellingConfig>) -> SpellingConfig {
+        let Some(language) = language else {
+            return self.clone();
+        };
+        SpellingConfig {
+            languages: language
+                .languages
+                .clone()
+                .or_else(|| self.languages.clone()),
+            words: self.words.iter().chain(&language.words).cloned().collect(),
+            ignore_regexes: self
+                .ignore_regexes
+                .iter()
+                .chain(&language.ignore_regexes)
+                .cloned()
+                .collect(),
+            min_word_length: language.min_word_length.or(self.min_word_length),
+            messages: language.messages.or(self.messages),
+        }
+    }
+
+    /// The dictionaries to check against (empty when spell checking is off).
+    pub fn languages(&self) -> &[crate::SpellingLanguage] {
+        self.languages.as_deref().unwrap_or_default()
+    }
+
+    /// The shortest token length that is checked.
+    pub fn min_word_length(&self) -> usize {
+        self.min_word_length.unwrap_or(1)
+    }
+
+    /// Whether misspellings are shown like other diagnostics.
+    pub fn messages(&self) -> bool {
+        self.messages.unwrap_or(false)
+    }
+}
+
+/// The compiled form of a [`SpellingConfig`]'s token filters: words to accept and regexes to skip,
+/// resolved once so the checker can apply them per word.
+#[derive(Debug)]
+pub struct SpellingFilter {
+    min_word_length: usize,
+    /// Lowercased for case-insensitive matching.
+    words: HashSet<String>,
+    ignore: Vec<regex::Regex>,
+}
+
+impl SpellingFilter {
+    pub fn new(config: &SpellingConfig) -> Self {
+        let words = config
+            .words
+            .iter()
+            .map(|word| word.to_lowercase())
+            .collect();
+        let ignore = config
+            .ignore_regexes
+            .iter()
+            .filter_map(|pattern| {
+                regex::Regex::new(pattern)
+                    .map_err(|err| {
+                        log::error!("ignoring invalid spelling ignore-regex {pattern:?}: {err}")
+                    })
+                    .ok()
+            })
+            .collect();
+        Self {
+            min_word_length: config.min_word_length(),
+            words,
+            ignore,
+        }
+    }
+
+    /// Whether `word` should be skipped rather than spell-checked.
+    pub fn ignores(&self, word: &str) -> bool {
+        word.chars().count() < self.min_word_length
+            || self.words.contains(&word.to_lowercase())
+            || self.ignore.iter().any(|regex| regex.is_match(word))
+    }
+}
+
 fn deserialize_regex<'de, D>(deserializer: D) -> Result<Option<rope::Regex>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -652,4 +761,51 @@ where
 
 fn default_timeout() -> u64 {
     20
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn spelling_config_merged() {
+        let global = SpellingConfig {
+            languages: Some(vec!["en_US".parse().unwrap()]),
+            words: vec!["helix".into()],
+            min_word_length: Some(3),
+            ..Default::default()
+        };
+        let language = SpellingConfig {
+            languages: Some(vec!["da_DK".parse().unwrap()]),
+            words: vec!["tree-sitter".into()],
+            messages: Some(true),
+            ..Default::default()
+        };
+
+        let merged = global.merged(Some(&language));
+        assert_eq!(merged.languages(), language.languages());
+        assert_eq!(merged.words, ["helix", "tree-sitter"]);
+        assert_eq!(merged.min_word_length(), 3);
+        assert!(merged.messages());
+
+        assert_eq!(global.merged(None), global);
+        assert!(!global.messages());
+        assert!(SpellingConfig::default().languages().is_empty());
+    }
+
+    #[test]
+    fn spelling_filter_ignores() {
+        let filter = SpellingFilter::new(&SpellingConfig {
+            words: vec!["Helix".into()],
+            ignore_regexes: vec!["^[A-Z0-9_]+$".into(), "(".into()],
+            min_word_length: Some(3),
+            ..Default::default()
+        });
+        assert!(filter.ignores("helix"));
+        assert!(filter.ignores("HELIX"));
+        assert!(filter.ignores("TODO"));
+        assert!(filter.ignores("æø"));
+        assert!(!filter.ignores("ære"));
+        assert!(!filter.ignores("editor"));
+    }
 }

@@ -19,6 +19,7 @@ pub enum TsFeature {
     RainbowBracket,
     Breadcrumbs,
     Folds,
+    Spellcheck,
 }
 
 impl TsFeature {
@@ -31,6 +32,7 @@ impl TsFeature {
             Self::RainbowBracket,
             Self::Breadcrumbs,
             Self::Folds,
+            Self::Spellcheck,
         ]
     }
 
@@ -43,6 +45,7 @@ impl TsFeature {
             Self::RainbowBracket => "rainbows.scm",
             Self::Breadcrumbs => "breadcrumbs.scm",
             Self::Folds => "folds.scm",
+            Self::Spellcheck => "spellcheck.scm",
         }
     }
 
@@ -55,6 +58,7 @@ impl TsFeature {
             Self::RainbowBracket => "Rainbow Brackets",
             Self::Breadcrumbs => "Breadcrumbs",
             Self::Folds => "Code Folding",
+            Self::Spellcheck => "Spell Checking",
         }
     }
 
@@ -67,6 +71,7 @@ impl TsFeature {
             Self::RainbowBracket => "Rainbow",
             Self::Breadcrumbs => "Breadcrumbs",
             Self::Folds => "Folds",
+            Self::Spellcheck => "Spellcheck",
         }
     }
 }
