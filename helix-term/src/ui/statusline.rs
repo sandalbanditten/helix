@@ -241,20 +241,20 @@ where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     use helix_core::diagnostic::Severity;
-    let (hints, info, warnings, errors) =
-        context
-            .doc
-            .diagnostics()
-            .iter()
-            .fold((0, 0, 0, 0), |mut counts, diag| {
-                match diag.severity {
-                    Some(Severity::Hint) | None => counts.0 += 1,
-                    Some(Severity::Info) => counts.1 += 1,
-                    Some(Severity::Warning) => counts.2 += 1,
-                    Some(Severity::Error) => counts.3 += 1,
-                }
-                counts
-            });
+    let (hints, info, warnings, errors) = context
+        .doc
+        .diagnostics()
+        .iter()
+        .filter(|diag| context.doc.shows_diagnostic(diag))
+        .fold((0, 0, 0, 0), |mut counts, diag| {
+            match diag.severity {
+                Some(Severity::Hint) | None => counts.0 += 1,
+                Some(Severity::Info) => counts.1 += 1,
+                Some(Severity::Warning) => counts.2 += 1,
+                Some(Severity::Error) => counts.3 += 1,
+            }
+            counts
+        });
 
     for sev in &context.editor.config().statusline.diagnostics {
         match sev {
@@ -294,7 +294,12 @@ where
     let (mut hints, mut info, mut warnings, mut errors) = (0u32, 0u32, 0u32, 0u32);
 
     // Open documents carry diagnostics from every provider (spelling included), edit-mapped.
-    for diag in editor.documents().flat_map(|doc| doc.diagnostics()) {
+    let shown_diagnostics = editor.documents().flat_map(|doc| {
+        doc.diagnostics()
+            .iter()
+            .filter(|diag| doc.shows_diagnostic(diag))
+    });
+    for diag in shown_diagnostics {
         match diag.severity {
             Some(Severity::Warning) => warnings += 1,
             Some(Severity::Error) => errors += 1,

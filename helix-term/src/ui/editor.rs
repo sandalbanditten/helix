@@ -385,7 +385,7 @@ impl EditorView {
             return;
         }
 
-        use helix_core::diagnostic::{DiagnosticTag, Range, Severity};
+        use helix_core::diagnostic::{DiagnosticProvider, DiagnosticTag, Range, Severity};
         let get_scope_of = |scope| {
             theme
                 .find_highlight_exact(scope)
@@ -401,6 +401,8 @@ impl EditorView {
         // Diagnostic tags
         let unnecessary = theme.find_highlight_exact("diagnostic.unnecessary");
         let deprecated = theme.find_highlight_exact("diagnostic.deprecated");
+        // Misspellings get their own scope when the theme defines one.
+        let spelling = theme.find_highlight_exact("diagnostic.spelling");
 
         let mut default_vec = Vec::new();
         let mut info_vec = Vec::new();
@@ -409,6 +411,7 @@ impl EditorView {
         let mut error_vec = Vec::new();
         let mut unnecessary_vec = Vec::new();
         let mut deprecated_vec = Vec::new();
+        let mut spelling_vec = Vec::new();
 
         let push_diagnostic = |vec: &mut Vec<ops::Range<usize>>, range: Range| {
             // If any diagnostic overlaps ranges with the prior diagnostic,
@@ -427,6 +430,13 @@ impl EditorView {
         };
 
         for diagnostic in doc.diagnostics() {
+            // Misspellings use `diagnostic.spelling` when the theme defines it; otherwise they fall
+            // through to the severity-based styling (`diagnostic.hint`).
+            if spelling.is_some() && diagnostic.provider == DiagnosticProvider::Spelling {
+                push_diagnostic(&mut spelling_vec, diagnostic.range);
+                continue;
+            }
+
             // Separate diagnostics into different Vecs by severity.
             let vec = match diagnostic.severity {
                 Some(Severity::Info) => &mut info_vec,
@@ -499,6 +509,12 @@ impl EditorView {
                 ranges: error_vec,
             },
         ]);
+        if let Some(highlight) = spelling {
+            overlay_highlights.push(OverlayHighlights::Homogeneous {
+                highlight,
+                ranges: spelling_vec,
+            });
+        }
     }
 
     pub fn doc_document_highlights(
@@ -830,7 +846,9 @@ impl EditorView {
             .cursor(doc.text().slice(..));
 
         let diagnostics = doc.diagnostics().iter().filter(|diagnostic| {
-            diagnostic.range.start <= cursor && diagnostic.range.end >= cursor
+            diagnostic.range.start <= cursor
+                && diagnostic.range.end >= cursor
+                && doc.shows_diagnostic(diagnostic)
         });
 
         let warning = theme.get("warning");

@@ -186,6 +186,8 @@ pub struct Document {
     /// A manual `:set-spelling-language` choice, which takes precedence over `.editorconfig` and
     /// the configuration. An empty `Vec` forces spell checking off.
     spelling_language_override: Option<Vec<SpellingLanguage>>,
+    /// Whether misspellings are shown like other diagnostics rather than only underlined.
+    spelling_messages: bool,
 
     /// The document's default line ending.
     pub line_ending: LineEnding,
@@ -759,6 +761,7 @@ impl Document {
             editor_config: EditorConfig::default(),
             spelling_languages: Vec::new(),
             spelling_language_override: None,
+            spelling_messages: false,
             line_ending,
             restore_cursor: false,
             syntax: None,
@@ -1267,17 +1270,26 @@ impl Document {
         )
     }
 
-    /// Resolves the languages this document is spell checked against, in precedence order: a
-    /// manual `:set-spelling-language` override, then the `.editorconfig` `spelling_language`,
-    /// then the configuration. Re-run when any of these change.
+    /// Resolves the spell checking settings of this document. The languages are, in precedence
+    /// order, a manual `:set-spelling-language` override, the `.editorconfig`
+    /// `spelling_language`, or the configured ones. Re-run when any of these change.
     pub fn detect_spelling(&mut self) {
+        let config = self.spelling_config();
+        self.spelling_messages = config.messages();
         self.spelling_languages = if let Some(languages) = &self.spelling_language_override {
             languages.clone()
         } else if let Some(language) = &self.editor_config.spelling_language {
             vec![language.clone()]
         } else {
-            self.spelling_config().languages().to_vec()
+            config.languages().to_vec()
         };
+    }
+
+    /// Whether `diagnostic` is shown like any diagnostic: with its message, in the gutter, the
+    /// statusline and pickers, and by `]d`. Misspellings are only underlined unless
+    /// `spelling.messages` is set.
+    pub fn shows_diagnostic(&self, diagnostic: &Diagnostic) -> bool {
+        self.spelling_messages || diagnostic.provider != DiagnosticProvider::Spelling
     }
 
     /// The languages this document is spell checked against; empty when spell checking is off.
@@ -2790,6 +2802,34 @@ mod test {
                 (10, 15, spelling.clone()),
             ]
         );
+    }
+
+    #[test]
+    fn misspellings_are_shown_with_messages_only() {
+        let lsp = diagnostic(
+            0,
+            4,
+            DiagnosticProvider::Lsp {
+                server_id: Default::default(),
+                identifier: None,
+            },
+        );
+        let misspelling = diagnostic(0, 4, DiagnosticProvider::Spelling);
+        let document = |messages| {
+            let mut config = Config::default();
+            config.spelling.messages = messages;
+            Document::from(
+                Rope::from("helo"),
+                None,
+                Arc::new(ArcSwap::new(Arc::new(config))),
+                Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+            )
+        };
+
+        let doc = document(None);
+        assert!(doc.shows_diagnostic(&lsp));
+        assert!(!doc.shows_diagnostic(&misspelling));
+        assert!(document(Some(true)).shows_diagnostic(&misspelling));
     }
 
     #[test]

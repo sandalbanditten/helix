@@ -75,7 +75,8 @@ pub fn diagnostic<'doc>(
                             doc.language_servers_with_feature(LanguageServerFeature::Diagnostics)
                                 .any(|ls| ls.id() == id)
                         })
-                });
+                })
+                .filter(|d| doc.shows_diagnostic(d));
             diagnostics_on_line.max_by_key(|d| d.severity).map(|d| {
                 write!(out, "●").ok();
                 match d.severity {

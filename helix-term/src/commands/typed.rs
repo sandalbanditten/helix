@@ -2936,7 +2936,10 @@ fn yank_diagnostic(
     let diag: Vec<_> = doc
         .diagnostics()
         .iter()
-        .filter(|d| primary.overlaps(&helix_core::Range::new(d.range.start, d.range.end)))
+        .filter(|d| {
+            doc.shows_diagnostic(d)
+                && primary.overlaps(&helix_core::Range::new(d.range.start, d.range.end))
+        })
         .map(|d| d.message.clone())
         .collect();
     let n = diag.len();

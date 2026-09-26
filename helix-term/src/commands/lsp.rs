@@ -235,17 +235,20 @@ type DiagnosticsPicker = Picker<PickerDiagnostic, DiagnosticStyles>;
 fn open_document_diagnostics(doc: &Document) -> impl Iterator<Item = PickerDiagnostic> + '_ {
     let doc_id = doc.id();
     let path: Option<Arc<Path>> = doc.path().map(Arc::from);
-    doc.diagnostics().iter().map(move |diag| PickerDiagnostic {
-        location: DiagnosticLocation::Document {
-            doc_id,
-            path: path.clone(),
-            range: diag.range,
-        },
-        severity: diag.severity,
-        code: diag.code.clone(),
-        source: diag.source.clone(),
-        message: diag.message.clone(),
-    })
+    doc.diagnostics()
+        .iter()
+        .filter(|diag| doc.shows_diagnostic(diag))
+        .map(move |diag| PickerDiagnostic {
+            location: DiagnosticLocation::Document {
+                doc_id,
+                path: path.clone(),
+                range: diag.range,
+            },
+            severity: diag.severity,
+            code: diag.code.clone(),
+            source: diag.source.clone(),
+            message: diag.message.clone(),
+        })
 }
 
 /// Builds a picker item from an LSP diagnostic held in the editor's store. This is used for files

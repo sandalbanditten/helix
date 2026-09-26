@@ -23,6 +23,7 @@ use helix_core::{
     chars::char_is_word,
     command_line::{self, Args},
     comment,
+    diagnostic::{Diagnostic, DiagnosticProvider},
     doc_formatter::TextFormat,
     encoding, find_workspace, fold,
     graphemes::{self, next_grapheme_boundary},
@@ -455,6 +456,8 @@ impl MappableCommand {
         goto_last_diag, "Goto last diagnostic",
         goto_next_diag, "Goto next diagnostic",
         goto_prev_diag, "Goto previous diagnostic",
+        goto_next_spelling, "Goto next misspelling",
+        goto_prev_spelling, "Goto previous misspelling",
         goto_next_change, "Goto next change",
         goto_prev_change, "Goto previous change",
         goto_first_change, "Goto first change",
@@ -4093,7 +4096,11 @@ fn exit_select_mode(cx: &mut Context) {
 
 fn goto_first_diag(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
-    let selection = match doc.diagnostics().first() {
+    let selection = match doc
+        .diagnostics()
+        .iter()
+        .find(|diag| doc.shows_diagnostic(diag))
+    {
         Some(diag) => Selection::single(diag.range.start, diag.range.end),
         None => return,
     };
@@ -4105,7 +4112,12 @@ fn goto_first_diag(cx: &mut Context) {
 
 fn goto_last_diag(cx: &mut Context) {
     let (view, doc) = current!(cx.editor);
-    let selection = match doc.diagnostics().last() {
+    let last = doc
+        .diagnostics()
+        .iter()
+        .rev()
+        .find(|diag| doc.shows_diagnostic(diag));
+    let selection = match last {
         Some(diag) => Selection::single(diag.range.start, diag.range.end),
         None => return,
     };
@@ -4116,33 +4128,31 @@ fn goto_last_diag(cx: &mut Context) {
 }
 
 fn goto_next_diag(cx: &mut Context) {
-    let motion = move |editor: &mut Editor| {
-        let (view, doc) = current!(editor);
-
-        let cursor_pos = doc
-            .selection(view.id)
-            .primary()
-            .cursor(doc.text().slice(..));
-
-        let diag = doc
-            .diagnostics()
-            .iter()
-            .find(|diag| diag.range.start > cursor_pos);
-
-        let selection = match diag {
-            Some(diag) => Selection::single(diag.range.start, diag.range.end),
-            None => return,
-        };
-        push_jump(view, doc);
-        doc.set_selection(view.id, selection);
-        view.diagnostics_handler
-            .immediately_show_diagnostic(doc, view.id);
-    };
-
-    cx.editor.apply_motion(motion);
+    goto_diagnostic(cx, Direction::Forward, Document::shows_diagnostic);
 }
 
 fn goto_prev_diag(cx: &mut Context) {
+    goto_diagnostic(cx, Direction::Backward, Document::shows_diagnostic);
+}
+
+fn goto_next_spelling(cx: &mut Context) {
+    goto_diagnostic(cx, Direction::Forward, is_misspelling);
+}
+
+fn goto_prev_spelling(cx: &mut Context) {
+    goto_diagnostic(cx, Direction::Backward, is_misspelling);
+}
+
+fn is_misspelling(_doc: &Document, diagnostic: &Diagnostic) -> bool {
+    diagnostic.provider == DiagnosticProvider::Spelling
+}
+
+/// Selects the next or previous diagnostic from the primary cursor that `filter` accepts.
+fn goto_diagnostic(
+    cx: &mut Context,
+    direction: Direction,
+    filter: fn(&Document, &Diagnostic) -> bool,
+) {
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
 
@@ -4151,24 +4161,26 @@ fn goto_prev_diag(cx: &mut Context) {
             .primary()
             .cursor(doc.text().slice(..));
 
-        let diag = doc
-            .diagnostics()
-            .iter()
-            .rev()
-            .find(|diag| diag.range.start < cursor_pos);
-
-        let selection = match diag {
-            // NOTE: the selection is reversed because we're jumping to the
-            // previous diagnostic.
-            Some(diag) => Selection::single(diag.range.end, diag.range.start),
-            None => return,
+        let mut diagnostics = doc.diagnostics().iter().filter(|diag| filter(doc, diag));
+        let selection = match direction {
+            Direction::Forward => diagnostics
+                .find(|diag| diag.range.start > cursor_pos)
+                .map(|diag| Selection::single(diag.range.start, diag.range.end)),
+            // NOTE: the selection is reversed because we're jumping to the previous diagnostic.
+            Direction::Backward => diagnostics
+                .rev()
+                .find(|diag| diag.range.start < cursor_pos)
+                .map(|diag| Selection::single(diag.range.end, diag.range.start)),
+        };
+        let Some(selection) = selection else {
+            return;
         };
         push_jump(view, doc);
         doc.set_selection(view.id, selection);
         view.diagnostics_handler
             .immediately_show_diagnostic(doc, view.id);
     };
-    cx.editor.apply_motion(motion)
+    cx.editor.apply_motion(motion);
 }
 
 fn goto_first_change(cx: &mut Context) {

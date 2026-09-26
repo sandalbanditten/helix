@@ -153,6 +153,8 @@
 | `goto_last_diag` | Goto last diagnostic | normal: `` ]D ``, select: `` ]D `` |
 | `goto_next_diag` | Goto next diagnostic | normal: `` ]d ``, select: `` ]d `` |
 | `goto_prev_diag` | Goto previous diagnostic | normal: `` [d ``, select: `` [d `` |
+| `goto_next_spelling` | Goto next misspelling | normal: `` ]s ``, select: `` ]s `` |
+| `goto_prev_spelling` | Goto previous misspelling | normal: `` [s ``, select: `` [s `` |
 | `goto_next_change` | Goto next change | normal: `` ]g ``, select: `` ]g `` |
 | `goto_prev_change` | Goto previous change | normal: `` [g ``, select: `` [g `` |
 | `goto_first_change` | Goto first change | normal: `` [G ``, select: `` [G `` |
