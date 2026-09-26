@@ -194,6 +194,26 @@ impl Tree {
             .find(|child| self.nodes[*child].name == name)
     }
 
+    /// Whether `id` is `ancestor` or lies below it.
+    pub fn is_within(&self, id: NodeId, ancestor: NodeId) -> bool {
+        let mut current = Some(id);
+        while let Some(node) = current {
+            if node == ancestor {
+                return true;
+            }
+            current = self.nodes[node].parent;
+        }
+        false
+    }
+
+    /// Every expanded directory.
+    pub fn expanded_directories(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| node.expanded)
+            .map(|(id, _)| id)
+    }
+
     /// The directories that were expanded since the last call and so need a (fresh) listing.
     pub fn take_listing_requests(&mut self) -> Vec<NodeId> {
         let mut requests = mem::take(&mut self.listing_requests);

@@ -26,6 +26,19 @@ pub enum EditKind {
     },
     /// Deleting the entry at `path`, a `directory` or not, once the line says `y`.
     Delete { path: PathBuf, directory: bool },
+    /// Searching for a file, moving the cursor to the matches while the line is typed.
+    Search,
+}
+
+/// Where the line of an edit is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// In place of the label of a row.
+    Row,
+    /// Above the rows of the tree.
+    Top,
+    /// In the command line, below the statusline.
+    CommandLine,
 }
 
 pub struct Edit {
@@ -57,6 +70,9 @@ impl Edit {
                 |_, _| Vec::new(),
                 |_, _, _| {},
             ),
+            EditKind::Search => {
+                Prompt::new("search:".into(), None, |_, _| Vec::new(), |_, _, _| {})
+            }
             EditKind::Rename { .. } | EditKind::Create { .. } => {
                 Prompt::new("".into(), None, |_, _| Vec::new(), |_, _, _| {})
             }
@@ -67,9 +83,12 @@ impl Edit {
         }
     }
 
-    /// Whether the line is typed inline in the tree rather than in the command line.
-    pub fn is_inline(&self) -> bool {
-        matches!(self.kind, EditKind::Rename { .. } | EditKind::Create { .. })
+    pub fn placement(&self) -> Placement {
+        match self.kind {
+            EditKind::Rename { .. } | EditKind::Create { .. } => Placement::Row,
+            EditKind::Search => Placement::Top,
+            EditKind::Move { .. } | EditKind::Delete { .. } => Placement::CommandLine,
+        }
     }
 
     pub fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EditEvent {

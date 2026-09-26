@@ -14,11 +14,13 @@ mod ops;
 mod order;
 mod render;
 mod rows;
+mod search;
 mod tree;
 mod viewport;
 
 use std::{
     cell::RefCell,
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -44,7 +46,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tui::buffer::Buffer as Surface;
 
 use self::{
-    edit::{Edit, EditEvent, EditKind},
+    edit::{Edit, EditEvent, EditKind, Placement},
     fs::ListOptions,
     git::GitStatuses,
     keys::{Action, Lookup},
@@ -52,6 +54,7 @@ use self::{
     order::Group,
     render::{natural_width, BufferMarks, EditRow, Scene, Styles},
     rows::{InputRow, Rows},
+    search::{Candidates, Direction, Hit},
     tree::{Kind, Listing, NodeId, Reveal, Tree},
     viewport::Align,
 };
@@ -136,7 +139,7 @@ impl FileTree {
         };
         workspace.cursor = workspace.tree.root();
         if let Some(path) = focused_document_path(editor, &workspace.root) {
-            workspace.reveal(path, true);
+            workspace.reveal(path, Purpose::Cursor);
         }
         workspace.update(&lister, &editor.config().file_tree);
     }
@@ -163,7 +166,7 @@ impl FileTree {
             .map(Path::to_path_buf)
             .collect();
         for path in paths {
-            workspace.reveal(path, false);
+            workspace.reveal(path, Purpose::Show);
         }
         let lister = self.lister(editor);
         workspace.update(&lister, &config.file_tree);
@@ -278,6 +281,10 @@ impl FileTree {
             return;
         };
         match edit.handle_event(event, cx) {
+            EditEvent::Continue if matches!(edit.kind, EditKind::Search) => {
+                self.search_incrementally(cx.editor);
+                return;
+            }
             EditEvent::Continue => return,
             EditEvent::Cancel => workspace.cancel_edit(),
             EditEvent::Submit => {
@@ -317,6 +324,9 @@ impl FileTree {
                 self.width = Some(width.min(self.max_width).max(MIN_WIDTH));
             }
             Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
+            Action::Search => self.start_search(editor),
+            Action::NextMatch => self.find_next(Direction::Forward, editor),
+            Action::PreviousMatch => self.find_next(Direction::Backward, editor),
             Action::OpenExternally => {
                 if let Some(path) = self.workspace.as_ref().and_then(Workspace::cursor_path) {
                     match Url::from_file_path(&path) {
@@ -336,6 +346,109 @@ impl FileTree {
         }
     }
 
+    /// Opens the search prompt, collecting the files to search in the background.
+    fn start_search(&mut self, editor: &Editor) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        workspace.start_search(editor);
+        let (root, generation, sort) =
+            (workspace.root.clone(), workspace.generation, workspace.sort);
+        let config = editor.config().file_picker.clone();
+        in_background(
+            move || Candidates::collect(&root, &config, sort),
+            move |file_tree, candidates, editor| {
+                let Some(workspace) = file_tree.workspace_of(generation) else {
+                    return;
+                };
+                workspace.search.candidates = Some(Arc::new(candidates));
+                file_tree.search_incrementally(editor);
+            },
+        );
+    }
+
+    /// Moves the cursor to the first match of the query being typed after where it started.
+    fn search_incrementally(&mut self, editor: &mut Editor) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let (Some(edit), Some(origin)) = (&workspace.edit, &workspace.search.origin) else {
+            return;
+        };
+        let query = edit.prompt.line().clone();
+        let (from, from_dir) = (origin.path.clone(), origin.is_dir);
+        if query.trim().is_empty() {
+            workspace.search.generation += 1;
+            workspace.search.hit = None;
+            workspace
+                .reveals
+                .retain(|reveal| reveal.purpose != Purpose::Match);
+            workspace.cursor = origin.cursor;
+            self.update(editor);
+            return;
+        }
+        self.find(query, from, from_dir, Direction::Forward, true, editor);
+    }
+
+    /// Moves the cursor to the next or previous match of the last search.
+    fn find_next(&mut self, direction: Direction, editor: &mut Editor) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let Some(index) = workspace.rows.index_of(workspace.cursor) else {
+            return;
+        };
+        let row = &workspace.rows[index];
+        let from_dir = workspace.tree.node(row.node).kind == Kind::Directory;
+        let (query, from) = (workspace.search.query.clone(), row.path.clone());
+        if !query.is_empty() {
+            self.find(query, from, from_dir, direction, false, editor);
+        }
+    }
+
+    /// Looks for `query` in the background. An `incremental` search moves the cursor back where
+    /// it started when nothing matches; otherwise the search reports it like the editor's.
+    fn find(
+        &mut self,
+        query: String,
+        from: PathBuf,
+        from_dir: bool,
+        direction: Direction,
+        incremental: bool,
+        editor: &mut Editor,
+    ) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        // Without candidates yet, the search runs once they are collected.
+        let Some(candidates) = workspace.search.candidates.clone() else {
+            return;
+        };
+        workspace.search.generation += 1;
+        let (generation, search) = (workspace.generation, workspace.search.generation);
+        in_background(
+            move || candidates.find(&query, &from, from_dir, direction),
+            move |file_tree, hit, editor| {
+                let Some(workspace) = file_tree
+                    .workspace_of(generation)
+                    .filter(|workspace| workspace.search.generation == search)
+                else {
+                    return;
+                };
+                workspace.found(hit, incremental, editor);
+                file_tree.update(editor);
+            },
+        );
+        self.update(editor);
+    }
+
+    /// The workspace, if it is still the one of `generation`.
+    fn workspace_of(&mut self, generation: u64) -> Option<&mut Workspace> {
+        self.workspace
+            .as_mut()
+            .filter(|workspace| workspace.generation == generation)
+    }
+
     pub fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         let config = cx.editor.config();
         let lister = self.lister(cx.editor);
@@ -345,6 +458,14 @@ impl FileTree {
         };
         workspace.update(&lister, &config.file_tree);
 
+        // The search line goes above the rows.
+        let placement = workspace.edit.as_ref().map(Edit::placement);
+        let (top, area) = match placement {
+            Some(Placement::Top) if area.height > 1 => {
+                (Some(area.with_height(1)), area.clip_top(1))
+            }
+            _ => (None, area),
+        };
         let height = area.height as usize;
         workspace.height = height;
         if let Some(target) = workspace.scroll_to.take() {
@@ -360,6 +481,7 @@ impl FileTree {
 
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
+        let highlight = workspace.highlight();
         let edit_area = Scene {
             tree: &workspace.tree,
             rows: &workspace.rows,
@@ -373,11 +495,14 @@ impl FileTree {
             guides: config.file_tree.guides,
             side: config.file_tree.side,
             edit: workspace.edit_row(),
+            highlight: highlight
+                .as_ref()
+                .map(|(index, chars)| (*index, chars.as_slice())),
         }
         .render(area, surface);
 
         // A panel fitted to its rows leaves little room to type in.
-        let edit_area = edit_area.map(|edit_area| {
+        let edit_area = top.or(edit_area).map(|edit_area| {
             let width = edit_area
                 .width
                 .max(MIN_EDIT_WIDTH)
@@ -396,7 +521,7 @@ impl FileTree {
             .workspace
             .as_mut()
             .and_then(|workspace| workspace.edit.as_mut())
-            .filter(|edit| !edit.is_inline())
+            .filter(|edit| edit.placement() == Placement::CommandLine)
         {
             edit.prompt.render(area, surface, cx);
         }
@@ -408,7 +533,9 @@ impl FileTree {
             return (None, CursorKind::Hidden);
         };
         match (&workspace.edit, workspace.edit_area) {
-            (Some(edit), _) if !edit.is_inline() => edit.prompt.cursor(area, editor),
+            (Some(edit), _) if edit.placement() == Placement::CommandLine => {
+                edit.prompt.cursor(area, editor)
+            }
             (Some(edit), Some(edit_area)) => edit.prompt.cursor(edit_area, editor),
             _ => (None, CursorKind::Hidden),
         }
@@ -473,8 +600,8 @@ struct Workspace {
     smooth_scroll: SmoothOffset,
     /// Whether the first listing has arrived; the panel is only shown after that.
     ready: bool,
-    /// Paths to reveal once their directories are listed, and whether to move the cursor there.
-    reveals: Vec<(PathBuf, bool)>,
+    /// Paths to reveal once their directories are listed.
+    reveals: Vec<PendingReveal>,
     /// A node to scroll into view once the panel height is known.
     scroll_to: Option<NodeId>,
     /// The number of rows the panel showed last.
@@ -483,6 +610,47 @@ struct Workspace {
     edit: Option<Edit>,
     /// Where the line of an inline edit was drawn last.
     edit_area: Option<Rect>,
+    search: Search,
+}
+
+/// A path to reveal once the directories leading to it are listed.
+struct PendingReveal {
+    path: PathBuf,
+    purpose: Purpose,
+}
+
+/// What a path is revealed for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Show,
+    /// Moving the cursor there.
+    Cursor,
+    /// Moving the cursor to a match of the search.
+    Match,
+}
+
+/// The search of the tree.
+#[derive(Default)]
+struct Search {
+    /// The files to search, once collected.
+    candidates: Option<Arc<Candidates>>,
+    /// The last query searched for, for `n` and `N`.
+    query: String,
+    /// Where the cursor was when the query being typed was started.
+    origin: Option<Origin>,
+    /// Tells the latest search from older ones still running.
+    generation: u64,
+    /// The latest match of the query being typed.
+    hit: Option<Hit>,
+}
+
+struct Origin {
+    cursor: NodeId,
+    path: PathBuf,
+    is_dir: bool,
+    start: usize,
+    /// The directories that were expanded, so the search can collapse the ones it expanded.
+    expanded: HashSet<NodeId>,
 }
 
 /// Whether the tree keeps its focus after an action.
@@ -527,7 +695,97 @@ impl Workspace {
             height: 0,
             edit: None,
             edit_area: None,
+            search: Search::default(),
         }
+    }
+
+    fn start_search(&mut self, editor: &Editor) {
+        let Some(index) = self.rows.index_of(self.cursor) else {
+            return;
+        };
+        let row = &self.rows[index];
+        self.search = Search {
+            origin: Some(Origin {
+                cursor: self.cursor,
+                path: row.path.clone(),
+                is_dir: self.tree.node(row.node).kind == Kind::Directory,
+                start: self.start,
+                expanded: self.tree.expanded_directories().collect(),
+            }),
+            query: std::mem::take(&mut self.search.query),
+            ..Search::default()
+        };
+        self.edit = Some(Edit::new(EditKind::Search, String::new(), editor));
+    }
+
+    /// Moves the cursor to the result of a search.
+    fn found(&mut self, hit: Option<Hit>, incremental: bool, editor: &mut Editor) {
+        self.reveals
+            .retain(|reveal| reveal.purpose != Purpose::Match);
+        match &hit {
+            Some(hit) => {
+                self.reveal(hit.path.clone(), Purpose::Match);
+                if hit.wrapped && !incremental {
+                    editor.set_status("Wrapped around file tree");
+                }
+            }
+            None if incremental => {
+                if let Some(origin) = &self.search.origin {
+                    self.cursor = origin.cursor;
+                }
+            }
+            None => editor.set_error("No more matches"),
+        }
+        if incremental {
+            self.search.hit = hit;
+        }
+    }
+
+    /// Ends the query being typed. Unless it is `kept`, the cursor and the scroll position go
+    /// back to where they were; directories the search expanded collapse again, but for the
+    /// ones leading to a kept cursor.
+    fn finish_search(&mut self, kept: bool) {
+        let Some(origin) = self.search.origin.take() else {
+            return;
+        };
+        self.search.hit = None;
+        if !kept {
+            self.search.generation += 1;
+            self.reveals
+                .retain(|reveal| reveal.purpose != Purpose::Match);
+            if self.tree.contains(origin.cursor) {
+                self.cursor = origin.cursor;
+            }
+            self.start = origin.start;
+        }
+        let expanded: Vec<_> = self
+            .tree
+            .expanded_directories()
+            .filter(|dir| !origin.expanded.contains(dir))
+            .collect();
+        for dir in expanded {
+            let keep =
+                kept && self.tree.contains(self.cursor) && self.tree.is_within(self.cursor, dir);
+            if self.tree.contains(dir) && !keep {
+                self.tree.collapse(dir);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// The row of the latest match and the characters of its label that matched.
+    fn highlight(&self) -> Option<(usize, Vec<usize>)> {
+        let hit = self.search.hit.as_ref()?;
+        let index = self.rows.index_of(self.tree.find(&hit.path)?)?;
+        // The label is the end of the matched path.
+        let path_len = hit.path.to_string_lossy().chars().count();
+        let offset = path_len - self.rows[index].label.chars().count();
+        let chars = hit
+            .indices
+            .iter()
+            .filter_map(|&i| (i as usize).checked_sub(offset))
+            .collect();
+        Some((index, chars))
     }
 
     /// The row the cursor is on: the input row while a new entry is named.
@@ -556,7 +814,7 @@ impl Workspace {
             EditKind::Create { directory, .. } => {
                 (self.rows.input()?, *directory || name.ends_with('/'))
             }
-            EditKind::Move { .. } | EditKind::Delete { .. } => return None,
+            EditKind::Move { .. } | EditKind::Delete { .. } | EditKind::Search => return None,
         };
         Some(EditRow {
             index,
@@ -569,6 +827,7 @@ impl Workspace {
         if self.edit.take().is_some() {
             self.dirty = true;
         }
+        self.finish_search(false);
     }
 
     /// Runs a file operation on the cursor's entry or starts typing the name it needs.
@@ -651,6 +910,14 @@ impl Workspace {
     /// Carries out a finished edit.
     fn submit(&mut self, edit: Edit, editor: &mut Editor) -> Focus {
         let line = edit.prompt.line();
+        if let EditKind::Search = edit.kind {
+            let kept = !line.trim().is_empty();
+            if kept {
+                self.search.query = line.clone();
+            }
+            self.finish_search(kept);
+            return Focus::Keep;
+        }
         if line.trim().is_empty() {
             return Focus::Keep;
         }
@@ -692,6 +959,7 @@ impl Workspace {
                 }
                 return Focus::Keep;
             }
+            EditKind::Search => return Focus::Keep,
         };
         match result {
             Ok((from, to)) => {
@@ -715,7 +983,7 @@ impl Workspace {
             if let Some(parent) = to.parent() {
                 self.tree.invalidate(parent);
             }
-            self.reveal(to.to_path_buf(), true);
+            self.reveal(to.to_path_buf(), Purpose::Cursor);
         }
     }
 
@@ -807,9 +1075,9 @@ impl Workspace {
     }
 
     /// Expands the directories leading to `path` (relative to the root), listing them first if
-    /// needed. With `cursor` the cursor moves there once it is revealed.
-    fn reveal(&mut self, path: PathBuf, cursor: bool) {
-        self.reveals.push((path, cursor));
+    /// needed, for `purpose`.
+    fn reveal(&mut self, path: PathBuf, purpose: Purpose) {
+        self.reveals.push(PendingReveal { path, purpose });
     }
 
     /// Brings everything derived from the tree up to date: pending reveals, listings, rows.
@@ -826,10 +1094,10 @@ impl Workspace {
 
         let mut unlisted = Vec::new();
         let mut revealed = false;
-        self.reveals
-            .retain(|(path, cursor)| match self.tree.reveal(path) {
+        self.reveals.retain(
+            |PendingReveal { path, purpose }| match self.tree.reveal(path) {
                 Reveal::Found(node) => {
-                    if *cursor {
+                    if *purpose != Purpose::Show {
                         self.cursor = node;
                         self.scroll_to = Some(node);
                     }
@@ -849,7 +1117,8 @@ impl Workspace {
                     true
                 }
                 Reveal::Missing => false,
-            });
+            },
+        );
         self.dirty |= revealed;
 
         let requests = self.tree.take_listing_requests();
@@ -957,8 +1226,8 @@ impl Workspace {
             .query(&helix_loader::find_workspace_in(&root).0, TrustQuery::Git)
             .is_trusted();
         let providers = editor.diff_providers.clone();
-        tokio::spawn(async move {
-            let statuses = tokio::task::spawn_blocking(move || {
+        in_background(
+            move || {
                 let options = StatusOptions {
                     staged: true,
                     ignored: true,
@@ -972,19 +1241,28 @@ impl Workspace {
                     true
                 });
                 GitStatuses::new(&root, changes.into_inner())
-            })
-            .await;
-            let Ok(statuses) = statuses else {
-                return;
-            };
-            job::dispatch(move |editor, compositor| {
-                if let Some(file_tree) = file_tree(compositor) {
-                    file_tree.apply_git(generation, statuses, editor);
-                }
-            })
-            .await;
-        });
+            },
+            move |file_tree, statuses, editor| file_tree.apply_git(generation, statuses, editor),
+        );
     }
+}
+
+/// Runs `work` on a blocking thread, then `apply` with its result on the file tree.
+fn in_background<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut FileTree, T, &mut Editor) + Send + 'static,
+) {
+    tokio::spawn(async move {
+        let Ok(result) = tokio::task::spawn_blocking(work).await else {
+            return;
+        };
+        job::dispatch(move |editor, compositor| {
+            if let Some(file_tree) = file_tree(compositor) {
+                apply(file_tree, result, editor);
+            }
+        })
+        .await;
+    });
 }
 
 /// The path of the focused buffer relative to `root`, if it lies below it.
@@ -1130,6 +1408,51 @@ mod tests {
         assert!(!workspace.tree.node(src).expanded && !workspace.tree.node(main).expanded);
         workspace.rebuild_rows();
         assert_eq!(cursor_label(&workspace), "src/main");
+    }
+
+    /// Starts a search at the root, then expands `docs` and moves the cursor into it, as a match
+    /// would.
+    fn searched_into_docs() -> Workspace {
+        let mut workspace = workspace();
+        let root = workspace.tree.root();
+        workspace.search.origin = Some(Origin {
+            cursor: root,
+            path: PathBuf::new(),
+            is_dir: true,
+            start: 0,
+            expanded: workspace.tree.expanded_directories().collect(),
+        });
+        let docs = workspace.tree.find("docs".as_ref()).unwrap();
+        workspace.tree.expand(docs);
+        workspace
+            .tree
+            .apply_listing(docs, Some(vec![file("guide.md")]));
+        workspace.cursor = workspace.tree.find("docs/guide.md".as_ref()).unwrap();
+        workspace
+    }
+
+    #[test]
+    fn a_cancelled_search_goes_back_where_it_started() {
+        let mut workspace = searched_into_docs();
+        workspace.finish_search(false);
+        let docs = workspace.tree.find("docs".as_ref()).unwrap();
+        assert!(!workspace.tree.node(docs).expanded);
+        assert_eq!(workspace.cursor, workspace.tree.root());
+    }
+
+    #[test]
+    fn a_finished_search_keeps_the_way_to_its_match() {
+        let mut workspace = searched_into_docs();
+        let src = workspace.tree.find("src".as_ref()).unwrap();
+        workspace.tree.expand(src);
+        workspace.finish_search(true);
+        let docs = workspace.tree.find("docs".as_ref()).unwrap();
+        assert!(workspace.tree.node(docs).expanded);
+        assert!(!workspace.tree.node(src).expanded);
+        assert_eq!(
+            workspace.cursor,
+            workspace.tree.find("docs/guide.md".as_ref()).unwrap()
+        );
     }
 
     #[test]

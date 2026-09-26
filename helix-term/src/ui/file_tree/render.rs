@@ -52,6 +52,7 @@ pub struct Styles {
     conflict: Style,
     track: Style,
     thumb: Style,
+    matched: Style,
 }
 
 impl Styles {
@@ -94,6 +95,10 @@ impl Styles {
             conflict: theme.get("diff.delta.conflict"),
             track,
             thumb: track.fg(theme.get("ui.menu.scroll").fg.unwrap_or(Color::Reset)),
+            // Like the matches of the picker.
+            matched: theme
+                .try_get_exact("ui.file-tree.match")
+                .unwrap_or_else(|| theme.get("special").add_modifier(Modifier::BOLD)),
         }
     }
 
@@ -160,6 +165,8 @@ pub struct Scene<'a> {
     pub guides: bool,
     pub side: FileTreeSide,
     pub edit: Option<EditRow<'a>>,
+    /// A row and the characters of its label that match the search, in order.
+    pub highlight: Option<(usize, &'a [usize])>,
 }
 
 impl Scene<'_> {
@@ -298,8 +305,13 @@ impl Scene<'_> {
         } else if !root {
             parts.push((" ", row_style));
         }
-        if edit.is_none() {
-            parts.push((&row.label, label_style));
+        match (edit, self.highlight) {
+            (Some(_), _) => {}
+            (None, Some((highlighted, chars))) if highlighted == index => {
+                let matched = label_style.patch(styles.matched);
+                push_highlighted(&mut parts, &row.label, chars, label_style, matched);
+            }
+            (None, _) => parts.push((&row.label, label_style)),
         }
 
         let last = area.right() - 1;
@@ -382,6 +394,31 @@ impl Scene<'_> {
     }
 }
 
+/// Pushes `label` in runs of `style`, with the characters at the indices `chars` in `matched`.
+fn push_highlighted<'a>(
+    parts: &mut Vec<(&'a str, Style)>,
+    label: &'a str,
+    chars: &[usize],
+    style: Style,
+    matched: Style,
+) {
+    let mut run: Option<(usize, bool)> = None;
+    for (i, (byte, _)) in label.char_indices().enumerate() {
+        let highlighted = chars.binary_search(&i).is_ok();
+        match run {
+            Some((_, current)) if current == highlighted => {}
+            Some((start, current)) => {
+                parts.push((&label[start..byte], if current { matched } else { style }));
+                run = Some((byte, highlighted));
+            }
+            None => run = Some((byte, highlighted)),
+        }
+    }
+    if let Some((start, current)) = run {
+        parts.push((&label[start..], if current { matched } else { style }));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -439,6 +476,7 @@ mod tests {
             guides: true,
             side,
             edit: None,
+            highlight: None,
         }
         .render(area, &mut surface);
         lines(&surface)
@@ -472,6 +510,22 @@ mod tests {
         assert_eq!(
             render(16, 3, false, FileTreeSide::Left)[2],
             "  │   └── gui…+│"
+        );
+    }
+
+    #[test]
+    fn matches_are_highlighted_in_runs() {
+        let (plain, matched) = (Style::default(), Style::default().fg(Color::Red));
+        let mut parts = Vec::new();
+        push_highlighted(&mut parts, "main.rs", &[0, 1, 5], plain, matched);
+        assert_eq!(
+            parts,
+            [
+                ("ma", matched),
+                ("in.", plain),
+                ("r", matched),
+                ("s", plain)
+            ]
         );
     }
 
