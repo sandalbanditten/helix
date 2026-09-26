@@ -667,6 +667,33 @@ enable = true
 trigger-length = 4
 ```
 
+### `[editor.spelling]` Section
+
+Options for spell checking. See the [spell checking](./spell-checking.md) chapter for the full
+feature.
+
+| Key               | Description                                                                          | Default |
+| ---               | ---                                                                                  | ---     |
+| `languages`       | The dictionaries to check documents against, e.g. `["en_US"]`. Empty disables spell checking | `[]`    |
+| `words`           | Extra accepted words, matched case-insensitively                                     | `[]`    |
+| `ignore-regexes`  | Tokens matching any of these regexes are not checked, e.g. `"^[A-Z0-9_]+$"`          | `[]`    |
+| `min-word-length` | Tokens shorter than this are not checked                                             | `1`     |
+| `messages`        | Whether misspellings are shown like hint diagnostics rather than only underlined     | `false` |
+| `detect`          | Whether each document is checked with the one of `languages` it is written in        | `false` |
+
+A language's `spelling` settings in `languages.toml` layer over these: `languages`,
+`min-word-length`, `messages` and `detect` replace the global value, while `words` and
+`ignore-regexes` are added to the global lists.
+
+Example:
+
+```toml
+[editor.spelling]
+languages = ["en_US"]
+words = ["Helix", "tokio"]
+ignore-regexes = ["^[A-Z0-9_]+$"]
+```
+
 ### `[editor.workspace-trust]` Section
 
 Controls implicit workspace trust. See the [workspace

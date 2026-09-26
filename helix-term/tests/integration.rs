@@ -21,5 +21,6 @@ mod test {
     mod folding;
     mod movement;
     mod smooth_scroll;
+    mod spelling;
     mod splits;
 }

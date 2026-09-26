@@ -16,6 +16,7 @@
   - [Command line](./command-line.md)
   - [Commands](./commands.md)
   - [Language servers](./lsp.md)
+  - [Spell checking](./spell-checking.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)
@@ -37,3 +38,4 @@
   - [Adding rainbow bracket queries](./guides/rainbow_bracket_queries.md)
   - [Adding breadcrumb queries](./guides/breadcrumbs.md)
   - [Adding fold queries](./guides/folding.md)
+  - [Adding spellcheck queries](./guides/spellcheck.md)

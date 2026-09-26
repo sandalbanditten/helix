@@ -314,6 +314,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `D`     | Open workspace diagnostics picker (**LSP**)                             | `workspace_diagnostics_picker`             |
 | `r`     | Rename symbol (**LSP**)                                                 | `rename_symbol`                            |
 | `a`     | Apply code action (**LSP**)                                             | `code_action`                              |
+| `A`     | Fix misspelling under cursor                                            | `fix_spelling`                             |
 | `h`     | Select symbol references (**LSP**)                                      | `select_references_to_symbol_under_cursor` |
 | `'`     | Open last fuzzy picker                                                  | `last_picker`                              |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |
@@ -371,6 +372,8 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 | `[d`     | Go to previous diagnostic (**LSP**)          | `goto_prev_diag`        |
 | `]D`     | Go to last diagnostic in document (**LSP**)  | `goto_last_diag`        |
 | `[D`     | Go to first diagnostic in document (**LSP**) | `goto_first_diag`       |
+| `]s`     | Go to next misspelling                       | `goto_next_spelling`    |
+| `[s`     | Go to previous misspelling                   | `goto_prev_spelling`    |
 | `]f`     | Go to next function (**TS**)                 | `goto_next_function`    |
 | `[f`     | Go to previous function (**TS**)             | `goto_prev_function`    |
 | `]t`     | Go to next type definition (**TS**)          | `goto_next_class`       |
