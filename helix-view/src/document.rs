@@ -40,8 +40,12 @@ use helix_core::{
     history::{History, State, UndoKind},
     indent::{auto_detect_indent_style, IndentStyle},
     line_ending::auto_detect_line_ending,
-    syntax::{self, config::LanguageConfiguration},
-    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
+    syntax::{
+        self,
+        config::{LanguageConfiguration, SpellingConfig},
+    },
+    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, SpellingLanguage,
+    Syntax, Transaction,
 };
 
 use crate::{
@@ -175,6 +179,13 @@ pub struct Document {
     /// Current indent style.
     pub indent_style: IndentStyle,
     editor_config: EditorConfig,
+    /// The languages (dictionaries) to spell check this buffer against, or empty to disable spell
+    /// checking. A word is flagged only when every dictionary rejects it. Resolved by
+    /// [`Document::detect_spelling`].
+    spelling_languages: Vec<SpellingLanguage>,
+    /// A manual `:set-spelling-language` choice, which takes precedence over `.editorconfig` and
+    /// the configuration. An empty `Vec` forces spell checking off.
+    spelling_language_override: Option<Vec<SpellingLanguage>>,
 
     /// The document's default line ending.
     pub line_ending: LineEnding,
@@ -731,7 +742,7 @@ impl Document {
         let changes = ChangeSet::new(text.slice(..));
         let old_state = None;
 
-        Self {
+        let mut doc = Self {
             id: DocumentId::default(),
             active_snippet: None,
             path: None,
@@ -746,6 +757,8 @@ impl Document {
             view_data: Default::default(),
             indent_style: DEFAULT_INDENT,
             editor_config: EditorConfig::default(),
+            spelling_languages: Vec::new(),
+            spelling_language_override: None,
             line_ending,
             restore_cursor: false,
             syntax: None,
@@ -777,7 +790,9 @@ impl Document {
             previous_diagnostic_ids: HashMap::new(),
             pull_diagnostic_controller: TaskController::new(),
             document_link_controller: TaskController::new(),
-        }
+        };
+        doc.detect_spelling();
+        doc
     }
 
     pub fn default(
@@ -1241,6 +1256,39 @@ impl Document {
         {
             self.line_ending = line_ending;
         }
+    }
+
+    /// The spell checking configuration: `[editor.spelling]` with the language's `spelling` layered
+    /// over it.
+    pub fn spelling_config(&self) -> SpellingConfig {
+        self.config.load().spelling.merged(
+            self.language_config()
+                .and_then(|config| config.spelling.as_ref()),
+        )
+    }
+
+    /// Resolves the languages this document is spell checked against, in precedence order: a
+    /// manual `:set-spelling-language` override, then the `.editorconfig` `spelling_language`,
+    /// then the configuration. Re-run when any of these change.
+    pub fn detect_spelling(&mut self) {
+        self.spelling_languages = if let Some(languages) = &self.spelling_language_override {
+            languages.clone()
+        } else if let Some(language) = &self.editor_config.spelling_language {
+            vec![language.clone()]
+        } else {
+            self.spelling_config().languages().to_vec()
+        };
+    }
+
+    /// The languages this document is spell checked against; empty when spell checking is off.
+    pub fn spelling_languages(&self) -> &[SpellingLanguage] {
+        &self.spelling_languages
+    }
+
+    /// Overrides the spelling languages of the configuration and `.editorconfig`, or stops
+    /// overriding them with `None`. Takes effect at the next [`Document::detect_spelling`].
+    pub fn set_spelling_language_override(&mut self, languages: Option<Vec<SpellingLanguage>>) {
+        self.spelling_language_override = languages;
     }
 
     pub fn detect_editor_config(&mut self) {
@@ -2331,6 +2379,27 @@ impl Document {
         self.extend_diagnostics(diagnostics);
     }
 
+    /// Replaces `provider`'s diagnostics that overlap any of `regions` with `diagnostics`, leaving
+    /// every other diagnostic untouched.
+    ///
+    /// This is the incremental counterpart to [`Document::replace_diagnostics`] for a provider that
+    /// re-examined only parts of the document, such as the areas around an edit. `regions` are
+    /// char ranges in the current text, and `diagnostics` are expected to fall within them.
+    pub fn splice_diagnostics(
+        &mut self,
+        diagnostics: impl IntoIterator<Item = Diagnostic>,
+        regions: &[std::ops::Range<usize>],
+        provider: &DiagnosticProvider,
+    ) {
+        self.diagnostics.retain(|d| {
+            &d.provider != provider
+                || !regions
+                    .iter()
+                    .any(|region| d.range.start < region.end && region.start < d.range.end)
+        });
+        self.extend_diagnostics(diagnostics);
+    }
+
     fn extend_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
         self.diagnostics.extend(diagnostics);
         self.diagnostics.sort_by_key(|diagnostic| {
@@ -2679,6 +2748,48 @@ mod test {
 
         doc.replace_lsp_diagnostics([]);
         assert_eq!(providers(&doc), [DiagnosticProvider::Spelling]);
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn splice_replaces_overlapping_diagnostics_of_the_provider() {
+        let lsp = DiagnosticProvider::Lsp {
+            server_id: Default::default(),
+            identifier: None,
+        };
+        let spelling = DiagnosticProvider::Spelling;
+        let mut doc = Document::from(
+            Rope::from("helo wrld agian"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let ranges = |doc: &Document| -> Vec<_> {
+            doc.diagnostics()
+                .iter()
+                .map(|diag| (diag.range.start, diag.range.end, diag.provider.clone()))
+                .collect()
+        };
+        doc.replace_diagnostics(
+            [
+                diagnostic(0, 4, spelling.clone()),
+                diagnostic(10, 15, spelling.clone()),
+            ],
+            &[],
+            &spelling,
+        );
+        doc.replace_diagnostics([diagnostic(5, 9, lsp.clone())], &[], &lsp);
+
+        // Re-checking around "wrld" drops nothing but the spelling diagnostics within the region.
+        doc.splice_diagnostics([diagnostic(5, 9, spelling.clone())], &[3..9], &spelling);
+        assert_eq!(
+            ranges(&doc),
+            [
+                (5, 9, lsp.clone()),
+                (5, 9, spelling.clone()),
+                (10, 15, spelling.clone()),
+            ]
+        );
     }
 
     #[test]

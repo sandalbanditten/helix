@@ -2430,6 +2430,48 @@ fn language(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
     let diagnostics =
         Editor::doc_diagnostics(&cx.editor.language_servers, &cx.editor.diagnostics, doc);
     doc.replace_lsp_diagnostics(diagnostics);
+    cx.editor.refresh_spelling(id);
+    Ok(())
+}
+
+fn spelling_language(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    if args.is_empty() {
+        let languages = doc!(cx.editor).spelling_languages();
+        let status = if languages.is_empty() {
+            "off".to_string()
+        } else {
+            languages
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        cx.editor.set_status(status);
+        return Ok(());
+    }
+
+    // `off` overrides the configuration with no languages, which turns spell checking off.
+    let languages = if args.len() == 1 && &args[0] == "off" {
+        Vec::new()
+    } else {
+        args.iter()
+            .map(|arg| arg.parse())
+            .collect::<Result<_, _>>()?
+    };
+    // Choosing a language explicitly tries to load its dictionary again if that failed before.
+    cx.editor.handlers.spelling.retry_failed_dictionaries();
+    let doc = doc_mut!(cx.editor);
+    doc.set_spelling_language_override(Some(languages));
+    let id = doc.id();
+    cx.editor.refresh_spelling(id);
     Ok(())
 }
 
@@ -3804,6 +3846,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::positional(&[completers::language]),
         signature: Signature {
             positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "set-spelling-language",
+        aliases: &["spelling"],
+        doc: "Set the spell checking languages of current buffer (`off` disables, show current if no value specified).",
+        fun: spelling_language,
+        completer: CommandCompleter::all(completers::spelling_language),
+        signature: Signature {
+            positionals: (0, None),
             ..Signature::DEFAULT
         },
     },

@@ -48,9 +48,11 @@ use helix_core::{
     diagnostic::DiagnosticProvider,
     syntax::{
         self,
-        config::{AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap},
+        config::{
+            AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap, SpellingConfig,
+        },
     },
-    Change, LineEnding, Position, Range, Selection, Uri, NATIVE_LINE_ENDING,
+    Change, LineEnding, Position, Range, Selection, SpellingLanguage, Uri, NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
@@ -572,6 +574,9 @@ pub struct Config {
     /// Whether to read settings from [EditorConfig](https://editorconfig.org) files. Defaults to
     /// `true`.
     pub editor_config: bool,
+    /// Spell checking: which dictionaries to use and how to filter tokens. Off by default (no
+    /// dictionaries); languages can override this in `languages.toml`.
+    pub spelling: SpellingConfig,
     /// Whether to render rainbow colors for matching brackets. Defaults to `false`.
     pub rainbow_brackets: bool,
     /// Whether to enable Kitty Keyboard Protocol
@@ -1517,6 +1522,7 @@ impl Default for Config {
             end_of_line_diagnostics: DiagnosticFilter::Enable(Severity::Hint),
             clipboard_provider: ClipboardProvider::default(),
             editor_config: true,
+            spelling: SpellingConfig::default(),
             rainbow_brackets: false,
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
@@ -1624,6 +1630,9 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
+
+    /// Loaded spell checking dictionaries keyed by language.
+    pub dictionaries: HashMap<SpellingLanguage, Arc<parking_lot::RwLock<crate::Dictionary>>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1749,6 +1758,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
+            dictionaries: HashMap::new(),
         }
     }
 
@@ -2126,6 +2136,7 @@ impl Editor {
         let diagnostics = Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, doc);
         doc.replace_lsp_diagnostics(diagnostics);
         doc.reset_all_inlay_hints();
+        self.refresh_spelling(doc_id);
     }
 
     /// Launch a language server for a given document

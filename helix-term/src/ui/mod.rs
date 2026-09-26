@@ -566,6 +566,29 @@ pub mod completers {
             .collect()
     }
 
+    pub fn spelling_language(_editor: &Editor, input: &str) -> Vec<Completion> {
+        // The dictionaries in the runtime directories, plus `off` to disable spell checking.
+        let mut languages: Vec<String> = helix_loader::runtime_dirs()
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir.join("dictionaries")).ok())
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        languages.sort();
+        languages.dedup();
+
+        let candidates = languages
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once("off"));
+        fuzzy_match(input, candidates, false)
+            .into_iter()
+            .map(|(name, _)| ((0..), name.to_owned().into()))
+            .collect()
+    }
+
     pub fn lsp_workspace_command(editor: &Editor, input: &str) -> Vec<Completion> {
         let commands = doc!(editor)
             .language_servers_with_feature(LanguageServerFeature::WorkspaceCommand)
