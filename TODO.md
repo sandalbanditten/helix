@@ -8,70 +8,25 @@ Look online for examples of similar features and implementations.
 Ask when in doubt about specification or implementation, don't guess.
 Performance is very important, especially for large files, directories, and projects.
 
-## File Tree
-We want a filetree.
-It should be toggleable, configurable in `config.toml` (`[editor.file-tree]`), and be left (default) or right dockable.
-It should render and work much like `grove.hx` a steel plugin with (modified by me) source at `~/.local/share/steel/cogs/grove`.
-It should be idiomatic rust and helix-like, but as performant as possible.
-It should be able to use `LS_COLORS` like grove, and have the same feature-set.
-Like `grove` it should render the tree much like `eza -aoTg`.
-The theming should be helix-like: the pane separator is a `│` rail in `ui.window` (like split separators) that carries the scrollbar thumb in `ui.menu.scroll` (like popups), a half block `▌`/`▐` on the tree's side of the separator.
-The panel starts at the top row (the bufferline only spans the editor columns) and ends _above_ the statusline, so the bottom statusline and the command line continue to span the entire width of helix' viewport.
-
-Consider these wanted features when making design and implementation decisions:
-
-It should preserve the following features from `grove`:
-- Opening `helix` on multiple buffers should have the relevant directories expanded on start.
-- A fit-width `=` keybinding (to fit the longest file exactly in the view), like my local changed `grove`
-  - On startup (first time the tree is shown) the viewport width should always be fitted
-- `+`/`-` for growing/shrinking the view.
-- The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
-  - `ls-colors = true` is the default: entries are colored like `eza` shows them, with the colors of GNU `ls` when neither variable is set.
-  - The `▸`/`▾` marks of collapsed and expanded directories are configurable: `expanders = true` (default), `false` for none, or two characters like `["+", "-"]`.
-  - The cursor row keeps its background and colors and only turns bold (next to its `>` mark, which has the same color on every row); the focused buffer's file keeps the color of its bufferline tab under it.
-  - Pinned ancestor rows keep the regular background.
-  - Icons are `eza`'s, except that an expanded directory always shows the open folder `` (U+F115), even one with an icon of its own; collapsed directories keep theirs.
-- Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
-- The rest of grove: git marks, unsaved `+` marks, icons, guides, pinned ancestor rows, splits (`C-s`/`C-v`), delete (`d`), mouse support.
-  - `d` asks on the command line: `Delete <path>? (y/n):`, where `y` and Enter delete.
-- Prompts and messages are styled like helix's: prompt labels are lowercase like `rename-to:` (`move-to:`), sentences start with a capital letter.
-
-Expanding on `grove` it should have the following features:
-- Trying to go up from the top item should cycle you to the bottom and vice-versa.
-- The view should be scrollable with <C-d>, <C-u>, and `zz`/`zb`/`zt` like for example LSP-popups.
-- Add a viewport only `?` keybind to list possible keybinds in the viewport
-- `enter` opens a file in a buffer (and toggles a directory), `o` runs `xdg-open` on the entry (files and directories) and says so in the status line. `space` is not bound in the tree.
-- Add an element showing which of the files currently are open in different buffers, with a differently colored `*` to the one showing the currently _focused_ buffer.
-  - The `*` of a buffer that is open but not focused has the color of the guides and the `▸`/`▾` marks.
-- The keybinds to toggle and focus it should be configurable: commands `focus_file_tree` (default `space e`) and `toggle_file_tree` (default `space E`).
-  - Toggle switches between "always shown" and "shown only while focused". Focusing a hidden tree shows it until focus leaves it.
-- While the tree is focused, a key it does not bind returns focus to the editor and runs there (the toggle/focus commands still work from the tree).
-- Add a config option for when to start with the file tree open:
-  - Never (`"never"`, default)
-  - Always (`"always"`)
-  - On opening helix on multiple buffers (`"multiple"`: two or more files on the command line)
-  - `hx <dir>` shows the tree (unfocused) and still opens the file picker.
-- For renaming files we want three keybinds:
-  - `r` to change just the name and extension of the file, e.g. `r` on `~/Code/test/src/test.rs` should expose only `test.rs` for editing and change only that. The view for this should be inline in the viewport.
-  - `R` to change the path after the workspace, e.g. `R` on `~/Code/test/src/test.rs` should expose `src/test.rs`, in the bottom command-line prompt.
-  - `<C-r>` to change the _full_ path , e.g. `<C-r>` on `~/Code/test/src/test.rs` should expose `/home/<USER>/Code/test/src/test.rs`, in the bottom command-line prompt. Moves across filesystems fall back to copy+delete.
-  - Open buffers follow the rename.
-- `a` creates a file and `A` a directory, inline: the input row appears inside the target directory (the parent of the file under the cursor, or the directory under the cursor, expanded). For `a` it sits after that directory's subdirectories and before its files; for `A` it sits above the existing subdirectories. With alphabetical sorting it is the first child.
-- There should be a fuzzy search, working much like helix' existing file picker.
-  - No file preview
-  - Reuse as much of the code for fuzzy searching and the like as possible.
-  - `/` opens the `file search:` prompt in the command line, like the editor's search. As you type, the cursor jumps to the next match below it in tree order (wrapping), expanding directories to reveal it, and the matched characters of every matching file in view are highlighted. `n`/`N` go to the next/previous match. The candidates are all workspace files (the file picker's walker).
-  - No reverse search (`?` is the help key) and no search config options for now.
-- External changes are picked up by watching the loaded directories and the repository's `.git` directory (`notify`).
-
-Note that all these keybinds, except for the two to toggle and focus the file tree should only work when the file tree is focused
-
 ## Spellchecking
-It should use helix/spellbook and work like `https://github.com/helix-editor/helix/pull/15910`.
-Implement that PR again, but into this extended fork.
+It should use `helix/spellbook` and work like `https://github.com/helix-editor/helix/pull/15910`.
+Implement that PR again, but into this personal extended fork.
 Make sure the implemented code is performant and idiomatic.
 Remember to focus on code reuse and clean architecture.
 Read through the design decisions by the original authors and consider them when planning/implementing.
+Reuse as much as possible from the PR.
+
+Consider these wanted features when making design and implementation decisions:
+- Like `https://mitos.computer/docs/spell-checking`, tree-sitter decides what is checked (`spellcheck.scm` with `@spell`/`@nospell`).
+  - Queries for Markdown, LaTeX and Typst, plus the PR's `comment` query (comments of languages that inject the comment grammar).
+  - Code blocks inside prose documents are skipped entirely, including comments of their injected language.
+  - Files without a syntax tree (plain text) are checked in full.
+- Spell checking is opt-in like in the PR: `[editor.spelling] languages`, a language's `spelling.languages`, `.editorconfig` `spelling_language`, or `:set-spelling-language`.
+- Danish spell checking must work: the tokenizer is not ASCII-only, and `da_DK` is bundled next to `en_US`.
+- Saving re-checks the whole document, in addition to the incremental re-checks while typing.
+- `[editor.spelling] messages = false` (default): findings get only the underline, `]s`/`[s` and code actions.
+  - `messages = true` shows them like any hint diagnostic (inline/end-of-line messages, gutter, statusline, pickers, `]d`/`[d`).
+- `]s`/`[s` go to the next/previous misspelling and behave like `]d`/`[d`.
 
 <!-- MAYBE -->
 ## Emacs' `dired` Style Feature
