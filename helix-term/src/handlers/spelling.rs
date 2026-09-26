@@ -644,18 +644,11 @@ pub(super) fn register_hooks(handlers: &Handlers) {
         Ok(())
     });
 
-    let tx = handlers.spelling.event_tx.clone();
     register_hook!(move |event: &mut DocumentDidSave<'_>| {
         // An edit can move text into or out of the checked regions beyond the window the
-        // incremental check covers, like an opening code fence, so saving checks in full.
-        if event
-            .editor
-            .documents
-            .get(&event.doc)
-            .is_some_and(|doc| !doc.spelling_languages().is_empty())
-        {
-            send_blocking(&tx, SpellingEvent::CheckDocument { doc: event.doc });
-        }
+        // incremental check covers, like an opening code fence, and change the detected language,
+        // so saving checks in full.
+        event.editor.refresh_spelling(event.doc);
         Ok(())
     });
 

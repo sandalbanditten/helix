@@ -40,6 +40,7 @@ use helix_core::{
     history::{History, State, UndoKind},
     indent::{auto_detect_indent_style, IndentStyle},
     line_ending::auto_detect_line_ending,
+    spelling,
     syntax::{
         self,
         config::{LanguageConfiguration, SpellingConfig},
@@ -1272,7 +1273,8 @@ impl Document {
 
     /// Resolves the spell checking settings of this document. The languages are, in precedence
     /// order, a manual `:set-spelling-language` override, the `.editorconfig`
-    /// `spelling_language`, or the configured ones. Re-run when any of these change.
+    /// `spelling_language`, or the configured ones, of which the detected language when `detect`
+    /// is set. Re-run when any of these or the text change.
     pub fn detect_spelling(&mut self) {
         let config = self.spelling_config();
         self.spelling_messages = config.messages();
@@ -1280,6 +1282,14 @@ impl Document {
             languages.clone()
         } else if let Some(language) = &self.editor_config.spelling_language {
             vec![language.clone()]
+        } else if config.detect() {
+            let loader = self.syn_loader.load();
+            spelling::detect_language(
+                config.languages(),
+                self.text.slice(..),
+                self.syntax.as_ref(),
+                &loader,
+            )
         } else {
             config.languages().to_vec()
         };

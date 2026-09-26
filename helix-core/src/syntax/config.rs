@@ -634,11 +634,16 @@ pub struct SpellingConfig {
     /// Whether misspellings are shown like other diagnostics (messages, gutter, statusline,
     /// pickers) rather than only underlined. Unset inherits; the global default is `false`.
     pub messages: Option<bool>,
+    /// Whether each document is checked against the one of `languages` its prose is detected to
+    /// be written in, rather than against all of them. Unset inherits; the global default is
+    /// `false`.
+    pub detect: Option<bool>,
 }
 
 impl SpellingConfig {
     /// Layers a language's `spelling` settings over these (global) ones: `languages`,
-    /// `min-word-length` and `messages` replace, while `words` and `ignore-regexes` are unioned.
+    /// `min-word-length`, `messages` and `detect` replace, while `words` and `ignore-regexes` are
+    /// unioned.
     pub fn merged(&self, language: Option<&SpellingConfig>) -> SpellingConfig {
         let Some(language) = language else {
             return self.clone();
@@ -657,6 +662,7 @@ impl SpellingConfig {
                 .collect(),
             min_word_length: language.min_word_length.or(self.min_word_length),
             messages: language.messages.or(self.messages),
+            detect: language.detect.or(self.detect),
         }
     }
 
@@ -673,6 +679,11 @@ impl SpellingConfig {
     /// Whether misspellings are shown like other diagnostics.
     pub fn messages(&self) -> bool {
         self.messages.unwrap_or(false)
+    }
+
+    /// Whether documents are checked against their detected language.
+    pub fn detect(&self) -> bool {
+        self.detect.unwrap_or(false)
     }
 }
 

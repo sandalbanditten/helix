@@ -29,6 +29,7 @@ Consider these wanted features when making design and implementation decisions:
 - `]s`/`[s` go to the next/previous misspelling and behave like `]d`/`[d`.
 - `space A` pops up the fixes for the misspelling under the cursor (suggestions and "Add to dictionary"), like `space a` without the language servers' actions.
 - Misspellings are underlined with the `diagnostic.spelling` theme scope, which defaults to the theme's `diagnostic.error` style (red in most themes).
+- Optional language detection per document (`[editor.spelling] detect = true`, also per language): the configured `languages` are the candidates, and a document is checked with the one its prose is written in, detected with `whatlang` (faster than scoring words against every dictionary). Explicit choices (`:set-spelling-language`, `.editorconfig`) are not detected.
 
 <!-- MAYBE -->
 ## Emacs' `dired` Style Feature
