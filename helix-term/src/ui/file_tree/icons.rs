@@ -11,13 +11,14 @@ const EXPANDED_DIRECTORY: &str = "";
 const FILE: &str = "";
 const FILE_WITHOUT_EXTENSION: &str = "󰡯";
 
-/// The icon of a directory called `name`.
+/// The icon of a directory called `name`: an open folder while expanded, whatever its name,
+/// else the directory's own icon or a closed folder.
 pub fn directory(name: &str, expanded: bool) -> &'static str {
-    by_directory_name(name).unwrap_or(if expanded {
+    if expanded {
         EXPANDED_DIRECTORY
     } else {
-        DIRECTORY
-    })
+        by_directory_name(name).unwrap_or(DIRECTORY)
+    }
 }
 
 /// The icon of a file called `name`: by its exact name, else by its lowercased extension.
@@ -989,7 +990,9 @@ mod tests {
     #[test]
     fn icons_follow_eza() {
         assert_eq!(directory("src", false), "󰣞");
+        assert_eq!(directory("whatever", false), DIRECTORY);
         assert_eq!(directory("whatever", true), EXPANDED_DIRECTORY);
+        assert_eq!(directory("src", true), EXPANDED_DIRECTORY);
         assert_eq!(file("Cargo.lock"), "");
         assert_eq!(file("main.RS"), "");
         assert_eq!(file("LICENSE-ish"), FILE_WITHOUT_EXTENSION);

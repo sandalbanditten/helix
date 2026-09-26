@@ -4,12 +4,10 @@
 //! keys while it is focused. Directory listings and git status are read in the background; the
 //! results come back through the job queue, which finds the tree in the compositor.
 
-// Parts of the model are only used by the navigation that follows.
-#![allow(dead_code)]
-
 mod fs;
 mod git;
 mod icons;
+mod keys;
 mod ls_colors;
 mod order;
 mod render;
@@ -28,6 +26,7 @@ use helix_vcs::StatusOptions;
 use helix_view::{
     editor::{FileTreeConfig, FileTreeSide, FileTreeSort, LsColors as LsColorsSource},
     graphics::Rect,
+    input::KeyEvent,
     smooth_scroll::SmoothOffset,
     Editor,
 };
@@ -37,6 +36,7 @@ use tui::buffer::Buffer as Surface;
 use self::{
     fs::ListOptions,
     git::GitStatuses,
+    keys::{Action, Lookup},
     ls_colors::LsColors,
     render::{natural_width, BufferMarks, Scene, Styles},
     rows::Rows,
@@ -44,7 +44,7 @@ use self::{
     viewport::Align,
 };
 use crate::{
-    compositor::{Compositor, Context},
+    compositor::{Compositor, Context, EventResult},
     job,
     ui::EditorView,
 };
@@ -75,6 +75,10 @@ pub struct FileTree {
     palette: Palette,
     lister: Option<UnboundedSender<ListRequest>>,
     last_generation: u64,
+    /// The keys of an unfinished sequence like `z`.
+    pending: Vec<KeyEvent>,
+    /// The widest the panel may get in the current screen.
+    max_width: u16,
 }
 
 impl FileTree {
@@ -168,22 +172,19 @@ impl FileTree {
         if !self.is_presented() {
             return None;
         }
-        let workspace = self
+        if !self
             .workspace
             .as_ref()
-            .filter(|workspace| workspace.ready)?;
+            .is_some_and(|workspace| workspace.ready)
+        {
+            return None;
+        }
         let config = editor.config();
-        let width = *self.width.get_or_insert_with(|| {
-            let widest = workspace
-                .rows
-                .iter()
-                .enumerate()
-                .map(|(index, row)| natural_width(row, index == 0, config.file_tree.icons))
-                .max()
-                .unwrap_or_default();
-            // one more column for the rail
-            (widest as u16 + 1).clamp(MIN_WIDTH, MAX_WIDTH)
-        });
+        self.max_width = main.width.saturating_sub(MIN_EDITOR_WIDTH).min(MAX_WIDTH);
+        let width = match self.width {
+            Some(width) => width,
+            None => *self.width.insert(self.fitted_width(config.file_tree.icons)),
+        };
         if main.height < 2 || main.width < width + MIN_EDITOR_WIDTH {
             self.focused = false;
             return None;
@@ -196,6 +197,66 @@ impl FileTree {
         Some(Rect::new(x, main.y, width, main.height - 1))
     }
 
+    /// The width that shows the widest row whole, within the limits.
+    fn fitted_width(&self, icons: bool) -> u16 {
+        let widest = self.workspace.as_ref().map_or(0, |workspace| {
+            workspace
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| natural_width(row, index == 0, icons))
+                .max()
+                .unwrap_or_default()
+        });
+        // one more column for the rail
+        let width = u16::try_from(widest + 1).unwrap_or(u16::MAX);
+        width.min(self.max_width).max(MIN_WIDTH)
+    }
+
+    /// Handles `key` while the tree is focused. A key it does not bind is ignored, for the
+    /// editor to handle.
+    pub fn handle_key(&mut self, key: KeyEvent, cx: &mut Context) -> EventResult {
+        cx.editor.autoinfo = None;
+        let mut sequence = std::mem::take(&mut self.pending);
+        sequence.push(key);
+        match keys::lookup(&sequence) {
+            Lookup::Action(action) => self.run(action, cx.editor),
+            Lookup::Prefix => {
+                cx.editor.autoinfo = Some(keys::info(&sequence));
+                self.pending = sequence;
+            }
+            // A key that continues no sequence cancels it, like in the editor.
+            Lookup::Unbound if sequence.len() > 1 => {}
+            Lookup::Unbound => return EventResult::Ignored(None),
+        }
+        EventResult::Consumed(None)
+    }
+
+    fn run(&mut self, action: Action, editor: &mut Editor) {
+        let config = editor.config();
+        match action {
+            Action::Help => editor.autoinfo = Some(keys::info(&[])),
+            Action::Unfocus => self.focused = false,
+            Action::Grow | Action::Shrink => {
+                let width = self.width.unwrap_or(MIN_WIDTH);
+                let width = match action {
+                    Action::Grow => width.saturating_add(1),
+                    _ => width.saturating_sub(1),
+                };
+                self.width = Some(width.min(self.max_width).max(MIN_WIDTH));
+            }
+            Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
+            _ => {
+                let lister = self.lister(editor);
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.navigate(action);
+                    workspace.update(&lister, &config.file_tree);
+                    workspace.reveal_cursor(config.scrolloff);
+                }
+            }
+        }
+    }
+
     pub fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         let config = cx.editor.config();
         let lister = self.lister(cx.editor);
@@ -206,6 +267,7 @@ impl FileTree {
         workspace.update(&lister, &config.file_tree);
 
         let height = area.height as usize;
+        workspace.height = height;
         if let Some(target) = workspace.scroll_to.take() {
             if let Some(index) = workspace.rows.index_of(target) {
                 if !viewport::is_visible(&workspace.rows, workspace.start, height, index) {
@@ -301,6 +363,8 @@ struct Workspace {
     reveals: Vec<(PathBuf, bool)>,
     /// A node to scroll into view once the panel height is known.
     scroll_to: Option<NodeId>,
+    /// The number of rows the panel showed last.
+    height: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +399,74 @@ impl Workspace {
             ready: false,
             reveals: Vec::new(),
             scroll_to: None,
+            height: 0,
+        }
+    }
+
+    /// Moves the cursor or expands or collapses the directory under it.
+    fn navigate(&mut self, action: Action) {
+        let Some(cursor) = self.rows.index_of(self.cursor) else {
+            self.cursor = self.tree.root();
+            return;
+        };
+        let last = self.rows.len() - 1;
+        let height = self.height.max(1);
+        let start = viewport::clamp(&self.rows, self.start, height);
+        let page = viewport::capacity(&self.rows, start, height).max(1);
+        let target = match action {
+            Action::Down if cursor == last => 0,
+            Action::Down => cursor + 1,
+            Action::Up if cursor == 0 => last,
+            Action::Up => cursor - 1,
+            Action::HalfPageDown => (cursor + page / 2).min(last),
+            Action::HalfPageUp => cursor.saturating_sub(page / 2),
+            Action::PageDown => (cursor + page).min(last),
+            Action::PageUp => cursor.saturating_sub(page),
+            Action::First => 0,
+            Action::Last => last,
+            Action::Expand => {
+                self.expand_row(cursor);
+                cursor
+            }
+            Action::Collapse => {
+                let row = &self.rows[cursor];
+                if cursor != 0 && self.tree.node(row.node).expanded {
+                    // Collapsing the first directory of a run collapses the rest of it.
+                    self.tree.collapse(row.head);
+                    self.dirty = true;
+                }
+                cursor
+            }
+            Action::AlignCenter | Action::AlignTop | Action::AlignBottom => {
+                let align = match action {
+                    Action::AlignCenter => Align::Center,
+                    Action::AlignTop => Align::Top,
+                    _ => Align::Bottom,
+                };
+                self.start = viewport::align(&self.rows, height, cursor, align);
+                cursor
+            }
+            Action::Grow | Action::Shrink | Action::Fit | Action::Help | Action::Unfocus => cursor,
+        };
+        self.cursor = self.rows[target].node;
+    }
+
+    /// Expands every directory of the run that row `index` stands for.
+    fn expand_row(&mut self, index: usize) {
+        let row = &self.rows[index];
+        let (head, mut node) = (row.head, Some(row.node));
+        while let Some(id) = node {
+            self.tree.expand(id);
+            node = (id != head).then(|| self.tree.node(id).parent).flatten();
+        }
+        self.dirty = true;
+    }
+
+    /// Scrolls just enough to show the cursor with `scrolloff` rows around it.
+    fn reveal_cursor(&mut self, scrolloff: usize) {
+        if let Some(cursor) = self.rows.index_of(self.cursor) {
+            let height = self.height.max(1);
+            self.start = viewport::reveal(&self.rows, self.start, height, cursor, scrolloff);
         }
     }
 
@@ -408,21 +540,37 @@ impl Workspace {
     }
 
     /// Rebuilds `rows`, keeping the cursor and the first ordinary row on the same entries, or
-    /// on their closest shown directory when they disappear from view.
+    /// on their closest shown directory when they disappear from view or from disk.
     fn rebuild_rows(&mut self) {
-        let anchor = self.rows.get(self.start).map(|row| row.node);
+        let path_of = |node| {
+            self.rows
+                .index_of(node)
+                .map(|index| self.rows[index].path.clone())
+        };
+        let anchor = self
+            .rows
+            .get(self.start)
+            .map(|row| (row.node, row.path.clone()));
+        let cursor_path = path_of(self.cursor);
         self.rows = Rows::build(&self.tree, self.flatten_dirs);
         self.start = anchor
-            .and_then(|anchor| self.shown_row(anchor))
+            .and_then(|(node, path)| self.shown_row(node, Some(&path)))
             .unwrap_or(self.start.min(self.rows.len() - 1));
         self.cursor = self
-            .shown_row(self.cursor)
+            .shown_row(self.cursor, cursor_path.as_deref())
             .map_or(self.tree.root(), |index| self.rows[index].node);
     }
 
-    /// The row of `node` or of its closest ancestor that has one.
-    fn shown_row(&self, node: NodeId) -> Option<usize> {
-        let mut current = Some(node).filter(|node| self.tree.contains(*node));
+    /// The row of `node`, last seen at `path`, or of its closest ancestor that has one.
+    fn shown_row(&self, node: NodeId, path: Option<&Path>) -> Option<usize> {
+        let mut current = if self.tree.contains(node) {
+            Some(node)
+        } else {
+            // The entry is gone; start from its closest ancestor that is still there.
+            path?
+                .ancestors()
+                .find_map(|ancestor| self.tree.find(ancestor))
+        };
         while let Some(node) = current {
             if let Some(index) = self.rows.index_of(node) {
                 return Some(index);
@@ -558,4 +706,84 @@ fn spawn_lister() -> UnboundedSender<ListRequest> {
         }
     });
     sender
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tree::tests::{dir, file, run};
+    use super::*;
+
+    /// root, `docs`, `src/main` (a run), `a`, `b`
+    fn workspace() -> Workspace {
+        let mut workspace = Workspace::new("/root".into(), 1, &FileTreeConfig::default());
+        let root = workspace.tree.root();
+        workspace.tree.apply_listing(
+            root,
+            Some(vec![
+                run("src", &["main"]),
+                dir("docs"),
+                file("a"),
+                file("b"),
+            ]),
+        );
+        workspace.rebuild_rows();
+        workspace.height = 10;
+        workspace
+    }
+
+    fn cursor_label(workspace: &Workspace) -> &str {
+        let index = workspace.rows.index_of(workspace.cursor).unwrap();
+        &workspace.rows[index].label
+    }
+
+    #[test]
+    fn the_cursor_wraps_around() {
+        let mut workspace = workspace();
+        workspace.navigate(Action::Up);
+        assert_eq!(cursor_label(&workspace), "b");
+        workspace.navigate(Action::Down);
+        assert_eq!(cursor_label(&workspace), "root");
+        workspace.navigate(Action::PageDown);
+        assert_eq!(cursor_label(&workspace), "b");
+        workspace.navigate(Action::HalfPageUp);
+        assert_eq!(cursor_label(&workspace), "root");
+    }
+
+    #[test]
+    fn a_run_expands_and_collapses_as_one() {
+        let mut workspace = workspace();
+        let src = workspace.tree.find("src".as_ref()).unwrap();
+        let main = workspace.tree.find("src/main".as_ref()).unwrap();
+        workspace.cursor = main;
+        workspace.navigate(Action::Expand);
+        assert!(workspace.tree.node(src).expanded && workspace.tree.node(main).expanded);
+        workspace
+            .tree
+            .apply_listing(main, Some(vec![file("lib.rs")]));
+        workspace.rebuild_rows();
+        let labels: Vec<_> = workspace.rows.iter().map(|row| &*row.label).collect();
+        assert_eq!(labels, ["root", "docs", "src/main", "lib.rs", "a", "b"]);
+
+        workspace.navigate(Action::Collapse);
+        assert!(!workspace.tree.node(src).expanded && !workspace.tree.node(main).expanded);
+        workspace.rebuild_rows();
+        assert_eq!(cursor_label(&workspace), "src/main");
+    }
+
+    #[test]
+    fn rebuilding_keeps_the_cursor_on_a_shown_row() {
+        let mut workspace = workspace();
+        let docs = workspace.tree.find("docs".as_ref()).unwrap();
+        workspace.tree.expand(docs);
+        workspace
+            .tree
+            .apply_listing(docs, Some(vec![file("guide.md")]));
+        workspace.rebuild_rows();
+        workspace.cursor = workspace.tree.find("docs/guide.md".as_ref()).unwrap();
+
+        // Collapsing `docs` hides the cursor's row: it moves to `docs`.
+        workspace.tree.collapse(docs);
+        workspace.rebuild_rows();
+        assert_eq!(workspace.cursor, docs);
+    }
 }

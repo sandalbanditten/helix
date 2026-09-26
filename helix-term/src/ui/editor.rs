@@ -970,6 +970,18 @@ impl EditorView {
         let key_result = self.keymaps.get(mode, event);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
 
+        // A command other than the file tree's own, or a key without one, gives the editor its
+        // focus back.
+        let unfocus_file_tree = match &key_result {
+            KeymapResult::Matched(command) => !is_file_tree_command(command),
+            KeymapResult::MatchedSequence(commands) => !commands.iter().all(is_file_tree_command),
+            KeymapResult::NotFound | KeymapResult::Cancelled(_) => true,
+            KeymapResult::Pending(_) => false,
+        };
+        if unfocus_file_tree {
+            self.file_tree.unfocus();
+        }
+
         let mut execute_command = |command: &commands::MappableCommand| {
             command.execute(cxt);
             helix_event::dispatch(PostCommand { command, cx: cxt });
@@ -1494,6 +1506,7 @@ impl Component for EditorView {
 
         match event {
             Event::Paste(contents) => {
+                self.file_tree.unfocus();
                 self.handle_non_key_input(&mut cx);
                 cx.count = cx.editor.count;
                 commands::paste_bracketed_value(&mut cx, contents.clone());
@@ -1523,6 +1536,25 @@ impl Component for EditorView {
 
                 // clear status
                 cx.editor.status_msg = None;
+
+                // A focused file tree gets the keys first, unless the editor is in the middle of
+                // a key sequence of its own.
+                if self.file_tree.is_focused()
+                    && self.keymaps.pending().is_empty()
+                    && self.keymaps.sticky().is_none()
+                    && self.on_next_key.is_none()
+                    && cx.editor.count.is_none()
+                {
+                    let mut context = crate::compositor::Context {
+                        editor: cx.editor,
+                        scroll: None,
+                        jobs: cx.jobs,
+                    };
+                    let result = self.file_tree.handle_key(key, &mut context);
+                    if matches!(result, EventResult::Consumed(_)) {
+                        return result;
+                    }
+                }
 
                 let mode = cx.editor.mode();
 
@@ -1792,6 +1824,9 @@ impl Component for EditorView {
     }
 
     fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        if self.file_tree.is_focused() {
+            return (None, CursorKind::Hidden);
+        }
         let (view, doc) = current_ref!(editor);
         if view.hides_cursor(doc) {
             return (editor.cursor().0, CursorKind::Hidden);
@@ -1809,6 +1844,10 @@ impl Component for EditorView {
             cursor => cursor,
         }
     }
+}
+
+fn is_file_tree_command(command: &commands::MappableCommand) -> bool {
+    matches!(command.name(), "focus_file_tree" | "toggle_file_tree")
 }
 
 /// The last row of a view's `area`. The file tree ends above the bottom statusline, so a

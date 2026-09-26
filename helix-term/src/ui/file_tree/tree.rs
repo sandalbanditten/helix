@@ -56,6 +56,7 @@ impl Kind {
     }
 
     /// Whether the entry can be opened in a buffer.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by the file operations"))]
     pub fn is_file(self) -> bool {
         matches!(self, Self::File { .. } | Self::Link(LinkTarget::File))
     }
@@ -90,6 +91,7 @@ pub struct Entry {
     pub only_child: Option<Box<Entry>>,
 }
 
+#[cfg(test)]
 impl Entry {
     pub fn new(name: impl Into<OsString>, kind: Kind) -> Self {
         Self {
@@ -133,10 +135,6 @@ impl Tree {
 
     pub fn root(&self) -> NodeId {
         self.root
-    }
-
-    pub fn get(&self, id: NodeId) -> Option<&Node> {
-        self.nodes.get(id)
     }
 
     /// The node `id`, which must exist.
@@ -195,6 +193,7 @@ impl Tree {
     }
 
     /// Whether `id` is `ancestor` or lies below it.
+    #[expect(dead_code, reason = "used by the file operations")]
     pub fn is_within(&self, id: NodeId, ancestor: NodeId) -> bool {
         let mut current = Some(id);
         while let Some(node) = current {
@@ -216,6 +215,7 @@ impl Tree {
     }
 
     /// Every directory whose entries are loaded, i.e. the directories worth watching.
+    #[expect(dead_code, reason = "used by the watcher")]
     pub fn loaded_directories(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes
             .iter()

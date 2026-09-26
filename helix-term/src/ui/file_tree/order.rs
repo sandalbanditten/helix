@@ -25,6 +25,7 @@ pub fn entry_cmp(sort: FileTreeSort, a: (&str, Group), b: (&str, Group)) -> Orde
     group.then_with(|| natural_cmp(a.0, b.0))
 }
 
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the search"))]
 /// Orders two workspace-relative paths the way the tree lists them, where `a_is_dir` and
 /// `b_is_dir` tell whether the last component is a directory. An ancestor comes before its
 /// descendants.

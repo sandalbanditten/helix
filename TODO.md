@@ -26,6 +26,7 @@ It should preserve the following features from `grove`:
   - On startup (first time the tree is shown) the viewport width should always be fitted
 - `+`/`-` for growing/shrinking the view.
 - The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
+  - Icons are `eza`'s, except that an expanded directory always shows the open folder `` (U+F115), even one with an icon of its own; collapsed directories keep theirs.
 - Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
 - The rest of grove: git marks, unsaved `+` marks, icons, guides, pinned ancestor rows, splits (`C-s`/`C-v`), delete (`d`), mouse support.
 
