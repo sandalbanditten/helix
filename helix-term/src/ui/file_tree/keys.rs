@@ -20,6 +20,16 @@ pub enum Action {
     AlignCenter,
     AlignTop,
     AlignBottom,
+    Open,
+    OpenHorizontal,
+    OpenVertical,
+    OpenExternally,
+    Rename,
+    MoveInWorkspace,
+    Move,
+    NewFile,
+    NewDirectory,
+    Delete,
     Grow,
     Shrink,
     Fit,
@@ -43,6 +53,16 @@ impl Action {
             Self::AlignCenter => "Align the cursor row to the center",
             Self::AlignTop => "Align the cursor row to the top",
             Self::AlignBottom => "Align the cursor row to the bottom",
+            Self::Open => "Open file, or expand/collapse directory",
+            Self::OpenHorizontal => "Open file in a horizontal split",
+            Self::OpenVertical => "Open file in a vertical split",
+            Self::OpenExternally => "Open in the default application",
+            Self::Rename => "Rename",
+            Self::MoveInWorkspace => "Move to a path in the workspace",
+            Self::Move => "Move to a full path",
+            Self::NewFile => "New file (with a trailing / a directory)",
+            Self::NewDirectory => "New directory",
+            Self::Delete => "Delete for good",
             Self::Grow => "Widen the file tree",
             Self::Shrink => "Narrow the file tree",
             Self::Fit => "Fit the width to the widest row",
@@ -79,6 +99,16 @@ const BINDINGS: &[Binding] = &[
     ),
     bind(&[&[key!('z'), key!('t')]], Action::AlignTop),
     bind(&[&[key!('z'), key!('b')]], Action::AlignBottom),
+    bind(&[&[key!('o')]], Action::Open),
+    bind(&[&[ctrl!('s')]], Action::OpenHorizontal),
+    bind(&[&[ctrl!('v')]], Action::OpenVertical),
+    bind(&[&[key!(Enter)]], Action::OpenExternally),
+    bind(&[&[key!('r')]], Action::Rename),
+    bind(&[&[key!('R')]], Action::MoveInWorkspace),
+    bind(&[&[ctrl!('r')]], Action::Move),
+    bind(&[&[key!('a')]], Action::NewFile),
+    bind(&[&[key!('A')]], Action::NewDirectory),
+    bind(&[&[key!('d')]], Action::Delete),
     bind(&[&[key!('+')]], Action::Grow),
     bind(&[&[key!('-')]], Action::Shrink),
     bind(&[&[key!('=')]], Action::Fit),
@@ -124,10 +154,12 @@ pub fn info(prefix: &[KeyEvent]) -> Info {
             (!keys.is_empty()).then(|| (keys.join(", "), binding.action.doc()))
         })
         .collect();
-    let title = if prefix.is_empty() {
-        "File tree".to_owned()
-    } else {
-        format!("File tree: {}", sequence(prefix))
+    // The sequences share their prefixes, and so their names, with the editor's.
+    let title = match prefix {
+        [] => "File tree",
+        [key!('g')] => "Goto",
+        [key!('z')] => "View",
+        _ => "",
     };
     Info::new(title, &body)
 }
@@ -173,7 +205,7 @@ mod tests {
             "{first}"
         );
         let info = super::info(&[key!('z')]);
-        assert_eq!(info.title, "File tree: z");
+        assert_eq!(info.title, "View");
         assert!(info.text.starts_with("z, c"), "{}", info.text);
     }
 }

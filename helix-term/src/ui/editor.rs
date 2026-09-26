@@ -1506,7 +1506,17 @@ impl Component for EditorView {
 
         match event {
             Event::Paste(contents) => {
-                self.file_tree.unfocus();
+                if self.file_tree.is_focused() {
+                    let mut context = crate::compositor::Context {
+                        editor: cx.editor,
+                        scroll: None,
+                        jobs: cx.jobs,
+                    };
+                    if self.file_tree.handle_paste(contents, &mut context) {
+                        return EventResult::Consumed(None);
+                    }
+                    self.file_tree.unfocus();
+                }
                 self.handle_non_key_input(&mut cx);
                 cx.count = cx.editor.count;
                 commands::paste_bracketed_value(&mut cx, contents.clone());
@@ -1821,11 +1831,13 @@ impl Component for EditorView {
         if let Some(completion) = self.completion.as_mut() {
             completion.render(area, surface, cx);
         }
+
+        self.file_tree.render_command_line(area, surface, cx);
     }
 
-    fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+    fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
         if self.file_tree.is_focused() {
-            return (None, CursorKind::Hidden);
+            return self.file_tree.cursor(area, editor);
         }
         let (view, doc) = current_ref!(editor);
         if view.hides_cursor(doc) {

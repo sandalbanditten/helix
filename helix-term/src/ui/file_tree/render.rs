@@ -136,6 +136,14 @@ impl<'a> BufferMarks<'a> {
     }
 }
 
+/// A row whose label is being typed in: an entry being renamed, or the input row of a new one.
+pub struct EditRow<'a> {
+    pub index: usize,
+    /// The name typed so far, which picks the icon of a new entry.
+    pub name: &'a str,
+    pub directory: bool,
+}
+
 /// One frame of the panel.
 pub struct Scene<'a> {
     pub tree: &'a Tree,
@@ -151,10 +159,13 @@ pub struct Scene<'a> {
     pub icons: bool,
     pub guides: bool,
     pub side: FileTreeSide,
+    pub edit: Option<EditRow<'a>>,
 }
 
 impl Scene<'_> {
-    pub fn render(&self, area: Rect, surface: &mut Surface) {
+    /// Draws the panel into `area`. Returns where the label of the row being edited goes, if it
+    /// is in view.
+    pub fn render(&self, area: Rect, surface: &mut Surface) -> Option<Rect> {
         let (content, rail) = match self.side {
             FileTreeSide::Left => (area.clip_right(1), area.right() - 1),
             FileTreeSide::Right => (area.clip_left(1), area.left()),
@@ -167,13 +178,12 @@ impl Scene<'_> {
             .iter()
             .map(|&index| (index, true))
             .chain((self.start..self.rows.len()).map(|index| (index, false)));
+        let mut edit_area = None;
         for (y, (index, pinned)) in (content.top()..content.bottom()).zip(rows) {
-            self.render_row(
-                index,
-                pinned,
-                Rect::new(content.x, y, content.width, 1),
-                surface,
-            );
+            let area = Rect::new(content.x, y, content.width, 1);
+            if let Some(label_area) = self.render_row(index, pinned, area, surface) {
+                edit_area = Some(label_area);
+            }
         }
 
         let thumb = viewport::thumb(self.rows, self.start, height).unwrap_or_default();
@@ -185,20 +195,32 @@ impl Scene<'_> {
             };
             surface[(rail, y)].set_symbol(symbol).set_style(style);
         }
+        edit_area
     }
 
-    fn render_row(&self, index: usize, pinned: bool, area: Rect, surface: &mut Surface) {
+    /// Draws row `index`, leaving out the label of the row being edited and returning its area.
+    fn render_row(
+        &self,
+        index: usize,
+        pinned: bool,
+        area: Rect,
+        surface: &mut Surface,
+    ) -> Option<Rect> {
         if area.width < 2 {
-            return;
+            return None;
         }
         let styles = self.styles;
         let row = &self.rows[index];
+        let edit = self.edit.as_ref().filter(|edit| edit.index == index);
         let node = self.tree.node(row.node);
         let root = index == 0;
         let path = row.path.as_path();
-        let focused_buffer = self.marks.focused == Some(path);
-        let failed = matches!(node.children, Children::Unreadable)
-            || node.kind == Kind::Link(LinkTarget::Broken);
+        // The input row borrows its directory's node and path; it is no entry of its own.
+        let entry = !row.input;
+        let focused_buffer = entry && self.marks.focused == Some(path);
+        let failed = entry
+            && (matches!(node.children, Children::Unreadable)
+                || node.kind == Kind::Link(LinkTarget::Broken));
 
         let row_style = if self.cursor == Some(index) {
             styles.selected
@@ -212,7 +234,7 @@ impl Scene<'_> {
         surface.set_style(area, row_style);
 
         let mut parts: Vec<(&str, Style)> = Vec::with_capacity(8 + row.depth);
-        let git = (!failed)
+        let git = (entry && !failed)
             .then(|| self.git.status(path, node.kind == Kind::Directory))
             .flatten();
         parts.push(match git {
@@ -241,18 +263,22 @@ impl Scene<'_> {
                 (true, false) => "├─",
             };
             parts.push((branch, guide));
-            parts.push(if node.kind == Kind::Directory {
+            parts.push(if entry && node.kind == Kind::Directory {
                 (if node.expanded { "▾" } else { "▸" }, guide)
             } else if focused_buffer {
                 ("*", row_style.patch(styles.buffer_focused))
-            } else if self.marks.open.contains(path) {
+            } else if entry && self.marks.open.contains(path) {
                 ("*", row_style.patch(styles.buffer))
             } else {
                 (if self.guides { "─" } else { " " }, guide)
             });
         }
 
-        let label_style = self.label_style(node, path, row_style, failed);
+        let label_style = if entry {
+            self.label_style(node, path, row_style, failed)
+        } else {
+            row_style
+        };
         if self.icons {
             if !root {
                 parts.push((" ", row_style));
@@ -262,12 +288,19 @@ impl Scene<'_> {
                 fg: label_style.fg,
                 ..row_style
             };
-            parts.push((self.icon(root, node, failed), icon_style));
+            let icon = match edit {
+                Some(edit) if !entry && edit.directory => icons::directory(edit.name, false),
+                Some(edit) if !entry => icons::file(edit.name),
+                _ => self.icon(root, node, failed),
+            };
+            parts.push((icon, icon_style));
             parts.push((" ", row_style));
         } else if !root {
             parts.push((" ", row_style));
         }
-        parts.push((&row.label, label_style));
+        if edit.is_none() {
+            parts.push((&row.label, label_style));
+        }
 
         let last = area.right() - 1;
         let mut x = area.left();
@@ -277,18 +310,22 @@ impl Scene<'_> {
             }
             (x, _) = surface.set_stringn(x, area.y, text, (last - x) as usize, style);
         }
+        if edit.is_some() {
+            return Some(Rect::new(x, area.y, last.saturating_sub(x), 1));
+        }
         if natural_width(row, root, self.icons) > area.width as usize {
             surface[(last - 1, area.y)]
                 .set_symbol("…")
                 .set_style(label_style);
         }
 
-        let (unsaved, style) = if self.marks.modified.contains(path) {
+        let (unsaved, style) = if entry && self.marks.modified.contains(path) {
             ("+", row_style.patch(styles.unsaved))
         } else {
             (" ", row_style)
         };
         surface[(last, area.y)].set_symbol(unsaved).set_style(style);
+        None
     }
 
     fn label_style(&self, node: &Node, path: &Path, row_style: Style, failed: bool) -> Style {
@@ -372,7 +409,7 @@ mod tests {
         let docs = tree.find("docs".as_ref()).unwrap();
         tree.expand(docs);
         tree.apply_listing(docs, Some(vec![file("guide.md")]));
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         let git = GitStatuses::new(
             Path::new("/root"),
             [FileChange::Modified {
@@ -401,6 +438,7 @@ mod tests {
             icons,
             guides: true,
             side,
+            edit: None,
         }
         .render(area, &mut surface);
         lines(&surface)
@@ -440,7 +478,7 @@ mod tests {
     #[test]
     fn natural_width_counts_every_column() {
         let tree = tree_with(vec![dir("docs"), file("README.md")]);
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         // `▍ root+`
         assert_eq!(natural_width(&rows[0], true, false), 7);
         // `▍ ├── README.md+` with ` icon ` instead of the single space

@@ -4,11 +4,13 @@
 //! keys while it is focused. Directory listings and git status are read in the background; the
 //! results come back through the job queue, which finds the tree in the compositor.
 
+mod edit;
 mod fs;
 mod git;
 mod icons;
 mod keys;
 mod ls_colors;
+mod ops;
 mod order;
 mod render;
 mod rows;
@@ -21,11 +23,19 @@ use std::{
     sync::Arc,
 };
 
+use helix_core::Position;
 use helix_loader::workspace_trust::TrustQuery;
+use helix_stdx::{
+    path::{canonicalize, normalize},
+    Url,
+};
 use helix_vcs::StatusOptions;
 use helix_view::{
-    editor::{FileTreeConfig, FileTreeSide, FileTreeSort, LsColors as LsColorsSource},
-    graphics::Rect,
+    editor::{
+        Action as OpenAction, FileTreeConfig, FileTreeSide, FileTreeSort,
+        LsColors as LsColorsSource,
+    },
+    graphics::{CursorKind, Rect},
     input::KeyEvent,
     smooth_scroll::SmoothOffset,
     Editor,
@@ -34,17 +44,19 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tui::buffer::Buffer as Surface;
 
 use self::{
+    edit::{Edit, EditEvent, EditKind},
     fs::ListOptions,
     git::GitStatuses,
     keys::{Action, Lookup},
     ls_colors::LsColors,
-    render::{natural_width, BufferMarks, Scene, Styles},
-    rows::Rows,
-    tree::{Listing, NodeId, Reveal, Tree},
+    order::Group,
+    render::{natural_width, BufferMarks, EditRow, Scene, Styles},
+    rows::{InputRow, Rows},
+    tree::{Kind, Listing, NodeId, Reveal, Tree},
     viewport::Align,
 };
 use crate::{
-    compositor::{Compositor, Context, EventResult},
+    compositor::{Component, Compositor, Context, Event, EventResult},
     job,
     ui::EditorView,
 };
@@ -54,6 +66,8 @@ const MIN_WIDTH: u16 = 16;
 const MAX_WIDTH: u16 = 64;
 /// The columns the panel always leaves to the editor; with fewer it yields.
 const MIN_EDITOR_WIDTH: u16 = 20;
+/// The columns an inline edit gets at least, reaching over the editor if the panel is narrower.
+const MIN_EDIT_WIDTH: u16 = 30;
 
 /// When the panel is shown.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -127,8 +141,12 @@ impl FileTree {
         workspace.update(&lister, &editor.config().file_tree);
     }
 
+    /// Gives the editor its focus back, abandoning an unfinished edit.
     pub fn unfocus(&mut self) {
         self.focused = false;
+        if let Some(workspace) = &mut self.workspace {
+            workspace.cancel_edit();
+        }
     }
 
     fn ensure_workspace(&mut self, editor: &Editor) {
@@ -217,10 +235,18 @@ impl FileTree {
     /// editor to handle.
     pub fn handle_key(&mut self, key: KeyEvent, cx: &mut Context) -> EventResult {
         cx.editor.autoinfo = None;
+        if self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.edit.is_some())
+        {
+            self.handle_edit(&Event::Key(key), cx);
+            return EventResult::Consumed(None);
+        }
         let mut sequence = std::mem::take(&mut self.pending);
         sequence.push(key);
         match keys::lookup(&sequence) {
-            Lookup::Action(action) => self.run(action, cx.editor),
+            Lookup::Action(action) => self.run(action, cx),
             Lookup::Prefix => {
                 cx.editor.autoinfo = Some(keys::info(&sequence));
                 self.pending = sequence;
@@ -232,7 +258,52 @@ impl FileTree {
         EventResult::Consumed(None)
     }
 
-    fn run(&mut self, action: Action, editor: &mut Editor) {
+    /// Hands pasted text to an unfinished edit. Returns whether there was one.
+    pub fn handle_paste(&mut self, text: &str, cx: &mut Context) -> bool {
+        let editing = self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.edit.is_some());
+        if editing {
+            self.handle_edit(&Event::Paste(text.to_owned()), cx);
+        }
+        editing
+    }
+
+    fn handle_edit(&mut self, event: &Event, cx: &mut Context) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let Some(edit) = &mut workspace.edit else {
+            return;
+        };
+        match edit.handle_event(event, cx) {
+            EditEvent::Continue => return,
+            EditEvent::Cancel => workspace.cancel_edit(),
+            EditEvent::Submit => {
+                if let Some(edit) = workspace.edit.take() {
+                    workspace.dirty = true;
+                    if workspace.submit(edit, cx.editor) == Focus::Release {
+                        self.focused = false;
+                    }
+                }
+            }
+        }
+        self.update(cx.editor);
+    }
+
+    /// Brings the rows up to date after a change and keeps the cursor in view.
+    fn update(&mut self, editor: &Editor) {
+        let lister = self.lister(editor);
+        if let Some(workspace) = &mut self.workspace {
+            let config = editor.config();
+            workspace.update(&lister, &config.file_tree);
+            workspace.reveal_cursor(config.scrolloff);
+        }
+    }
+
+    fn run(&mut self, action: Action, cx: &mut Context) {
+        let editor = &mut *cx.editor;
         let config = editor.config();
         match action {
             Action::Help => editor.autoinfo = Some(keys::info(&[])),
@@ -246,13 +317,21 @@ impl FileTree {
                 self.width = Some(width.min(self.max_width).max(MIN_WIDTH));
             }
             Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
-            _ => {
-                let lister = self.lister(editor);
-                if let Some(workspace) = &mut self.workspace {
-                    workspace.navigate(action);
-                    workspace.update(&lister, &config.file_tree);
-                    workspace.reveal_cursor(config.scrolloff);
+            Action::OpenExternally => {
+                if let Some(path) = self.workspace.as_ref().and_then(Workspace::cursor_path) {
+                    match Url::from_file_path(&path) {
+                        Ok(url) => cx.jobs.callback(crate::open_external_url_callback(url)),
+                        Err(()) => editor.set_error(format!("Cannot open {}", path.display())),
+                    }
                 }
+            }
+            _ => {
+                if let Some(workspace) = &mut self.workspace {
+                    if workspace.act(action, editor) == Focus::Release {
+                        self.focused = false;
+                    }
+                }
+                self.update(editor);
             }
         }
     }
@@ -281,23 +360,58 @@ impl FileTree {
 
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
-        Scene {
+        let edit_area = Scene {
             tree: &workspace.tree,
             rows: &workspace.rows,
             git: &workspace.git,
             marks: &marks,
             palette: palette.as_deref(),
             styles: &styles,
-            cursor: self
-                .focused
-                .then(|| workspace.rows.index_of(workspace.cursor))
-                .flatten(),
+            cursor: self.focused.then(|| workspace.cursor_row()).flatten(),
             start,
             icons: config.file_tree.icons,
             guides: config.file_tree.guides,
             side: config.file_tree.side,
+            edit: workspace.edit_row(),
         }
         .render(area, surface);
+
+        // A panel fitted to its rows leaves little room to type in.
+        let edit_area = edit_area.map(|edit_area| {
+            let width = edit_area
+                .width
+                .max(MIN_EDIT_WIDTH)
+                .min(surface.area.right().saturating_sub(edit_area.x));
+            Rect { width, ..edit_area }
+        });
+        workspace.edit_area = edit_area;
+        if let (Some(edit_area), Some(edit)) = (edit_area, &mut workspace.edit) {
+            edit.prompt.render(edit_area, surface, cx);
+        }
+    }
+
+    /// Draws the command line prompt of a move over the command line of `area`, the screen.
+    pub fn render_command_line(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        if let Some(edit) = self
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.edit.as_mut())
+            .filter(|edit| !edit.is_inline())
+        {
+            edit.prompt.render(area, surface, cx);
+        }
+    }
+
+    /// Where the terminal cursor goes while the tree is focused: in the prompt of an edit.
+    pub fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        let Some(workspace) = &self.workspace else {
+            return (None, CursorKind::Hidden);
+        };
+        match (&workspace.edit, workspace.edit_area) {
+            (Some(edit), _) if !edit.is_inline() => edit.prompt.cursor(area, editor),
+            (Some(edit), Some(edit_area)) => edit.prompt.cursor(edit_area, editor),
+            _ => (None, CursorKind::Hidden),
+        }
     }
 
     fn apply_listings(
@@ -365,6 +479,17 @@ struct Workspace {
     scroll_to: Option<NodeId>,
     /// The number of rows the panel showed last.
     height: usize,
+    /// A name or path being typed for a file operation.
+    edit: Option<Edit>,
+    /// Where the line of an inline edit was drawn last.
+    edit_area: Option<Rect>,
+}
+
+/// Whether the tree keeps its focus after an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Keep,
+    Release,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -382,7 +507,7 @@ impl Workspace {
             .file_name()
             .map_or_else(|| root.as_os_str().to_owned(), ToOwned::to_owned);
         let tree = Tree::new(name, config.sort);
-        let rows = Rows::build(&tree, config.flatten_dirs);
+        let rows = Rows::build(&tree, config.flatten_dirs, None);
         Self {
             generation,
             cursor: tree.root(),
@@ -400,6 +525,216 @@ impl Workspace {
             reveals: Vec::new(),
             scroll_to: None,
             height: 0,
+            edit: None,
+            edit_area: None,
+        }
+    }
+
+    /// The row the cursor is on: the input row while a new entry is named.
+    fn cursor_row(&self) -> Option<usize> {
+        match &self.edit {
+            Some(Edit {
+                kind: EditKind::Create { .. },
+                ..
+            }) => self.rows.input(),
+            _ => self.rows.index_of(self.cursor),
+        }
+    }
+
+    /// The absolute path of the cursor's entry.
+    fn cursor_path(&self) -> Option<PathBuf> {
+        let index = self.rows.index_of(self.cursor)?;
+        Some(self.root.join(&self.rows[index].path))
+    }
+
+    /// The row being typed in, for drawing.
+    fn edit_row(&self) -> Option<EditRow<'_>> {
+        let edit = self.edit.as_ref()?;
+        let name = edit.prompt.line().as_str();
+        let (index, directory) = match &edit.kind {
+            EditKind::Rename { node, .. } => (self.rows.index_of(*node)?, false),
+            EditKind::Create { directory, .. } => {
+                (self.rows.input()?, *directory || name.ends_with('/'))
+            }
+            EditKind::Move { .. } | EditKind::Delete { .. } => return None,
+        };
+        Some(EditRow {
+            index,
+            name,
+            directory,
+        })
+    }
+
+    fn cancel_edit(&mut self) {
+        if self.edit.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
+    /// Runs a file operation on the cursor's entry or starts typing the name it needs.
+    fn act(&mut self, action: Action, editor: &mut Editor) -> Focus {
+        let Some(index) = self.rows.index_of(self.cursor) else {
+            return Focus::Keep;
+        };
+        let row = &self.rows[index];
+        let (node, path) = (row.node, row.path.clone());
+        let kind = self.tree.node(node).kind;
+        let root = index == 0;
+        let open = |editor: &mut Editor, action| {
+            if !kind.is_file() {
+                return Focus::Keep;
+            }
+            match ops::open(editor, &self.root.join(&path), action) {
+                Ok(()) => Focus::Release,
+                Err(err) => {
+                    editor.set_error(err.to_string());
+                    Focus::Keep
+                }
+            }
+        };
+        match action {
+            Action::Open if kind == Kind::Directory && !root => {
+                self.navigate(if self.tree.node(node).expanded {
+                    Action::Collapse
+                } else {
+                    Action::Expand
+                });
+            }
+            Action::Open => return open(editor, OpenAction::Replace),
+            Action::OpenHorizontal => return open(editor, OpenAction::HorizontalSplit),
+            Action::OpenVertical => return open(editor, OpenAction::VerticalSplit),
+            // The workspace root is the one entry that stays put.
+            Action::Rename | Action::MoveInWorkspace | Action::Move | Action::Delete if root => {}
+            Action::Rename => {
+                let name = self.tree.node(node).name.to_string_lossy().into_owned();
+                self.edit = Some(Edit::new(EditKind::Rename { node, path }, name, editor));
+                self.dirty = true;
+            }
+            Action::MoveInWorkspace | Action::Move => {
+                let absolute = action == Action::Move;
+                let line = if absolute {
+                    self.root.join(&path)
+                } else {
+                    path.clone()
+                };
+                let line = line.to_string_lossy().into_owned();
+                self.edit = Some(Edit::new(EditKind::Move { path, absolute }, line, editor));
+            }
+            Action::NewFile | Action::NewDirectory => {
+                // New entries go into the directory under the cursor, or the one holding it.
+                let dir_row = match kind {
+                    Kind::Directory => index,
+                    _ => row.parent.unwrap_or(0),
+                };
+                if dir_row != 0 && !self.tree.node(self.rows[dir_row].node).expanded {
+                    self.expand_row(dir_row);
+                }
+                let dir = self.rows[dir_row].node;
+                let kind = EditKind::Create {
+                    dir,
+                    dir_path: self.rows[dir_row].path.clone(),
+                    directory: action == Action::NewDirectory,
+                };
+                self.edit = Some(Edit::new(kind, String::new(), editor));
+                self.dirty = true;
+            }
+            Action::Delete => {
+                let directory = kind == Kind::Directory;
+                let kind = EditKind::Delete { path, directory };
+                self.edit = Some(Edit::new(kind, String::new(), editor));
+            }
+            _ => self.navigate(action),
+        }
+        Focus::Keep
+    }
+
+    /// Carries out a finished edit.
+    fn submit(&mut self, edit: Edit, editor: &mut Editor) -> Focus {
+        let line = edit.prompt.line();
+        if line.trim().is_empty() {
+            return Focus::Keep;
+        }
+        let result = match edit.kind {
+            EditKind::Rename { path, .. } => {
+                if line.contains(std::path::is_separator) || line == "." || line == ".." {
+                    editor.set_error(format!("{line} is not a file name"));
+                    return Focus::Keep;
+                }
+                let from = self.root.join(&path);
+                let to = from.with_file_name(line);
+                ops::rename(editor, &from, to, false).map(|to| (Some(path), to))
+            }
+            EditKind::Move { path, absolute } => {
+                let to = if absolute {
+                    canonicalize(line)
+                } else {
+                    normalize(self.root.join(line))
+                };
+                ops::rename(editor, &self.root.join(&path), to, true).map(|to| (Some(path), to))
+            }
+            EditKind::Create {
+                dir_path,
+                directory,
+                ..
+            } => {
+                let directory = directory || line.ends_with(std::path::is_separator);
+                let to = normalize(self.root.join(dir_path).join(line));
+                ops::create(editor, &to, directory).and_then(|()| {
+                    if !directory {
+                        ops::open(editor, &to, OpenAction::Replace)?;
+                    }
+                    Ok((None, to))
+                })
+            }
+            EditKind::Delete { path, .. } => {
+                if line.trim().eq_ignore_ascii_case("y") {
+                    self.delete(path, editor);
+                }
+                return Focus::Keep;
+            }
+        };
+        match result {
+            Ok((from, to)) => {
+                self.moved(from.as_deref(), &to);
+                if to.is_file() && from.is_none() {
+                    return Focus::Release;
+                }
+            }
+            Err(err) => editor.set_error(err.to_string()),
+        }
+        Focus::Keep
+    }
+
+    /// Lists the directories of `from` (relative) and `to` (absolute) again after an entry was
+    /// moved, created (`from` is `None`) or deleted, and puts the cursor on `to`.
+    fn moved(&mut self, from: Option<&Path>, to: &Path) {
+        if let Some(parent) = from.and_then(Path::parent) {
+            self.tree.invalidate(parent);
+        }
+        if let Ok(to) = to.strip_prefix(&self.root) {
+            if let Some(parent) = to.parent() {
+                self.tree.invalidate(parent);
+            }
+            self.reveal(to.to_path_buf(), true);
+        }
+    }
+
+    /// Deletes the entry at `path`, relative to the root, moving the cursor off it first.
+    fn delete(&mut self, path: PathBuf, editor: &mut Editor) {
+        if let Some(index) = self.rows.index_of(self.cursor) {
+            let after =
+                (index + 1..self.rows.len()).find(|&i| !self.rows[i].path.starts_with(&path));
+            let neighbour = after.unwrap_or(index.saturating_sub(1));
+            self.cursor = self.rows[neighbour].node;
+        }
+        match ops::delete(editor, &self.root.join(&path)) {
+            Ok(()) => {
+                editor.set_status(format!("'{}' deleted", path.display()));
+                if let Some(parent) = path.parent() {
+                    self.tree.invalidate(parent);
+                }
+            }
+            Err(err) => editor.set_error(err.to_string()),
         }
     }
 
@@ -446,7 +781,8 @@ impl Workspace {
                 self.start = viewport::align(&self.rows, height, cursor, align);
                 cursor
             }
-            Action::Grow | Action::Shrink | Action::Fit | Action::Help | Action::Unfocus => cursor,
+            // The other actions leave the cursor where it is.
+            _ => cursor,
         };
         self.cursor = self.rows[target].node;
     }
@@ -464,7 +800,7 @@ impl Workspace {
 
     /// Scrolls just enough to show the cursor with `scrolloff` rows around it.
     fn reveal_cursor(&mut self, scrolloff: usize) {
-        if let Some(cursor) = self.rows.index_of(self.cursor) {
+        if let Some(cursor) = self.cursor_row() {
             let height = self.height.max(1);
             self.start = viewport::reveal(&self.rows, self.start, height, cursor, scrolloff);
         }
@@ -552,13 +888,39 @@ impl Workspace {
             .get(self.start)
             .map(|row| (row.node, row.path.clone()));
         let cursor_path = path_of(self.cursor);
-        self.rows = Rows::build(&self.tree, self.flatten_dirs);
+        self.rows = Rows::build(&self.tree, self.flatten_dirs, self.input_row());
         self.start = anchor
             .and_then(|(node, path)| self.shown_row(node, Some(&path)))
             .unwrap_or(self.start.min(self.rows.len() - 1));
         self.cursor = self
             .shown_row(self.cursor, cursor_path.as_deref())
             .map_or(self.tree.root(), |index| self.rows[index].node);
+    }
+
+    /// Where the input row for a new entry goes: after the directories for a file (when they
+    /// come first), else first.
+    fn input_row(&self) -> Option<InputRow> {
+        let Some(Edit {
+            kind: EditKind::Create { dir, directory, .. },
+            ..
+        }) = &self.edit
+        else {
+            return None;
+        };
+        let dir = *dir;
+        if !self.tree.contains(dir) {
+            return None;
+        }
+        let at = match (directory, self.sort) {
+            (false, FileTreeSort::DirectoriesFirst) => self
+                .tree
+                .children(dir)
+                .iter()
+                .take_while(|child| self.tree.node(**child).kind.group() == Group::Directory)
+                .count(),
+            _ => 0,
+        };
+        Some(InputRow { dir, at })
     }
 
     /// The row of `node`, last seen at `path`, or of its closest ancestor that has one.

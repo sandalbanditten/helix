@@ -24,6 +24,16 @@ pub struct Row {
     pub label: String,
     /// The display width of `label`.
     pub label_width: usize,
+    /// Whether this is the row a new entry's name is typed in rather than an entry.
+    pub input: bool,
+}
+
+/// A row to type the name of a new entry in, shown among the entries of the directory `dir`
+/// before the `at`th one.
+#[derive(Debug, Clone, Copy)]
+pub struct InputRow {
+    pub dir: NodeId,
+    pub at: usize,
 }
 
 #[derive(Debug, Default)]
@@ -31,12 +41,13 @@ pub struct Rows {
     rows: Vec<Row>,
     /// The row of every node that has one, including every directory of a run.
     index: HashMap<NodeId, usize>,
+    input: Option<usize>,
 }
 
 impl Rows {
     /// Flattens the expanded part of `tree`. With `flatten_dirs` a run of single-child
     /// directories becomes one row.
-    pub fn build(tree: &Tree, flatten_dirs: bool) -> Self {
+    pub fn build(tree: &Tree, flatten_dirs: bool, input: Option<InputRow>) -> Self {
         let root = tree.root();
         let label = display_name(&tree.node(root).name);
         let mut rows = Self {
@@ -49,14 +60,22 @@ impl Rows {
                 path: PathBuf::new(),
                 label_width: label.width(),
                 label,
+                input: false,
             }],
             index: HashMap::from([(root, 0)]),
+            input: None,
         };
-        rows.push_children(tree, 0, flatten_dirs);
+        rows.push_children(tree, 0, flatten_dirs, input);
         rows
     }
 
-    fn push_children(&mut self, tree: &Tree, parent: usize, flatten_dirs: bool) {
+    fn push_children(
+        &mut self,
+        tree: &Tree,
+        parent: usize,
+        flatten_dirs: bool,
+        input: Option<InputRow>,
+    ) {
         let dir = self.rows[parent].node;
         let depth = if parent == 0 {
             0
@@ -64,7 +83,15 @@ impl Rows {
             self.rows[parent].depth + 1
         };
         let children = tree.children(dir);
+        let input_at = input
+            .filter(|input| input.dir == dir)
+            .map(|input| input.at.min(children.len()));
+        let len = children.len() + usize::from(input_at.is_some());
         for (i, &head) in children.iter().enumerate() {
+            if input_at == Some(i) {
+                self.push_input(parent, depth, false);
+            }
+            let i = i + usize::from(input_at.is_some_and(|at| at <= i));
             let index = self.rows.len();
             let mut node = head;
             let mut path = self.rows[parent].path.join(&tree.node(head).name);
@@ -84,15 +111,39 @@ impl Rows {
                 head,
                 parent: Some(parent),
                 depth,
-                last: i + 1 == children.len(),
+                last: i + 1 == len,
                 path,
                 label_width: label.width(),
                 label,
+                input: false,
             });
             if tree.node(node).expanded {
-                self.push_children(tree, index, flatten_dirs);
+                self.push_children(tree, index, flatten_dirs, input);
             }
         }
+        if input_at == Some(children.len()) {
+            self.push_input(parent, depth, true);
+        }
+    }
+
+    fn push_input(&mut self, parent: usize, depth: usize, last: bool) {
+        self.input = Some(self.rows.len());
+        self.rows.push(Row {
+            node: self.rows[parent].node,
+            head: self.rows[parent].node,
+            parent: Some(parent),
+            depth,
+            last,
+            path: self.rows[parent].path.clone(),
+            label: String::new(),
+            label_width: 0,
+            input: true,
+        });
+    }
+
+    /// The index of the row for typing a new entry's name.
+    pub fn input(&self) -> Option<usize> {
+        self.input
     }
 
     pub fn len(&self) -> usize {
@@ -171,7 +222,7 @@ mod tests {
             dir("docs"),
             file("README.md"),
         ]);
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         assert_eq!(
             labels(&rows),
             ["root", "docs", "src/main/java/app", "README.md"]
@@ -182,7 +233,7 @@ mod tests {
         assert_eq!(rows[2].path, PathBuf::from("src/main/java/app"));
         assert_eq!(rows.index_of(main), Some(2));
 
-        let rows = Rows::build(&tree, false);
+        let rows = Rows::build(&tree, false, None);
         assert_eq!(labels(&rows), ["root", "docs", "src", "README.md"]);
 
         // Expanding the run shows the last directory's entries one level down.
@@ -191,7 +242,7 @@ mod tests {
             tree.expand(id);
         }
         tree.apply_listing(app, Some(vec![file("Foo.java")]));
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         assert_eq!(
             labels(&rows),
             ["root", "docs", "src/main/java/app", "Foo.java", "README.md"]
@@ -209,7 +260,7 @@ mod tests {
         let x = tree.find("a/x".as_ref()).unwrap();
         tree.expand(x);
         tree.apply_listing(x, Some(vec![file("deep")]));
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         assert_eq!(labels(&rows), ["root", "a", "x", "deep", "y", "b", "c"]);
         let lasts: Vec<_> = rows.iter().map(|row| row.last).collect();
         assert_eq!(lasts, [true, false, false, true, true, false, true]);
@@ -221,9 +272,40 @@ mod tests {
     }
 
     #[test]
+    fn the_input_row_sits_among_the_entries() {
+        let mut tree = tree_with(vec![dir("a"), dir("b"), file("c")]);
+        let root = tree.root();
+        let labels = |rows: &Rows| -> Vec<(String, bool)> {
+            rows.iter()
+                .map(|row| (row.label.clone(), row.last))
+                .collect()
+        };
+        let rows = Rows::build(&tree, true, Some(InputRow { dir: root, at: 2 }));
+        assert_eq!(rows.input(), Some(3));
+        assert_eq!(
+            labels(&rows),
+            [
+                ("root".to_owned(), true),
+                ("a".to_owned(), false),
+                ("b".to_owned(), false),
+                (String::new(), false),
+                ("c".to_owned(), true),
+            ]
+        );
+        let a = tree.find("a".as_ref()).unwrap();
+        tree.expand(a);
+        tree.apply_listing(a, Some(vec![]));
+        let rows = Rows::build(&tree, true, Some(InputRow { dir: a, at: 0 }));
+        assert_eq!(rows.input(), Some(2));
+        assert!(rows[2].last);
+        assert_eq!(rows[2].depth, 1);
+        assert_eq!(rows.index_of(a), Some(1));
+    }
+
+    #[test]
     fn control_characters_are_replaced() {
         let tree = tree_with(vec![file("evil\u{1b}[2Jname")]);
-        let rows = Rows::build(&tree, true);
+        let rows = Rows::build(&tree, true, None);
         assert_eq!(rows[1].label, "evil?[2Jname");
         assert_eq!(rows[1].path, PathBuf::from("evil\u{1b}[2Jname"));
     }

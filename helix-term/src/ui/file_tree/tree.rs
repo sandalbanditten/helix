@@ -56,7 +56,6 @@ impl Kind {
     }
 
     /// Whether the entry can be opened in a buffer.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the file operations"))]
     pub fn is_file(self) -> bool {
         matches!(self, Self::File { .. } | Self::Link(LinkTarget::File))
     }
@@ -80,6 +79,8 @@ pub struct Node {
     pub expanded: bool,
     /// Whether `children` come from a listing of this directory rather than a probe.
     listed: bool,
+    /// Whether the directory changed since it was listed and a new listing is on its way.
+    stale: bool,
 }
 
 /// One entry of a directory listing.
@@ -124,6 +125,7 @@ impl Tree {
             children: Children::Unloaded,
             expanded: true,
             listed: false,
+            stale: false,
         });
         Self {
             nodes,
@@ -192,19 +194,6 @@ impl Tree {
             .find(|child| self.nodes[*child].name == name)
     }
 
-    /// Whether `id` is `ancestor` or lies below it.
-    #[expect(dead_code, reason = "used by the file operations")]
-    pub fn is_within(&self, id: NodeId, ancestor: NodeId) -> bool {
-        let mut current = Some(id);
-        while let Some(node) = current {
-            if node == ancestor {
-                return true;
-            }
-            current = self.nodes[node].parent;
-        }
-        false
-    }
-
     /// The directories that were expanded since the last call and so need a (fresh) listing.
     pub fn take_listing_requests(&mut self) -> Vec<NodeId> {
         let mut requests = mem::take(&mut self.listing_requests);
@@ -267,6 +256,7 @@ impl Tree {
             }
             self.nodes[dir].children = Children::Unreadable;
             self.nodes[dir].listed = true;
+            self.nodes[dir].stale = false;
             return;
         };
 
@@ -297,6 +287,7 @@ impl Tree {
         self.sort_children(&mut children);
         self.nodes[dir].children = Children::Loaded(children);
         self.nodes[dir].listed = true;
+        self.nodes[dir].stale = false;
     }
 
     fn insert(&mut self, parent: NodeId, entry: &Entry) -> NodeId {
@@ -307,6 +298,7 @@ impl Tree {
             children: Children::Unloaded,
             expanded: false,
             listed: false,
+            stale: false,
         })
     }
 
@@ -365,6 +357,19 @@ impl Tree {
         }
     }
 
+    /// Asks for a new listing of the expanded directory at `path`, e.g. because an entry was
+    /// created in it. Until it arrives, [`reveal`](Self::reveal) waits for it.
+    pub fn invalidate(&mut self, path: &Path) {
+        let Some(id) = self.find(path) else {
+            return;
+        };
+        let node = &mut self.nodes[id];
+        if node.kind == Kind::Directory && node.expanded {
+            node.stale = true;
+            self.listing_requests.push(id);
+        }
+    }
+
     /// Collapses the directory `id` and everything below it, forgetting all entries below it but
     /// its single-child run.
     pub fn collapse(&mut self, id: NodeId) {
@@ -404,6 +409,9 @@ impl Tree {
                 return Reveal::Missing;
             }
             self.expand(current);
+            if self.nodes[current].stale {
+                return Reveal::Unlisted(current);
+            }
             current = match &self.nodes[current].children {
                 Children::Unloaded => return Reveal::Unlisted(current),
                 Children::Unreadable => return Reveal::Missing,
@@ -592,6 +600,18 @@ pub(super) mod tests {
         );
         assert_eq!(tree.find("a.txt".as_ref()), Some(a));
         assert_eq!(tree.node(a).kind, Kind::Link(LinkTarget::File));
+    }
+
+    #[test]
+    fn revealing_waits_for_invalidated_directories() {
+        let mut tree = tree_with(vec![file("anchor.txt")]);
+        let root = tree.root();
+        tree.take_listing_requests();
+        tree.invalidate("".as_ref());
+        assert_eq!(tree.take_listing_requests(), [root]);
+        assert_eq!(tree.reveal("new.txt".as_ref()), Reveal::Unlisted(root));
+        tree.apply_listing(root, Some(vec![file("anchor.txt"), file("new.txt")]));
+        assert!(matches!(tree.reveal("new.txt".as_ref()), Reveal::Found(_)));
     }
 
     #[test]

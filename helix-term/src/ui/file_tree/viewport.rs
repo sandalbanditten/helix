@@ -109,7 +109,7 @@ mod tests {
         let alpha = tree.find("alpha".as_ref()).unwrap();
         tree.expand(alpha);
         tree.apply_listing(alpha, Some(vec![file("a-0"), file("a-1")]));
-        Rows::build(&tree, true)
+        Rows::build(&tree, true, None)
     }
 
     #[test]

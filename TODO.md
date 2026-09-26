@@ -29,6 +29,8 @@ It should preserve the following features from `grove`:
   - Icons are `eza`'s, except that an expanded directory always shows the open folder `` (U+F115), even one with an icon of its own; collapsed directories keep theirs.
 - Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
 - The rest of grove: git marks, unsaved `+` marks, icons, guides, pinned ancestor rows, splits (`C-s`/`C-v`), delete (`d`), mouse support.
+  - `d` asks on the command line: `Delete <path>? (y/n):`, where `y` and Enter delete.
+- Prompts and messages are styled like helix's: prompt labels are lowercase like `rename-to:` (`move-to:`), sentences start with a capital letter.
 
 Expanding on `grove` it should have the following features:
 - Trying to go up from the top item should cycle you to the bottom and vice-versa.
