@@ -77,6 +77,8 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub children: Children,
     pub expanded: bool,
+    /// Whether `children` come from a listing of this directory rather than a probe.
+    listed: bool,
 }
 
 /// One entry of a directory listing.
@@ -119,6 +121,7 @@ impl Tree {
             parent: None,
             children: Children::Unloaded,
             expanded: true,
+            listed: false,
         });
         Self {
             nodes,
@@ -263,6 +266,7 @@ impl Tree {
                 self.remove_subtree(child);
             }
             self.nodes[dir].children = Children::Unreadable;
+            self.nodes[dir].listed = true;
             return;
         };
 
@@ -292,6 +296,7 @@ impl Tree {
         }
         self.sort_children(&mut children);
         self.nodes[dir].children = Children::Loaded(children);
+        self.nodes[dir].listed = true;
     }
 
     fn insert(&mut self, parent: NodeId, entry: &Entry) -> NodeId {
@@ -301,11 +306,13 @@ impl Tree {
             parent: Some(parent),
             children: Children::Unloaded,
             expanded: false,
+            listed: false,
         })
     }
 
     /// Makes the collapsed directory `dir` hold exactly its probed single-child run.
     fn set_run(&mut self, dir: NodeId, only_child: Option<&Entry>) {
+        self.nodes[dir].listed = false;
         let old = mem::replace(&mut self.nodes[dir].children, Children::Unloaded);
         let mut old = match old {
             Children::Loaded(children) => children,
@@ -346,13 +353,15 @@ impl Tree {
         }
     }
 
-    /// Expands the directory `id`. It is listed again after
+    /// Expands the directory `id`. Unless it has been listed, it is requested by
     /// [`take_listing_requests`](Self::take_listing_requests).
     pub fn expand(&mut self, id: NodeId) {
         let node = &mut self.nodes[id];
         if node.kind == Kind::Directory && !node.expanded {
             node.expanded = true;
-            self.listing_requests.push(id);
+            if !node.listed {
+                self.listing_requests.push(id);
+            }
         }
     }
 
@@ -363,6 +372,7 @@ impl Tree {
             return;
         }
         self.nodes[id].expanded = false;
+        self.nodes[id].listed = false;
         match mem::replace(&mut self.nodes[id].children, Children::Unloaded) {
             Children::Loaded(children) => {
                 if let [child] = children[..] {
@@ -482,6 +492,10 @@ pub(super) mod tests {
             tree.path(tree.find("src/main.rs".as_ref()).unwrap()),
             Path::new("src/main.rs")
         );
+        // A directory that is collapsed and expanded again is listed afresh.
+        tree.collapse(src);
+        tree.expand(src);
+        assert_eq!(tree.take_listing_requests(), [src]);
     }
 
     #[test]

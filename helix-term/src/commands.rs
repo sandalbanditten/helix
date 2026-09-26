@@ -405,6 +405,8 @@ impl MappableCommand {
         file_explorer, "Open file explorer in workspace root",
         file_explorer_in_current_buffer_directory, "Open file explorer at current buffer's directory",
         file_explorer_in_current_directory, "Open file explorer at current working directory",
+        focus_file_tree, "Focus file tree, or return focus to the editor",
+        toggle_file_tree, "Toggle file tree",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
         jumplist_picker, "Open jumplist picker",
@@ -3129,6 +3131,26 @@ fn file_picker_in_current_directory(cx: &mut Context) {
     }
     let picker = ui::file_picker(cx.editor, cwd);
     cx.push_layer(Box::new(overlaid(picker)));
+}
+
+fn focus_file_tree(cx: &mut Context) {
+    // Keys go to the tree from now on, so leave insert mode for good.
+    if cx.editor.mode == Mode::Insert {
+        normal_mode(cx);
+    }
+    cx.callback.push(Box::new(|compositor, cx| {
+        if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+            editor_view.file_tree.toggle_focus(cx.editor);
+        }
+    }));
+}
+
+fn toggle_file_tree(cx: &mut Context) {
+    cx.callback.push(Box::new(|compositor, cx| {
+        if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+            editor_view.file_tree.toggle(cx.editor);
+        }
+    }));
 }
 
 fn file_explorer(cx: &mut Context) {

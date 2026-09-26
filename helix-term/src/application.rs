@@ -10,7 +10,7 @@ use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
     document::{DocumentOpenError, DocumentSavedEventResult},
-    editor::{ConfigEvent, EditorEvent},
+    editor::{ConfigEvent, EditorEvent, FileTreeStart},
     graphics::Rect,
     theme,
     tree::Layout,
@@ -141,6 +141,9 @@ impl Application {
 
         let jobs = Jobs::new();
 
+        let file_tree_start = config.load().editor.file_tree.start;
+        let mut show_file_tree = file_tree_start == FileTreeStart::Always;
+
         if args.load_tutor {
             let path = helix_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;
@@ -153,6 +156,7 @@ impl Application {
             if let Some((first, _)) = files_it.next_if(|(p, _)| p.is_dir()) {
                 let picker = ui::file_picker(&editor, first);
                 compositor.push(Box::new(overlaid(picker)));
+                show_file_tree = true;
             }
 
             // If there are any more files specified, open them
@@ -207,6 +211,10 @@ impl Application {
                     }
                 }
 
+                if file_tree_start == FileTreeStart::Multiple && nr_of_files > 1 {
+                    show_file_tree = true;
+                }
+
                 // if all files were invalid, replace with empty buffer
                 if nr_of_files == 0 {
                     editor.new_file(Action::VerticalSplit);
@@ -230,6 +238,12 @@ impl Application {
             editor
                 .new_file_from_stdin(Action::VerticalSplit)
                 .unwrap_or_else(|_| editor.new_file(Action::VerticalSplit));
+        }
+
+        if show_file_tree {
+            if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+                editor_view.file_tree.show(&editor);
+            }
         }
 
         #[cfg(windows)]
