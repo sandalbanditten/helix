@@ -32,7 +32,7 @@
 | clojure | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  | `clojure-lsp` |
 | cmake | ✓ | ✓ | ✓ |  | ✓ |  |  |  | `neocmakelsp`, `cmake-language-server` |
 | codeql | ✓ | ✓ |  |  |  |  |  |  | `codeql` |
-| comment | ✓ |  |  |  |  |  |  |  |  |
+| comment | ✓ |  |  |  |  |  |  | ✓ |  |
 | common-lisp | ✓ | ✓ |  | ✓ | ✓ |  |  |  | `cl-lsp` |
 | concerto | ✓ | ✓ | ✓ |  |  |  |  |  |  |
 | cpon | ✓ |  | ✓ |  |  |  |  |  |  |
@@ -163,7 +163,7 @@
 | koka | ✓ |  | ✓ |  |  |  |  |  | `koka` |
 | kotlin | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | `kotlin-language-server` |
 | koto | ✓ | ✓ | ✓ |  | ✓ |  | ✓ |  | `koto-ls` |
-| latex | ✓ | ✓ | ✓ |  |  |  | ✓ |  | `texlab` |
+| latex | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | `texlab` |
 | ld | ✓ |  | ✓ |  |  |  |  |  |  |
 | ldif | ✓ |  |  |  |  |  |  |  |  |
 | lean | ✓ |  |  |  |  |  | ✓ |  | `lake` |
@@ -181,9 +181,9 @@
 | mail | ✓ | ✓ |  |  | ✓ |  |  |  |  |
 | make | ✓ |  | ✓ |  |  |  |  |  |  |
 | markdoc | ✓ |  |  |  |  |  |  |  | `markdoc-ls` |
-| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ |  | `marksman`, `markdown-oxide`, `rumdl` |
-| markdown-rustdoc | ✓ |  |  |  |  |  |  |  |  |
-| markdown.inline | ✓ |  |  |  |  |  |  |  |  |
+| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ | ✓ | `marksman`, `markdown-oxide`, `rumdl` |
+| markdown-rustdoc | ✓ |  |  |  |  |  |  | ✓ |  |
+| markdown.inline | ✓ |  |  |  |  |  |  | ✓ |  |
 | matlab | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  |
 | mermaid | ✓ |  |  |  |  |  |  |  |  |
 | meson | ✓ |  | ✓ |  |  |  |  |  | `mesonlsp` |
@@ -311,7 +311,7 @@
 | twig | ✓ |  |  |  |  |  |  |  |  |
 | typescript | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | `typescript-language-server` |
 | typespec | ✓ | ✓ | ✓ |  |  |  |  |  | `tsp-server` |
-| typst | ✓ | ✓ |  | ✓ |  | ✓ | ✓ |  | `tinymist` |
+| typst | ✓ | ✓ |  | ✓ |  | ✓ | ✓ | ✓ | `tinymist` |
 | ungrammar | ✓ |  |  |  |  |  |  |  |  |
 | unison | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
 | uxntal | ✓ |  |  |  |  |  |  |  |  |

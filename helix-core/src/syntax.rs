@@ -1681,6 +1681,24 @@ mod test {
         // test("multiple_nodes_grouped", 1..37);
     }
 
+    /// The words in the regions that `spell_regions` selects in `source`, in order.
+    fn spell_checked_words(language: &str, source: &str) -> Vec<String> {
+        let text = Rope::from_str(source);
+        let language = LOADER.language_for_name(language).unwrap();
+        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
+        syntax
+            .spell_regions(text.slice(..), &LOADER, 0..text.len_bytes())
+            .into_iter()
+            .flat_map(|region| {
+                source[region]
+                    .split(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+                    .filter(|word| !word.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
     fn test_merge_regions() {
@@ -1716,6 +1734,114 @@ mod test {
             subtract_regions(vec![0..4, 6..10, 12..20], &[3..8, 14..15], 0..20),
             [0..3, 8..10, 12..14, 15..20]
         );
+    }
+
+    #[test]
+    fn test_spell_regions_markdown() {
+        let source = indoc::indoc! {r#"
+            ---
+            title: Front mattr
+            ---
+            # A heading with *emphasis*
+
+            Prose with `inline code`, $\alpha$ math, a [link text](https://example.com/path "Link title")
+            and <https://autolink.com> or <me@example.org>&nbsp;![image alt](image.png).
+
+            | Cell | Other |
+            |------|-------|
+            | row  | value |
+
+            ```rust
+            // code commnet
+            let x = 1;
+            ```
+
+                // indented commnet
+        "#};
+        let expected = [
+            "A", "heading", "with", "emphasis", "Prose", "with", "math", "a", "link", "text",
+            "Link", "title", "and", "or", "image", "alt", "Cell", "Other", "row", "value",
+        ];
+        assert_eq!(spell_checked_words("markdown", source), expected);
+        // Unmarked code blocks are Rust in rustdoc, and still skipped.
+        assert_eq!(spell_checked_words("markdown-rustdoc", source), expected);
+    }
+
+    #[test]
+    fn test_spell_regions_latex() {
+        let source = indoc::indoc! {r#"
+            \documentclass[a4paper]{article}
+            \usepackage{amsmath}
+            \newcommand{\foo}[1]{Macro body}
+            \newenvironment{myenv}{}{}
+            \begin{document}
+            \section{Introduction to things}
+            We don't have \textbf{bold words}~\cite{knuth84}, see~\ref{fig:one}.\label{sec:intro}
+            Inline $x = \text{some text}$ and display \[ y = mx \] math.
+            \begin{equation}
+              E = mc^2
+            \end{equation}
+            \begin{verbatim}
+            verbatm text
+            \end{verbatim}
+            \includegraphics[width=0.5\textwidth]{figgure.png}
+            % A comment here
+            \end{document}
+        "#};
+        assert_eq!(
+            spell_checked_words("latex", source),
+            [
+                "Macro",
+                "body",
+                "Introduction",
+                "to",
+                "things",
+                "We",
+                "don't",
+                "have",
+                "bold",
+                "words",
+                "see",
+                "Inline",
+                "and",
+                "display",
+                "math",
+                "A",
+                "comment",
+                "here",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_spell_regions_typst() {
+        let source = indoc::indoc! {r#"
+            = A heading with _emphasis_
+            We don't go to #link("https://example.com")[the website] today.
+            See @fig-one and <lbl>, `raw spn` and $x + "mathtxt"$ and \#escaped.
+            #set text(font: "Linux Libertine")
+            #let f(x) = [Content in a block #x]
+            // A comment here
+            ```rust
+            // code commnet
+            ```
+        "#};
+        assert_eq!(
+            spell_checked_words("typst", source),
+            [
+                "A", "heading", "with", "emphasis", "We", "don't", "go", "to", "the", "website",
+                "today", "See", "and", "and", "and", "escaped", "Content", "in", "a", "block", "A",
+                "comment", "here",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_spell_regions_injected_comment() {
+        // The `comment` grammar is injected into Rust comments; its prose is checked while the
+        // surrounding code is not.
+        let source = "// helo wrld\nfn main() {} // TODO: fix\n";
+        assert_eq!(spell_checked_words("rust", source), ["helo", "wrld", "fix"]);
     }
 
     #[test]

@@ -22,6 +22,7 @@ assets = [
   { source = "../runtime/grammars/*", dest = "/usr/lib/helix/runtime/grammars/", mode = "644" }, # to avoid sources/
   { source = "../runtime/queries/**/*", dest = "/usr/lib/helix/runtime/queries/", mode = "644" },
   { source = "../runtime/themes/**/*", dest = "/usr/lib/helix/runtime/themes/", mode = "644" },
+  { source = "../runtime/dictionaries/**/*", dest = "/usr/lib/helix/runtime/dictionaries/", mode = "644" },
   { source = "../README.md", dest = "/usr/share/doc/helix/", mode = "644" },
   { source = "../contrib/completion/hx.bash", dest = "/usr/share/bash-completion/completions/hx", mode = "644" },
   { source = "../contrib/completion/hx.fish", dest = "/usr/share/fish/vendor_completions.d/hx.fish", mode = "644" },
