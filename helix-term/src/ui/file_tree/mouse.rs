@@ -235,7 +235,7 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::workspace, tree::tests::file};
+    use super::super::{tree::tests::file, workspace::tests::workspace};
     use super::*;
 
     /// The test workspace with ten more files, drawn four rows high.

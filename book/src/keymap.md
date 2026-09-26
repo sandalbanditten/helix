@@ -19,6 +19,7 @@
 - [Insert mode](#insert-mode)
 - [Select / extend mode](#select--extend-mode)
 - [Picker](#picker)
+- [File tree](#file-tree)
 - [Prompt](#prompt)
 
 > 💡 Mappings marked (**LSP**) require an active language server for the file.
@@ -299,7 +300,8 @@ This layer is a kludge of mappings, mostly pickers.
 | -----   | -----------                                                             | -------                                    |
 | `f`     | Open file picker at LSP workspace root                                  | `file_picker`                              |
 | `F`     | Open file picker at current working directory                           | `file_picker_in_current_directory`         |
-| `e`     | Open file explorer at workspace root                                     | `file_explorer`                            |
+| `e`     | Focus/unfocus the [file tree](#file-tree)                               | `focus_file_tree`                          |
+| `E`     | Toggle the [file tree](#file-tree)                                      | `toggle_file_tree`                         |
 | `.`     | Open file explorer at current buffer's directory                        | `file_explorer_in_current_buffer_directory`|
 | `b`     | Open buffer picker                                                      | `buffer_picker`                            |
 | `j`     | Open jumplist picker                                                    | `jumplist_picker`                          |
@@ -486,6 +488,45 @@ See the documentation page on [pickers](./pickers.md) for more info.
 | `Ctrl-v`                     | Open vertically                                            |
 | `Ctrl-t`                     | Toggle preview                                             |
 | `Escape`, `Ctrl-c`           | Close picker                                               |
+
+## File tree
+
+Keys to use within the [file tree](./editor.md#editorfile-tree-section) while it is focused
+(`Space e`). Remapping currently not supported. Any other key returns focus to the editor and runs
+there.
+
+| Key                  | Description |
+| -----                | ----------- |
+| `j`, `Down`          | Move down; from the last row to the first |
+| `k`, `Up`            | Move up; from the first row to the last |
+| `l`, `Right`         | Expand directory |
+| `h`, `Left`          | Collapse directory |
+| `Ctrl-d`, `Ctrl-u`   | Move half a page down, up |
+| `PageDown`, `PageUp` | Move a page down, up |
+| `gg`, `Home`         | Go to the first row |
+| `ge`, `End`          | Go to the last row |
+| `zz`, `zc`           | Align the cursor row to the center |
+| `zt`, `zb`           | Align the cursor row to the top, bottom |
+| `Enter`              | Open file, or expand/collapse directory |
+| `Ctrl-s`, `Ctrl-v`   | Open file in a horizontal, vertical split |
+| `o`                  | Open in the default application |
+| `r`                  | Rename, in the row |
+| `R`                  | Move to a path in the workspace, in the command line |
+| `Ctrl-r`             | Move to a full path, in the command line |
+| `a`                  | New file, in a row of its directory (with a trailing `/` a directory) |
+| `A`                  | New directory, in a row of its directory |
+| `d`                  | Delete for good, after asking |
+| `/`                  | Search for a file |
+| `n`, `N`             | Go to the next, previous match |
+| `+`, `-`             | Widen, narrow the file tree |
+| `=`                  | Fit the width to the widest row |
+| `?`                  | Show these keys |
+| `Escape`             | Return focus to the editor |
+
+The search moves the cursor to the first file after it, in the order of the tree, whose path
+matches like in the [file picker](./pickers.md) as you type; `Enter` keeps it and `Escape` goes
+back. New files are created in the directory under the cursor, or in the one holding the file under
+it, and open in a buffer. Renaming and moving keep open buffers on their files.
 
 ## Prompt
 

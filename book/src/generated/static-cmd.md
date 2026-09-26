@@ -100,9 +100,11 @@
 | `file_picker` | Open file picker | normal: `` <space>f ``, select: `` <space>f `` |
 | `file_picker_in_current_buffer_directory` | Open file picker at current buffer's directory |  |
 | `file_picker_in_current_directory` | Open file picker at current working directory | normal: `` <space>F ``, select: `` <space>F `` |
-| `file_explorer` | Open file explorer in workspace root | normal: `` <space>e ``, select: `` <space>e `` |
+| `file_explorer` | Open file explorer in workspace root |  |
 | `file_explorer_in_current_buffer_directory` | Open file explorer at current buffer's directory | normal: `` <space>. ``, select: `` <space>. `` |
 | `file_explorer_in_current_directory` | Open file explorer at current working directory |  |
+| `focus_file_tree` | Focus/unfocus file tree | normal: `` <space>e ``, select: `` <space>e `` |
+| `toggle_file_tree` | Toggle file tree | normal: `` <space>E ``, select: `` <space>E `` |
 | `code_action` | Perform code action | normal: `` <space>a ``, select: `` <space>a `` |
 | `buffer_picker` | Open buffer picker | normal: `` <space>b ``, select: `` <space>b `` |
 | `jumplist_picker` | Open jumplist picker | normal: `` <space>j ``, select: `` <space>j `` |
@@ -256,7 +258,7 @@
 | `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zc ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zc ``, `` zz `` |
 | `align_view_bottom` | Align view bottom | normal: `` Zb ``, `` zb ``, select: `` Zb ``, `` zb `` |
 | `toggle_fold` | Toggle fold at selections | normal: `` Zf ``, `` zf ``, select: `` Zf ``, `` zf `` |
-| `toggle_fold_recursive` | Toggle folds recursively | normal: `` Za ``, `` za ``, select: `` Za ``, `` za `` |
+| `toggle_fold_recursive` | Toggle fold at selections recursively | normal: `` Za ``, `` za ``, select: `` Za ``, `` za `` |
 | `fold_all` | Fold all | normal: `` ZF ``, `` zF ``, select: `` ZF ``, `` zF `` |
 | `unfold_all` | Unfold all | normal: `` ZU ``, `` zU ``, select: `` ZU ``, `` zU `` |
 | `scroll_up` | Scroll view up | normal: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> ``, select: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> `` |

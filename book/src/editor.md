@@ -8,6 +8,7 @@
 - [`[editor.cursor-shape]` Section](#editorcursor-shape-section)
 - [`[editor.file-picker]` Section](#editorfile-picker-section)
 - [`[editor.file-explorer]` Section](#editorfile-explorer-section)
+- [`[editor.file-tree]` Section](#editorfile-tree-section)
 - [`[editor.buffer-picker]` Section](#editorbuffer-picker-section)
 - [`[editor.auto-pairs]` Section](#editorauto-pairs-section)
 - [`[editor.auto-save]` Section](#editorauto-save-section)
@@ -278,6 +279,49 @@ Note that the ignore files consulted by the file explorer when `ignore` is set t
 |`git-global` | Enables reading global `.gitignore`, whose path is specified in git's config: `core.excludesfile` option | `false`
 |`git-exclude` | Enables reading `.git/info/exclude` files | `false`
 |`flatten-dirs` | Enables flattening single child directories | `true`
+
+### `[editor.file-tree]` Section
+
+The file tree lists the workspace, the current working directory, beside the editor, drawn like
+`eza --tree`. Each row can carry a git mark on the left, a `*` when the file is open in a buffer
+(in another color for the focused buffer) and a `+` on the right when the file, or a file in the
+directory, has unsaved changes. The tree runs from the top of the screen down to the statusline,
+which keeps the full width.
+
+`Space e` focuses the tree, putting its cursor on the current file, and gives the editor its focus
+back; `Space E` switches between always showing the tree and showing it only while it is focused.
+While the tree is focused it takes the keys listed in the [keymap](./keymap.md#file-tree); any other
+key gives the editor its focus back and runs there.
+
+The tree follows the working directory, changes made on disk and the git status. It is fitted to
+its widest row when first shown; `=` fits it again and `+`/`-` widen and narrow it. With
+[`mouse`](#editor-section) on, clicking a file opens it, clicking a directory expands or collapses
+it, the wheel scrolls, and the rail between tree and editor scrolls, pages and, dragged sideways,
+resizes the tree. The search (`/`) goes through the files the file picker lists, following the
+[`[editor.file-picker]`](#editorfile-picker-section) settings.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `start` | When the tree is shown at startup: `"never"`, `"always"`, or `"multiple"` when two or more files are opened. `hx <dir>` always shows it | `"never"` |
+| `side` | The side of the editor the tree docks on: `"left"` or `"right"` | `"left"` |
+| `icons` | Whether entries show the icons `eza` shows, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
+| `guides` | Whether tree guides are drawn | `true` |
+| `expanders` | The marks of collapsed and expanded directories: `true` for `▸` and `▾`, `false` for none, or two characters like `["+", "-"]` | `true` |
+| `flatten-dirs` | Whether a run of single-child directories is shown as one row, like `src/main/java` | `true` |
+| `sort` | `"directories-first"`, or `"alphabetical"` for directories among files like `eza` | `"directories-first"` |
+| `ls-colors` | Where entry colors come from: `true` reads `LS_COLORS` and then `EZA_COLORS` (with the colors of GNU `ls` when neither is set), `false` uses the theme, and a string is an `LS_COLORS` specification | `true` |
+
+The tree is styled with the `ui.file-tree` [theme scopes](./themes.md#interface).
+
+Example:
+
+```toml
+[editor.file-tree]
+start = "multiple"
+side = "right"
+expanders = ["+", "-"]
+ls-colors = "di=1;34:*.rs=38;5;208"
+```
 
 ### `[editor.buffer-picker]` Section
 

@@ -339,7 +339,7 @@ These scopes are used for theming the editor interface:
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
 | `ui.picker.header.column`         | Column names in pickers with multiple columns                                                  |
 | `ui.picker.header.column.active`  | The column name in pickers with multiple columns where the cursor is entering into.            |
-| `ui.window`                       | Borderlines separating splits                                                                  |
+| `ui.window`                       | Borderlines separating splits and the file tree                                                |
 | `ui.help`                         | Description box for commands                                                                   |
 | `ui.text`                         | Default text style, command prompts, popup text, etc.                                          |
 | `ui.text.focus`                   | The currently selected line in the picker                                                      |
@@ -358,7 +358,18 @@ These scopes are used for theming the editor interface:
 | `ui.virtual.fold`                 | Placeholder of folded text (see the [`editor.folding` config][editor-section])                 |
 | `ui.menu`                         | Code and command completion menus                                                              |
 | `ui.menu.selected`                | Selected autocomplete item                                                                     |
-| `ui.menu.scroll`                  | `fg` sets thumb color, `bg` sets track color of scrollbar                                      |
+| `ui.menu.scroll`                  | `fg` sets thumb color, `bg` sets track color of scrollbar; the file tree uses `fg` for its thumb |
+| `ui.file-tree`                    | The [file tree][file-tree-section], falling back to `ui.background` and `ui.text`              |
+| `ui.file-tree.selected`           | The file tree's cursor row, bold unless set                                                    |
+| `ui.file-tree.active`             | The file tree's row of the focused buffer's file, falling back to `ui.bufferline.active`       |
+| `ui.file-tree.pinned`             | Directories pinned at the top of the file tree while scrolling                                 |
+| `ui.file-tree.guide`              | The file tree's guides and directory marks, falling back to `ui.virtual.indent-guide`          |
+| `ui.file-tree.directory`          | Directory names in the file tree without `ls-colors`, falling back to `ui.text.directory`      |
+| `ui.file-tree.buffer`             | The `*` of files open in a buffer, falling back to `ui.file-tree.guide`                        |
+| `ui.file-tree.buffer.focused`     | The `*` of the focused buffer's file, falling back to `info`                                   |
+| `ui.file-tree.unsaved`            | The `+` of files with unsaved changes, falling back to `info`                                  |
+| `ui.file-tree.error`              | Unreadable directories and broken links in the file tree, falling back to `error`              |
+| `ui.file-tree.match`              | Characters matching the file tree's search, falling back to bold `special`                     |
 | `ui.selection`                    | For selections in the editing area                                                             |
 | `ui.selection.primary`            |                                                                                                |
 | `ui.highlight`                    | Highlighted lines in the picker preview                                                        |
@@ -385,4 +396,5 @@ These scopes are used for theming the editor interface:
 | `tabstop`                         | Snippet placeholder                                                                            |
 
 [editor-section]: ./configuration.md#editor-section
+[file-tree-section]: ./editor.md#editorfile-tree-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

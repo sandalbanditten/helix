@@ -54,7 +54,8 @@ pub fn reveal(rows: &Rows, start: usize, height: usize, target: usize, scrolloff
         return clamp(rows, target.saturating_sub(margin(start)), height);
     }
     let max = max_start(rows, height);
-    let mut start = start;
+    // No more than `height` rows fit, so there is no need to try starts before that.
+    let mut start = start.max((target + 1).saturating_sub(height));
     while start < max && target + margin(start) >= start + capacity(rows, start, height) {
         start += 1;
     }
