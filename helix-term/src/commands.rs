@@ -458,6 +458,7 @@ impl MappableCommand {
         goto_prev_diag, "Goto previous diagnostic",
         goto_next_spelling, "Goto next misspelling",
         goto_prev_spelling, "Goto previous misspelling",
+        fix_spelling, "Fix misspelling under cursor",
         goto_next_change, "Goto next change",
         goto_prev_change, "Goto previous change",
         goto_first_change, "Goto first change",

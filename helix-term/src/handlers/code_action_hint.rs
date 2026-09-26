@@ -1,6 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use futures_util::stream::FuturesUnordered;
+use helix_core::{diagnostic::DiagnosticProvider, Range};
 use helix_event::{cancelable_future, register_hook, send_blocking, AsyncHook};
 use helix_lsp::lsp::{CodeAction, CodeActionOrCommand, CodeActionTriggerKind};
 use helix_view::{
@@ -55,6 +56,17 @@ fn request_code_action_hint(editor: &mut Editor, doc_id: DocumentId, view_id: Vi
     doc.ensure_view_init(view_id);
 
     let selection_range = doc.selection(view_id).primary();
+    // Misspellings always have code actions (at least "Add to dictionary"), without asking the
+    // language servers.
+    if doc.diagnostics().iter().any(|diagnostic| {
+        diagnostic.provider == DiagnosticProvider::Spelling
+            && selection_range.overlaps(&Range::new(diagnostic.range.start, diagnostic.range.end))
+    }) {
+        doc.code_action_controller(view_id).cancel();
+        doc.set_code_action_hints(view_id);
+        return;
+    }
+
     let mut futures: FuturesUnordered<_> =
         code_actions_for_range(doc, selection_range, None, CodeActionTriggerKind::AUTOMATIC)
             .into_iter()

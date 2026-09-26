@@ -401,8 +401,10 @@ impl EditorView {
         // Diagnostic tags
         let unnecessary = theme.find_highlight_exact("diagnostic.unnecessary");
         let deprecated = theme.find_highlight_exact("diagnostic.deprecated");
-        // Misspellings get their own scope when the theme defines one.
-        let spelling = theme.find_highlight_exact("diagnostic.spelling");
+        // Misspellings get their own scope, which defaults to the (usually red) error style.
+        let spelling = theme
+            .find_highlight_exact("diagnostic.spelling")
+            .unwrap_or_else(|| get_scope_of("diagnostic.error"));
 
         let mut default_vec = Vec::new();
         let mut info_vec = Vec::new();
@@ -430,9 +432,7 @@ impl EditorView {
         };
 
         for diagnostic in doc.diagnostics() {
-            // Misspellings use `diagnostic.spelling` when the theme defines it; otherwise they fall
-            // through to the severity-based styling (`diagnostic.hint`).
-            if spelling.is_some() && diagnostic.provider == DiagnosticProvider::Spelling {
+            if diagnostic.provider == DiagnosticProvider::Spelling {
                 push_diagnostic(&mut spelling_vec, diagnostic.range);
                 continue;
             }
@@ -509,12 +509,10 @@ impl EditorView {
                 ranges: error_vec,
             },
         ]);
-        if let Some(highlight) = spelling {
-            overlay_highlights.push(OverlayHighlights::Homogeneous {
-                highlight,
-                ranges: spelling_vec,
-            });
-        }
+        overlay_highlights.push(OverlayHighlights::Homogeneous {
+            highlight: spelling,
+            ranges: spelling_vec,
+        });
     }
 
     pub fn doc_document_highlights(

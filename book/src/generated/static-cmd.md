@@ -155,6 +155,7 @@
 | `goto_prev_diag` | Goto previous diagnostic | normal: `` [d ``, select: `` [d `` |
 | `goto_next_spelling` | Goto next misspelling | normal: `` ]s ``, select: `` ]s `` |
 | `goto_prev_spelling` | Goto previous misspelling | normal: `` [s ``, select: `` [s `` |
+| `fix_spelling` | Fix misspelling under cursor | normal: `` <space>A ``, select: `` <space>A `` |
 | `goto_next_change` | Goto next change | normal: `` ]g ``, select: `` ]g `` |
 | `goto_prev_change` | Goto previous change | normal: `` [g ``, select: `` [g `` |
 | `goto_first_change` | Goto first change | normal: `` [G ``, select: `` [G `` |

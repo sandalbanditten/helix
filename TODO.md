@@ -27,6 +27,8 @@ Consider these wanted features when making design and implementation decisions:
 - `[editor.spelling] messages = false` (default): findings get only the underline, `]s`/`[s` and code actions.
   - `messages = true` shows them like any hint diagnostic (inline/end-of-line messages, gutter, statusline, pickers, `]d`/`[d`).
 - `]s`/`[s` go to the next/previous misspelling and behave like `]d`/`[d`.
+- `space A` pops up the fixes for the misspelling under the cursor (suggestions and "Add to dictionary"), like `space a` without the language servers' actions.
+- Misspellings are underlined with the `diagnostic.spelling` theme scope, which defaults to the theme's `diagnostic.error` style (red in most themes).
 
 <!-- MAYBE -->
 ## Emacs' `dired` Style Feature

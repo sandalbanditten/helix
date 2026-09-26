@@ -4,13 +4,19 @@
 //! dictionary loading and the word checking itself) lives in `helix-term`'s spelling handler, which
 //! drives this state through [`SpellingEvent`]s and the editor's dictionaries.
 
-use std::collections::HashMap;
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    future::Future,
+};
 
-use helix_core::{diagnostic::DiagnosticProvider, ChangeSet, Rope, SpellingLanguage};
+use helix_core::{
+    diagnostic::DiagnosticProvider, ChangeSet, Rope, SpellingLanguage, Tendril, Transaction,
+};
 use helix_event::{send_blocking, TaskController, TaskHandle};
 use tokio::sync::mpsc::Sender;
 
-use crate::{events::DiagnosticsDidChange, DocumentId, Editor};
+use crate::{action::Action, events::DiagnosticsDidChange, DocumentId, Editor};
 
 #[derive(Debug)]
 pub struct SpellingHandler {
@@ -101,5 +107,160 @@ impl Editor {
                 doc: doc_id,
             });
         }
+    }
+}
+
+/// Spelling actions sort after LSP code actions (which use a higher priority).
+const SPELLING_ACTION_PRIORITY: u8 = 0;
+
+/// Appends a word to the `language`'s personal dictionary file, creating it (and its parent
+/// directory) if needed. The file is read back when that language's dictionary is loaded.
+fn persist_to_personal_dictionary(language: &SpellingLanguage, word: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let path = helix_loader::personal_dictionary_file(language.as_str());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{word}")
+}
+
+impl Editor {
+    /// Code actions for the misspellings overlapping the primary selection: a replacement for each
+    /// of the dictionaries' suggestions, plus an "add to dictionary" action per language.
+    ///
+    /// Suggesting takes up to a few hundred milliseconds per word, so the actions are built off
+    /// the main loop from a snapshot of the misspellings.
+    pub fn spelling_actions(
+        &self,
+    ) -> impl Future<Output = anyhow::Result<Vec<Action>>> + Send + 'static {
+        let (view, doc) = current_ref!(self);
+        // The dictionaries this document is checked against, in configuration order.
+        let dictionaries: Vec<_> = doc
+            .spelling_languages()
+            .iter()
+            .filter_map(|language| {
+                Some((language.clone(), self.dictionaries.get(language)?.clone()))
+            })
+            .collect();
+        let doc_id = doc.id();
+        let view_id = view.id;
+        let version = doc.version();
+        let selection = doc.selection(view_id).primary();
+        let text = doc.text();
+        let misspellings: Vec<_> = doc
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.provider == DiagnosticProvider::Spelling
+                    && selection.overlaps(&helix_core::Range::new(
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                    ))
+            })
+            .map(|diagnostic| {
+                let range = diagnostic.range;
+                let word = Cow::from(text.slice(range.start..range.end)).into_owned();
+                (range, word)
+            })
+            .collect();
+
+        async move {
+            if dictionaries.is_empty() || misspellings.is_empty() {
+                return Ok(Vec::new());
+            }
+            let actions = tokio::task::spawn_blocking(move || {
+                let mut actions = Vec::new();
+                for (range, word) in misspellings {
+                    // Offer the suggestions from every dictionary, in order, without duplicates.
+                    let mut suggestions = Vec::new();
+                    let mut candidates = Vec::new();
+                    for (_, dictionary) in &dictionaries {
+                        dictionary.read().suggest(&word, &mut candidates);
+                        suggestions.append(&mut candidates);
+                    }
+                    let mut seen = HashSet::new();
+                    suggestions.retain(|suggestion| seen.insert(suggestion.clone()));
+
+                    for suggestion in suggestions {
+                        let title = format!("Replace '{word}' with '{suggestion}'");
+                        actions.push(Action::new(
+                            title,
+                            SPELLING_ACTION_PRIORITY,
+                            move |editor| {
+                                // An edit since the menu opened may have moved the misspelling.
+                                let Some(doc) = editor.documents.get_mut(&doc_id) else {
+                                    return;
+                                };
+                                if doc.version() != version
+                                    || editor
+                                        .tree
+                                        .try_get(view_id)
+                                        .is_none_or(|view| view.doc != doc_id)
+                                {
+                                    return;
+                                }
+                                let view = editor.tree.get_mut(view_id);
+                                let transaction = Transaction::change(
+                                    doc.text(),
+                                    std::iter::once((
+                                        range.start,
+                                        range.end,
+                                        Some(Tendril::from(suggestion.as_str())),
+                                    )),
+                                );
+                                doc.apply(&transaction, view_id);
+                                doc.append_changes_to_history(view);
+                            },
+                        ));
+                    }
+
+                    // "Add to dictionary" targets one dictionary, so offer one action per language.
+                    for (language, _) in &dictionaries {
+                        let language = language.clone();
+                        let word = word.clone();
+                        let title = format!("Add '{word}' to dictionary '{language}'");
+                        actions.push(Action::new(
+                            title,
+                            SPELLING_ACTION_PRIORITY,
+                            move |editor| editor.add_to_dictionary(&language, &word),
+                        ));
+                    }
+                }
+                actions
+            })
+            .await?;
+            Ok(actions)
+        }
+    }
+
+    /// Adds `word` to the dictionary of `language` and its personal dictionary, and re-checks the
+    /// documents using it.
+    fn add_to_dictionary(&mut self, language: &SpellingLanguage, word: &str) {
+        let Some(dictionary) = self.dictionaries.get(language) else {
+            return;
+        };
+        let added = dictionary.write().add(word);
+        if let Err(err) = added {
+            self.set_error(format!(
+                "Could not add '{word}' to dictionary '{language}': {err:?}"
+            ));
+            return;
+        }
+        if let Err(err) = persist_to_personal_dictionary(language, word) {
+            self.set_error(format!(
+                "Could not save '{word}' to the personal dictionary '{language}': {err}"
+            ));
+        }
+        send_blocking(
+            &self.handlers.spelling.event_tx,
+            SpellingEvent::DictionaryLoaded {
+                language: language.clone(),
+            },
+        );
     }
 }

@@ -699,32 +699,34 @@ pub fn code_action(cx: &mut Context) {
     let mut futures: FuturesUnordered<_> =
         code_actions_for_range(doc, selection_range, None, CodeActionTriggerKind::INVOKED)
             .into_iter()
-            .map(|(request, ls_id)| async move {
-                let Some(mut actions) = request.await? else {
-                    return anyhow::Ok(Vec::new());
-                };
+            .map(|(request, ls_id)| {
+                async move {
+                    let Some(mut actions) = request.await? else {
+                        return anyhow::Ok(Vec::new());
+                    };
 
-                // remove disabled code actions
-                actions.retain(|action| {
-                    matches!(
-                        action,
-                        CodeActionOrCommand::Command(_)
-                            | CodeActionOrCommand::CodeAction(CodeAction { disabled: None, .. })
-                    )
-                });
+                    // remove disabled code actions
+                    actions.retain(|action| {
+                        matches!(
+                            action,
+                            CodeActionOrCommand::Command(_)
+                                | CodeActionOrCommand::CodeAction(CodeAction {
+                                    disabled: None,
+                                    ..
+                                })
+                        )
+                    });
 
-                Ok(actions
-                    .into_iter()
-                    .map(|lsp_item| CodeActionItem::lsp(ls_id, lsp_item))
-                    .collect())
+                    Ok(actions
+                        .into_iter()
+                        .map(|lsp_item| CodeActionItem::lsp(ls_id, lsp_item))
+                        .collect())
+                }
+                .boxed()
             })
             .collect();
-
-    if futures.is_empty() {
-        cx.editor
-            .set_error("No configured language server supports code actions");
-        return;
-    }
+    // Misspellings have code actions too, even in documents without language servers.
+    futures.push(cx.editor.spelling_actions().boxed());
 
     cx.jobs.callback(async move {
         let mut actions = Vec::new();
@@ -736,33 +738,53 @@ pub fn code_action(cx: &mut Context) {
             }
         }
 
-        // Sort the gathered actions into a useful order, highest priority first. See
-        // `lsp_code_action_priority` for how LSP actions are ranked.
-        actions.sort_by_key(|action| std::cmp::Reverse(action.priority));
-
         let call = move |editor: &mut Editor, compositor: &mut Compositor| {
             if actions.is_empty() {
                 editor.set_error("No code actions available");
-                return;
+            } else {
+                show_code_actions(compositor, actions);
             }
-            let mut picker = ui::Menu::new(actions, (), move |editor, action, event| {
-                if event != PromptEvent::Validate {
-                    return;
-                }
-                // Always present on validate.
-                action.unwrap().execute(editor);
-            });
-            picker.move_down(); // pre-select the first item
-
-            let popup = Popup::new("code-action", picker)
-                .with_scrollbar(false)
-                .auto_close(true);
-
-            compositor.replace_or_push("code-action", popup);
         };
 
         Ok(Callback::EditorCompositor(Box::new(call)))
     });
+}
+
+/// Shows the code actions for the misspelling under the cursor, without asking the language
+/// servers.
+pub fn fix_spelling(cx: &mut Context) {
+    let actions = cx.editor.spelling_actions();
+    cx.jobs.callback(async move {
+        let actions = actions.await?;
+        let call = move |editor: &mut Editor, compositor: &mut Compositor| {
+            if actions.is_empty() {
+                editor.set_error("No misspelling under cursor");
+            } else {
+                show_code_actions(compositor, actions);
+            }
+        };
+        Ok(Callback::EditorCompositor(Box::new(call)))
+    });
+}
+
+/// Shows `actions` in the code action menu, highest priority first.
+fn show_code_actions(compositor: &mut Compositor, mut actions: Vec<CodeActionItem>) {
+    // See `lsp_code_action_priority` for how LSP actions are ranked.
+    actions.sort_by_key(|action| std::cmp::Reverse(action.priority));
+    let mut picker = ui::Menu::new(actions, (), move |editor, action, event| {
+        if event != PromptEvent::Validate {
+            return;
+        }
+        // Always present on validate.
+        action.unwrap().execute(editor);
+    });
+    picker.move_down(); // pre-select the first item
+
+    let popup = Popup::new("code-action", picker)
+        .with_scrollbar(false)
+        .auto_close(true);
+
+    compositor.replace_or_push("code-action", popup);
 }
 
 // Extracting this to a type alias would require boxing this future
