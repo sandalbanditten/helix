@@ -1253,6 +1253,14 @@ impl EditorView {
             self.handle_non_key_input(cxt)
         }
 
+        if let Some(result) = self.file_tree.handle_mouse(event, cxt.editor) {
+            return result;
+        }
+        // A press in the editor gives it its focus back.
+        if matches!(event.kind, MouseEventKind::Down(_)) {
+            self.file_tree.unfocus();
+        }
+
         let config = cxt.editor.config();
         let MouseEvent {
             kind,

@@ -10,6 +10,7 @@ mod git;
 mod icons;
 mod keys;
 mod ls_colors;
+mod mouse;
 mod ops;
 mod order;
 mod render;
@@ -52,6 +53,7 @@ use self::{
     git::GitStatuses,
     keys::{Action, Lookup},
     ls_colors::LsColors,
+    mouse::Gesture,
     order::Group,
     render::{natural_width, BufferMarks, EditRow, Scene, Styles},
     rows::{InputRow, Rows},
@@ -98,6 +100,10 @@ pub struct FileTree {
     pending: Vec<KeyEvent>,
     /// The widest the panel may get in the current screen.
     max_width: u16,
+    /// Where the panel was laid out last.
+    area: Option<Rect>,
+    /// A press on the rail and the drag following it.
+    gesture: Option<Gesture>,
 }
 
 impl FileTree {
@@ -277,6 +283,11 @@ impl FileTree {
     /// The panel's area in `main`, the area of the editor and the panel above the command line,
     /// or `None` if the panel is hidden or does not fit.
     pub fn layout(&mut self, main: Rect, editor: &Editor) -> Option<Rect> {
+        self.area = self.place(main, editor);
+        self.area
+    }
+
+    fn place(&mut self, main: Rect, editor: &Editor) -> Option<Rect> {
         if !self.is_presented() {
             return None;
         }
@@ -388,11 +399,17 @@ impl FileTree {
 
     /// Brings the rows up to date after a change and keeps the cursor in view.
     fn update(&mut self, editor: &Editor) {
+        self.update_rows(editor);
+        if let Some(workspace) = &mut self.workspace {
+            workspace.reveal_cursor(editor.config().scrolloff);
+        }
+    }
+
+    /// Brings the rows up to date after a change, leaving the scroll position alone.
+    fn update_rows(&mut self, editor: &Editor) {
         let lister = self.lister(editor);
         if let Some(workspace) = &mut self.workspace {
-            let config = editor.config();
-            workspace.update(&lister, &config.file_tree);
-            workspace.reveal_cursor(config.scrolloff);
+            workspace.update(&lister, &editor.config().file_tree);
         }
     }
 
@@ -570,6 +587,7 @@ impl FileTree {
         }
         let start = viewport::clamp(&workspace.rows, workspace.start, height);
         let start = workspace.smooth_scroll.frame(start, area.height, cx.editor);
+        (workspace.rows_area, workspace.drawn_start) = (area, start);
 
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
@@ -706,6 +724,9 @@ struct Workspace {
     scroll_to: Option<NodeId>,
     /// The number of rows the panel showed last.
     height: usize,
+    /// Where the rows were drawn last, and the first ordinary row drawn, for the mouse.
+    rows_area: Rect,
+    drawn_start: usize,
     /// A name or path being typed for a file operation.
     edit: Option<Edit>,
     /// Where the line of an inline edit was drawn last.
@@ -802,6 +823,8 @@ impl Workspace {
             reveals: Vec::new(),
             scroll_to: None,
             height: 0,
+            rows_area: Rect::default(),
+            drawn_start: 0,
             edit: None,
             edit_area: None,
             search: Search::default(),
@@ -964,13 +987,7 @@ impl Workspace {
             }
         };
         match action {
-            Action::Open if kind == Kind::Directory && !root => {
-                self.navigate(if self.tree.node(node).expanded {
-                    Action::Collapse
-                } else {
-                    Action::Expand
-                });
-            }
+            Action::Open if kind == Kind::Directory && !root => self.toggle_row(index),
             Action::Open => return open(editor, OpenAction::Replace),
             Action::OpenHorizontal => return open(editor, OpenAction::HorizontalSplit),
             Action::OpenVertical => return open(editor, OpenAction::VerticalSplit),
@@ -1165,6 +1182,18 @@ impl Workspace {
             _ => cursor,
         };
         self.cursor = self.rows[target].node;
+    }
+
+    /// Expands or collapses the directory of row `index`.
+    fn toggle_row(&mut self, index: usize) {
+        let row = &self.rows[index];
+        if self.tree.node(row.node).expanded {
+            // Collapsing the first directory of a run collapses the rest of it.
+            self.tree.collapse(row.head);
+            self.dirty = true;
+        } else {
+            self.expand_row(index);
+        }
     }
 
     /// Expands every directory of the run that row `index` stands for.
@@ -1486,7 +1515,7 @@ mod tests {
     use super::*;
 
     /// root, `docs`, `src/main` (a run), `a`, `b`
-    fn workspace() -> Workspace {
+    pub(super) fn workspace() -> Workspace {
         let mut workspace = Workspace::new("/root".into(), 1, &FileTreeConfig::default());
         let root = workspace.tree.root();
         workspace.tree.apply_listing(

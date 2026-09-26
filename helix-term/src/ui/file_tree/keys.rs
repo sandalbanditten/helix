@@ -209,10 +209,7 @@ mod tests {
         let info = info(&[]);
         let first = info.text.lines().next().unwrap();
         assert!(first.starts_with("j, down "), "{first}");
-        assert!(
-            first.ends_with("  Move down, from the last row to the first"),
-            "{first}"
-        );
+        assert!(first.ends_with("  Move down"), "{first}");
         let info = super::info(&[key!('z')]);
         assert_eq!(info.title, "View");
         assert!(info.text.starts_with("z, c"), "{}", info.text);
