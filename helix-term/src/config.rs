@@ -304,6 +304,49 @@ mod tests {
     }
 
     #[test]
+    fn parsing_file_tree_config() {
+        use helix_view::editor::{
+            FileTreeConfig, FileTreeSide, FileTreeSort, FileTreeStart, LsColors,
+        };
+
+        let file_tree = |config: &str| Config::load_test(config).editor.file_tree;
+
+        assert_eq!(file_tree(""), FileTreeConfig::default());
+        assert_eq!(
+            file_tree(
+                "[editor.file-tree]\nstart = \"multiple\"\nside = \"right\"\nicons = false\n\
+                 guides = false\nflatten-dirs = false\nsort = \"alphabetical\"\nls-colors = true"
+            ),
+            FileTreeConfig {
+                start: FileTreeStart::Multiple,
+                side: FileTreeSide::Right,
+                icons: false,
+                guides: false,
+                flatten_dirs: false,
+                sort: FileTreeSort::Alphabetical,
+                ls_colors: LsColors::Environment(true),
+            }
+        );
+        assert_eq!(
+            file_tree("[editor.file-tree]\nls-colors = \"di=1;34:*.rs=33\"").ls_colors,
+            LsColors::Spec("di=1;34:*.rs=33".to_owned())
+        );
+
+        for invalid in [
+            "[editor.file-tree]\nside = \"middle\"",
+            "[editor.file-tree]\nstart = \"sometimes\"",
+            "[editor.file-tree]\nls-colors = 1",
+            "[editor.file-tree]\nwidth = 30",
+        ] {
+            let invalid = invalid.to_owned();
+            assert!(
+                Config::load(Ok(&invalid), Err(ConfigLoadError::default())).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn set_smooth_scroll_shorthand() {
         // `:set smooth-scroll true` replaces the serialized table with a boolean
         let mut config = serde_json::json!(helix_view::editor::Config::default());

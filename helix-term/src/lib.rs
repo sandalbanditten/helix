@@ -74,15 +74,20 @@ pub(crate) fn is_binary(buffer: &[u8]) -> bool {
     scan.contains(&0) || buffer.starts_with(b"%PDF") || buffer.starts_with(b"\x89PNG")
 }
 
+/// Popular VCS directories, hidden from the file pickers and the file tree.
+pub(crate) fn is_vcs_dir(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(".git" | ".pijul" | ".jj" | ".hg" | ".svn")
+    )
+}
+
 /// Function used for filtering dir entries in the various file pickers.
 fn filter_picker_entry(entry: &DirEntry, root: &Path, dedup_symlinks: bool) -> bool {
     // We always want to ignore popular VCS directories, otherwise if
     // `ignore` is turned off, we end up with a lot of noise
     // in our picker.
-    if matches!(
-        entry.file_name().to_str(),
-        Some(".git" | ".pijul" | ".jj" | ".hg" | ".svn")
-    ) {
+    if is_vcs_dir(entry.file_name()) {
         return false;
     }
 

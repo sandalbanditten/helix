@@ -3423,28 +3423,27 @@ fn changed_file_picker(cx: &mut Context) {
         PickerColumn::new("change", |change: &FileChange, data: &FileChangeData| {
             match change {
                 FileChange::Untracked { .. } => Span::styled("+ untracked", data.style_untracked),
+                FileChange::Added { .. } => Span::styled("+ added", data.style_untracked),
                 FileChange::Modified { .. } => Span::styled("~ modified", data.style_modified),
                 FileChange::Conflict { .. } => Span::styled("x conflict", data.style_conflict),
                 FileChange::Deleted { .. } => Span::styled("- deleted", data.style_deleted),
                 FileChange::Renamed { .. } => Span::styled("> renamed", data.style_renamed),
+                FileChange::Ignored { .. } => Span::raw("! ignored"),
             }
             .into()
         }),
         PickerColumn::new("path", |change: &FileChange, data: &FileChangeData| {
-            let display_path = |path: &PathBuf| {
+            let display_path = |path: &Path| {
                 path.strip_prefix(&data.cwd)
                     .unwrap_or(path)
                     .display()
                     .to_string()
             };
             match change {
-                FileChange::Untracked { path } => display_path(path),
-                FileChange::Modified { path } => display_path(path),
-                FileChange::Conflict { path } => display_path(path),
-                FileChange::Deleted { path } => display_path(path),
                 FileChange::Renamed { from_path, to_path } => {
                     format!("{} -> {}", display_path(from_path), display_path(to_path))
                 }
+                change => display_path(change.path()),
             }
             .into()
         }),

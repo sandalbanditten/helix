@@ -649,6 +649,10 @@ impl Application {
 
         self.editor
             .set_doc_path(doc_save_event.doc_id, &doc_save_event.path);
+        helix_event::dispatch(helix_view::events::DocumentDidSave {
+            editor: &mut self.editor,
+            doc: doc_save_event.doc_id,
+        });
         // TODO: fix being overwritten by lsp
         self.editor.set_status(format!(
             "'{}' written, {lines}L {size}",

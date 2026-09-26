@@ -1024,6 +1024,30 @@ async fn test_move_file_when_given_dir_only() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_move_directory_updates_documents_under_it() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let source_dir = root.path().join("source");
+    std::fs::create_dir_all(source_dir.join("nested"))?;
+    let source_file = source_dir.join("nested/file.ext");
+    std::fs::File::create(&source_file)?;
+    let target_dir = root.path().join("target");
+
+    let mut app = helpers::AppBuilder::new()
+        .with_file(&source_file, None)
+        .build()?;
+
+    app.editor.move_path(&source_dir, &target_dir)?;
+
+    let target_file = target_dir.join("nested/file.ext");
+    assert!(target_file.is_file());
+    assert!(!source_dir.exists());
+    let doc = doc!(app.editor);
+    assert_eq!(doc.path(), Some(path::canonicalize(&target_file).as_path()));
+
+    test_key_sequence(&mut app, None, None, false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_write_then_open_does_not_panic_on_closed_scratch() -> anyhow::Result<()> {
     let other = tempfile::NamedTempFile::new()?;
 

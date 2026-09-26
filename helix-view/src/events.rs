@@ -24,6 +24,10 @@ events! {
     DiagnosticsDidChange<'a> { editor: &'a mut Editor, doc: DocumentId }
     // called **after** a document loses focus (but not when its closed)
     DocumentFocusLost<'a> { editor: &'a mut Editor, doc: DocumentId }
+    // called **after** a document has been written to disk
+    DocumentDidSave<'a> { editor: &'a mut Editor, doc: DocumentId }
+    // called **after** the current working directory changed
+    WorkingDirectoryDidChange<'a> { editor: &'a mut Editor }
 
     LanguageServerInitialized<'a> {
         editor: &'a mut Editor,

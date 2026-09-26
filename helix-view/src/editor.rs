@@ -4,7 +4,7 @@ use crate::{
     document::{
         DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
     },
-    events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost},
+    events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost, WorkingDirectoryDidChange},
     graphics::{CursorKind, Rect},
     handlers::Handlers,
     info::Info,
@@ -266,6 +266,93 @@ impl Default for FileExplorerConfig {
     }
 }
 
+/// The file tree docked beside the editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct FileTreeConfig {
+    /// When the file tree is shown at startup. Defaults to `never`.
+    pub start: FileTreeStart,
+    /// The side of the editor the file tree docks on. Defaults to `left`.
+    pub side: FileTreeSide,
+    /// Whether entries show icons, which needs a Nerd Font. Defaults to `true`.
+    pub icons: bool,
+    /// Whether tree guides are drawn. Defaults to `true`.
+    pub guides: bool,
+    /// Whether a run of single-child directories is shown as one row. Defaults to `true`.
+    pub flatten_dirs: bool,
+    /// How the entries of a directory are ordered. Defaults to `directories-first`.
+    pub sort: FileTreeSort,
+    /// Where entry colors come from: `false` uses the theme, `true` reads `LS_COLORS` and then
+    /// `EZA_COLORS` from the environment, and a string is an `LS_COLORS` specification.
+    /// Defaults to `false`.
+    pub ls_colors: LsColors,
+}
+
+impl Default for FileTreeConfig {
+    fn default() -> Self {
+        Self {
+            start: FileTreeStart::default(),
+            side: FileTreeSide::default(),
+            icons: true,
+            guides: true,
+            flatten_dirs: true,
+            sort: FileTreeSort::default(),
+            ls_colors: LsColors::default(),
+        }
+    }
+}
+
+/// When the file tree is shown at startup.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileTreeStart {
+    /// Only once it is toggled on or focused.
+    #[default]
+    Never,
+    /// Always.
+    Always,
+    /// When two or more files are given on the command line.
+    Multiple,
+}
+
+/// The side of the editor the file tree docks on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileTreeSide {
+    #[default]
+    Left,
+    Right,
+}
+
+/// How the entries of a directory are ordered in the file tree. Names compare naturally, so
+/// `file2` comes before `file10`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileTreeSort {
+    /// Directories before files.
+    #[default]
+    DirectoriesFirst,
+    /// Directories among files, like `eza`.
+    Alphabetical,
+}
+
+/// Where the file tree takes `LS_COLORS` rules from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LsColors {
+    /// `false` colors entries by the theme only, `true` reads `LS_COLORS` and then `EZA_COLORS`
+    /// from the environment.
+    Environment(bool),
+    /// An `LS_COLORS` specification such as `di=1;34:*.rs=33`.
+    Spec(String),
+}
+
+impl Default for LsColors {
+    fn default() -> Self {
+        Self::Environment(false)
+    }
+}
+
 fn serialize_alphabet<S>(alphabet: &[char], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -371,6 +458,8 @@ pub struct Config {
     pub auto_info: bool,
     pub file_picker: FilePickerConfig,
     pub file_explorer: FileExplorerConfig,
+    /// The file tree docked beside the editor.
+    pub file_tree: FileTreeConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1343,6 +1432,7 @@ impl Default for Config {
             auto_info: true,
             file_picker: FilePickerConfig::default(),
             file_explorer: FileExplorerConfig::default(),
+            file_tree: FileTreeConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,
@@ -1791,7 +1881,7 @@ impl Editor {
     }
 
     /// moves/renames a path, invoking any event handlers (currently only lsp)
-    /// and calling `set_doc_path` if the file is open in the editor
+    /// and calling `set_doc_path` for the documents at or (for a directory) under it
     pub fn move_path(&mut self, old_path: &Path, new_path: &Path) -> io::Result<()> {
         let new_path = canonicalize(new_path);
         // sanity check
@@ -1822,11 +1912,24 @@ impl Editor {
         }
 
         if old_path.exists() {
-            fs::rename(old_path, &new_path)?;
+            helix_stdx::fs::move_path(old_path, &new_path)?;
         }
 
-        if let Some(doc) = self.document_by_path(old_path) {
-            self.set_doc_path(doc.id(), &new_path);
+        let moved_documents: Vec<_> = self
+            .documents()
+            .filter_map(|doc| {
+                let relative = doc.path()?.strip_prefix(old_path).ok()?;
+                // `join("")` would append a trailing separator.
+                let path = if relative.as_os_str().is_empty() {
+                    new_path.clone()
+                } else {
+                    new_path.join(relative)
+                };
+                Some((doc.id(), path))
+            })
+            .collect();
+        for (doc_id, path) in moved_documents {
+            self.set_doc_path(doc_id, &path);
         }
         let is_dir = new_path.is_dir();
         for ls in self.language_servers.iter_clients() {
@@ -2752,6 +2855,7 @@ impl Editor {
     pub fn set_cwd(&mut self, path: &Path) -> std::io::Result<()> {
         self.last_cwd = helix_stdx::env::set_current_working_dir(path)?;
         self.clear_doc_relative_paths();
+        helix_event::dispatch(WorkingDirectoryDidChange { editor: self });
         Ok(())
     }
 

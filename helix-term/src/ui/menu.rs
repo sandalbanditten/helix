@@ -407,21 +407,15 @@ impl<T: Item + 'static> Component for Menu<T> {
             }
         }
 
-        let fits = len <= win_height;
-
         let scroll_style = theme.get("ui.menu.scroll");
-        if !fits {
-            let scroll_height = win_height.pow(2).div_ceil(len).min(win_height);
-            let scroll_line = (win_height - scroll_height) * scroll
-                / std::cmp::max(1, len.saturating_sub(win_height));
-
+        if let Some(thumb) = super::scrollbar_thumb(len, win_height, scroll) {
             let mut cell;
             for i in 0..win_height {
                 cell = &mut surface[(area.right() - 1, area.top() + i as u16)];
 
                 let half_block = if render_borders { "▌" } else { "▐" };
 
-                if scroll_line <= i && i < scroll_line + scroll_height {
+                if thumb.contains(&i) {
                     // Draw scroll thumb
                     cell.set_symbol(half_block);
                     cell.set_fg(scroll_style.fg.unwrap_or(helix_view::theme::Color::Reset));

@@ -156,3 +156,75 @@ fn symlink_to_git_repo() {
     assert_eq!(git::get_diff_base(&file_link, true).unwrap(), contents);
     assert_eq!(git::get_diff_base(&file, true).unwrap(), contents);
 }
+
+/// Collects the status of `repo` as sorted `(kind, workspace-relative path)` pairs.
+fn status_entries(repo: &Path, options: crate::StatusOptions) -> Vec<(&'static str, String)> {
+    use crate::FileChange;
+    use std::sync::Mutex;
+
+    let entries = Mutex::new(Vec::new());
+    git::for_each_status_entry(repo, true, options, |change| {
+        let change = change.unwrap();
+        let kind = match &change {
+            FileChange::Untracked { .. } => "untracked",
+            FileChange::Added { .. } => "added",
+            FileChange::Modified { .. } => "modified",
+            FileChange::Conflict { .. } => "conflict",
+            FileChange::Deleted { .. } => "deleted",
+            FileChange::Renamed { .. } => "renamed",
+            FileChange::Ignored { .. } => "ignored",
+        };
+        let path = change.path().strip_prefix(repo).unwrap();
+        entries
+            .lock()
+            .unwrap()
+            .push((kind, path.to_string_lossy().into_owned()));
+        true
+    })
+    .unwrap();
+    let mut entries = entries.into_inner().unwrap();
+    entries.sort();
+    entries
+}
+
+#[test]
+fn status_reports_staged_and_ignored_entries_on_request() {
+    let temp_git = empty_git_repo();
+    let repo = temp_git.path();
+    std::fs::write(repo.join(".gitignore"), "target/\n*.log\n").unwrap();
+    std::fs::write(repo.join("committed.txt"), "one").unwrap();
+    create_commit(repo, true);
+
+    std::fs::write(repo.join("staged.txt"), "new").unwrap();
+    exec_git_cmd("add staged.txt", repo);
+    std::fs::write(repo.join("untracked.txt"), "new").unwrap();
+    std::fs::write(repo.join("committed.txt"), "two").unwrap();
+    std::fs::create_dir_all(repo.join("target/debug")).unwrap();
+    std::fs::write(repo.join("target/debug/binary"), "").unwrap();
+    std::fs::write(repo.join("build.log"), "").unwrap();
+
+    let entry = |kind, path: &str| (kind, path.to_string());
+    assert_eq!(
+        status_entries(repo, crate::StatusOptions::default()),
+        [
+            entry("modified", "committed.txt"),
+            entry("untracked", "untracked.txt"),
+        ]
+    );
+    assert_eq!(
+        status_entries(
+            repo,
+            crate::StatusOptions {
+                staged: true,
+                ignored: true
+            }
+        ),
+        [
+            entry("added", "staged.txt"),
+            entry("ignored", "build.log"),
+            entry("ignored", "target"),
+            entry("modified", "committed.txt"),
+            entry("untracked", "untracked.txt"),
+        ]
+    );
+}

@@ -3,6 +3,7 @@
 
 pub mod env;
 pub mod faccess;
+pub mod fs;
 pub mod path;
 pub mod range;
 pub mod rope;

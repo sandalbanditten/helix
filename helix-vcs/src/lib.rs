@@ -18,7 +18,7 @@ pub use diff::{DiffHandle, Hunk};
 
 mod status;
 
-pub use status::FileChange;
+pub use status::{FileChange, StatusOptions};
 
 /// Contains all active diff providers. Diff providers are compiled in via features. Currently
 /// only `git` is supported.
@@ -70,15 +70,32 @@ impl DiffProviderRegistry {
         f: impl Fn(Result<FileChange>) -> bool + Send + 'static,
     ) {
         tokio::task::spawn_blocking(move || {
-            if self
-                .providers
-                .iter()
-                .find_map(|provider| provider.for_each_changed_file(&cwd, trust_full, &f).ok())
-                .is_none()
+            if let Err(err) =
+                self.for_each_status_entry(&cwd, trust_full, StatusOptions::default(), &f)
             {
-                f(Err(anyhow!("no diff provider returns success")));
+                f(Err(err));
             }
         });
+    }
+
+    /// Iterates over the status of the repository containing `cwd` on the calling thread, until
+    /// `f` returns `false`. Besides the changes between the index and the working tree it
+    /// reports what `options` asks for.
+    pub fn for_each_status_entry(
+        &self,
+        cwd: &Path,
+        trust_full: bool,
+        options: StatusOptions,
+        f: impl Fn(Result<FileChange>) -> bool,
+    ) -> Result<()> {
+        self.providers
+            .iter()
+            .find_map(|provider| {
+                provider
+                    .for_each_status_entry(cwd, trust_full, options, &f)
+                    .ok()
+            })
+            .ok_or_else(|| anyhow!("no diff provider returns success"))
     }
 }
 
@@ -127,15 +144,16 @@ impl DiffProvider {
         }
     }
 
-    fn for_each_changed_file(
+    fn for_each_status_entry(
         &self,
         cwd: &Path,
         trust_full: bool,
+        options: StatusOptions,
         f: impl Fn(Result<FileChange>) -> bool,
     ) -> Result<()> {
         match self {
             #[cfg(feature = "git")]
-            Self::Git => git::for_each_changed_file(cwd, trust_full, f),
+            Self::Git => git::for_each_status_entry(cwd, trust_full, options, f),
             Self::None => bail!("No diff support compiled in"),
         }
     }
