@@ -461,7 +461,7 @@ impl Application {
                     &self.editor.diagnostics,
                     document,
                 );
-                document.replace_diagnostics(diagnostics, &[], None);
+                document.replace_lsp_diagnostics(diagnostics);
             }
 
             self.terminal.reconfigure((&default_config.editor).into())?;

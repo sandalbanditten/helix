@@ -1,11 +1,11 @@
 use futures_util::{stream::FuturesUnordered, FutureExt};
 use helix_lsp::{
     block_on,
-    lsp::{
-        self, CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionTriggerKind,
-        DiagnosticSeverity, NumberOrString,
+    lsp::{self, CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionTriggerKind},
+    util::{
+        diagnostic_to_lsp_diagnostic, lsp_code_to_code, lsp_range_to_range,
+        lsp_severity_to_severity, range_to_lsp_range,
     },
-    util::{diagnostic_to_lsp_diagnostic, lsp_range_to_range, range_to_lsp_range},
     Client, LanguageServerId, OffsetEncoding,
 };
 use tokio_stream::StreamExt;
@@ -14,13 +14,15 @@ use tui::{text::Span, widgets::Row};
 use super::{align_view, push_jump, Align, Context, Editor};
 
 use helix_core::{
-    diagnostic::DiagnosticProvider, syntax::config::LanguageServerFeature,
-    text_annotations::InlineAnnotation, Selection, Uri,
+    diagnostic::{self, DiagnosticProvider, NumberOrString, Severity},
+    syntax::config::LanguageServerFeature,
+    text_annotations::InlineAnnotation,
+    Selection, Uri,
 };
 use helix_stdx::path;
 use helix_view::{
     action::Action as CodeActionItem,
-    document::{DocumentInlayHints, DocumentInlayHintsId},
+    document::{DocumentInlayHints, DocumentInlayHintsId, SCRATCH_BUFFER_NAME},
     editor::Action,
     handlers::lsp::SignatureHelpInvoked,
     theme::Style,
@@ -34,10 +36,12 @@ use crate::{
 };
 
 use std::{
+    borrow::Cow,
     collections::{HashSet, VecDeque},
     fmt::Display,
     future::Future,
     path::Path,
+    sync::Arc,
 };
 
 /// Gets the first language server that is attached to a document which supports a specific feature.
@@ -101,9 +105,27 @@ struct DiagnosticStyles {
     error: Style,
 }
 
+/// Where a picker diagnostic lives, so it can be previewed and jumped to regardless of source.
+enum DiagnosticLocation {
+    /// A diagnostic on an open document, in the document's char offsets. Every provider's
+    /// diagnostics take this form once they are on the document (LSP included), and it covers
+    /// scratch buffers, which have no path.
+    Document {
+        doc_id: DocumentId,
+        /// The document's path, for the picker's path column. `None` for scratch buffers.
+        path: Option<Arc<Path>>,
+        range: diagnostic::Range,
+    },
+    /// An LSP diagnostic for a file that is not currently open.
+    File(Location),
+}
+
 struct PickerDiagnostic {
-    location: Location,
-    diag: lsp::Diagnostic,
+    location: DiagnosticLocation,
+    severity: Option<Severity>,
+    code: Option<NumberOrString>,
+    source: Option<Cow<'static, str>>,
+    message: String,
 }
 
 fn location_to_file_location(location: &Location) -> Option<FileLocation<'_>> {
@@ -208,41 +230,93 @@ enum DiagnosticsFormat {
 
 type DiagnosticsPicker = Picker<PickerDiagnostic, DiagnosticStyles>;
 
-fn diag_picker(
-    cx: &Context,
-    diagnostics: impl IntoIterator<Item = (Uri, Vec<(lsp::Diagnostic, DiagnosticProvider)>)>,
-    format: DiagnosticsFormat,
-) -> DiagnosticsPicker {
-    // TODO: drop current_path comparison and instead use workspace: bool flag?
+/// Builds picker items from an open document's diagnostics. These are in the document's own char
+/// offsets, edit-mapped, and include every provider (LSP and internal alike).
+fn open_document_diagnostics(doc: &Document) -> impl Iterator<Item = PickerDiagnostic> + '_ {
+    let doc_id = doc.id();
+    let path: Option<Arc<Path>> = doc.path().map(Arc::from);
+    doc.diagnostics().iter().map(move |diag| PickerDiagnostic {
+        location: DiagnosticLocation::Document {
+            doc_id,
+            path: path.clone(),
+            range: diag.range,
+        },
+        severity: diag.severity,
+        code: diag.code.clone(),
+        source: diag.source.clone(),
+        message: diag.message.clone(),
+    })
+}
 
-    // flatten the map to a vec of (url, diag) pairs
-    let mut flat_diag = Vec::new();
-    for (uri, diags) in diagnostics {
-        flat_diag.reserve(diags.len());
+/// Builds a picker item from an LSP diagnostic held in the editor's store. This is used for files
+/// which are not currently open; open files are sourced from the document instead.
+fn store_diagnostic(
+    editor: &Editor,
+    uri: &Uri,
+    diagnostic: &lsp::Diagnostic,
+    provider: &DiagnosticProvider,
+) -> Option<PickerDiagnostic> {
+    let offset_encoding = editor
+        .language_server_by_id(provider.language_server_id()?)?
+        .offset_encoding();
+    Some(PickerDiagnostic {
+        location: DiagnosticLocation::File(Location {
+            uri: uri.clone(),
+            range: diagnostic.range,
+            offset_encoding,
+        }),
+        severity: diagnostic.severity.and_then(lsp_severity_to_severity),
+        code: diagnostic.code.clone().map(lsp_code_to_code),
+        source: diagnostic.source.clone().map(Cow::Owned),
+        message: diagnostic.message.clone(),
+    })
+}
 
-        for (diag, provider) in diags {
-            if let Some(ls) = provider
-                .language_server_id()
-                .and_then(|id| cx.editor.language_server_by_id(id))
-            {
-                flat_diag.push(PickerDiagnostic {
-                    location: Location {
-                        uri: uri.clone(),
-                        range: diag.range,
-                        offset_encoding: ls.offset_encoding(),
-                    },
-                    diag,
-                });
+fn jump_to_diagnostic(editor: &mut Editor, location: &DiagnosticLocation, action: Action) {
+    match location {
+        DiagnosticLocation::File(location) => jump_to_location(editor, location, action),
+        DiagnosticLocation::Document { doc_id, range, .. } => {
+            if !editor.documents.contains_key(doc_id) {
+                return;
+            }
+            let (view, doc) = current!(editor);
+            push_jump(view, doc);
+            editor.switch(*doc_id, action);
+            let (view, doc) = current!(editor);
+            let len = doc.text().len_chars();
+            // Flip the selection so the cursor sits at the start of the diagnostic.
+            let selection = Selection::single(range.end.min(len), range.start.min(len));
+            doc.set_selection(view.id, selection);
+            if action.align_view(view, doc.id()) {
+                align_view(doc, view, Align::Center);
             }
         }
     }
+}
 
-    flat_diag.sort_by(|a, b| {
-        a.diag
-            .severity
-            .unwrap_or(lsp::DiagnosticSeverity::HINT)
-            .cmp(&b.diag.severity.unwrap_or(lsp::DiagnosticSeverity::HINT))
-    });
+fn diagnostic_file_location<'a>(
+    editor: &'a Editor,
+    item: &'a PickerDiagnostic,
+) -> Option<FileLocation<'a>> {
+    match &item.location {
+        DiagnosticLocation::File(location) => location_to_file_location(location),
+        DiagnosticLocation::Document { doc_id, range, .. } => {
+            let text = editor.documents.get(doc_id)?.text();
+            let len = text.len_chars();
+            let start = text.char_to_line(range.start.min(len));
+            let end = text.char_to_line(range.end.min(len));
+            Some(((*doc_id).into(), Some((start, end))))
+        }
+    }
+}
+
+fn diag_picker(
+    cx: &Context,
+    mut diagnostics: Vec<PickerDiagnostic>,
+    format: DiagnosticsFormat,
+) -> DiagnosticsPicker {
+    // Sort by severity, most severe first; diagnostics with no severity sort last.
+    diagnostics.sort_by_key(|diagnostic| std::cmp::Reverse(diagnostic.severity));
 
     let styles = DiagnosticStyles {
         hint: cx.editor.theme.get("hint"),
@@ -255,28 +329,28 @@ fn diag_picker(
         ui::PickerColumn::new(
             "severity",
             |item: &PickerDiagnostic, styles: &DiagnosticStyles| {
-                match item.diag.severity {
-                    Some(DiagnosticSeverity::HINT) => Span::styled("HINT", styles.hint),
-                    Some(DiagnosticSeverity::INFORMATION) => Span::styled("INFO", styles.info),
-                    Some(DiagnosticSeverity::WARNING) => Span::styled("WARN", styles.warning),
-                    Some(DiagnosticSeverity::ERROR) => Span::styled("ERROR", styles.error),
-                    _ => Span::raw(""),
+                match item.severity {
+                    Some(Severity::Hint) => Span::styled("HINT", styles.hint),
+                    Some(Severity::Info) => Span::styled("INFO", styles.info),
+                    Some(Severity::Warning) => Span::styled("WARN", styles.warning),
+                    Some(Severity::Error) => Span::styled("ERROR", styles.error),
+                    None => Span::raw(""),
                 }
                 .into()
             },
         ),
         ui::PickerColumn::new("source", |item: &PickerDiagnostic, _| {
-            item.diag.source.as_deref().unwrap_or("").into()
+            item.source.as_deref().unwrap_or("").into()
         }),
         ui::PickerColumn::new("code", |item: &PickerDiagnostic, _| {
-            match item.diag.code.as_ref() {
+            match item.code.as_ref() {
                 Some(NumberOrString::Number(n)) => n.to_string().into(),
                 Some(NumberOrString::String(s)) => s.as_str().into(),
                 None => "".into(),
             }
         }),
         ui::PickerColumn::new("message", |item: &PickerDiagnostic, _| {
-            item.diag.message.as_str().into()
+            item.message.as_str().into()
         }),
     ];
     let mut primary_column = 3; // message
@@ -286,14 +360,20 @@ fn diag_picker(
             // between message code and message
             3,
             ui::PickerColumn::new("path", |item: &PickerDiagnostic, _| {
-                if let Some(path) = item.location.uri.as_path() {
+                let path = match &item.location {
+                    DiagnosticLocation::File(location) => location.uri.as_path(),
+                    DiagnosticLocation::Document { path: None, .. } => {
+                        return SCRATCH_BUFFER_NAME.into()
+                    }
+                    DiagnosticLocation::Document { path, .. } => path.as_deref(),
+                };
+                path.map(|path| {
                     path::get_truncated_path(path)
                         .to_string_lossy()
-                        .to_string()
-                        .into()
-                } else {
-                    Default::default()
-                }
+                        .into_owned()
+                })
+                .unwrap_or_default()
+                .into()
             }),
         );
         primary_column += 1;
@@ -302,16 +382,16 @@ fn diag_picker(
     Picker::new(
         columns,
         primary_column,
-        flat_diag,
+        diagnostics,
         styles,
         move |cx, diag, action| {
-            jump_to_location(cx.editor, &diag.location, action);
+            jump_to_diagnostic(cx.editor, &diag.location, action);
             let (view, doc) = current!(cx.editor);
             view.diagnostics_handler
                 .immediately_show_diagnostic(doc, view.id);
         },
     )
-    .with_preview(move |_editor, diag| location_to_file_location(&diag.location))
+    .with_preview(diagnostic_file_location)
     .truncate_start(false)
 }
 
@@ -573,17 +653,30 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
 }
 
 pub fn diagnostics_picker(cx: &mut Context) {
-    let doc = doc!(cx.editor);
-    if let Some(uri) = doc.uri() {
-        let diagnostics = cx.editor.diagnostics.get(&uri).cloned().unwrap_or_default();
-        let picker = diag_picker(cx, [(uri, diagnostics)], DiagnosticsFormat::HideSourcePath);
-        cx.push_layer(Box::new(overlaid(picker)));
-    }
+    let diagnostics = open_document_diagnostics(doc!(cx.editor)).collect();
+    let picker = diag_picker(cx, diagnostics, DiagnosticsFormat::HideSourcePath);
+    cx.push_layer(Box::new(overlaid(picker)));
 }
 
 pub fn workspace_diagnostics_picker(cx: &mut Context) {
-    // TODO not yet filtered by LanguageServerFeature, need to do something similar as Document::shown_diagnostics here for all open documents
-    let diagnostics = cx.editor.diagnostics.clone();
+    // Open documents carry diagnostics from every provider, edit-mapped, scratch buffers included.
+    let mut diagnostics: Vec<_> = cx
+        .editor
+        .documents()
+        .flat_map(open_document_diagnostics)
+        .collect();
+    // The store additionally holds LSP diagnostics for files which are not currently open.
+    let open_paths: HashSet<&Path> = cx.editor.documents().filter_map(|doc| doc.path()).collect();
+    for (uri, diags) in &cx.editor.diagnostics {
+        if uri.as_path().is_some_and(|path| open_paths.contains(path)) {
+            continue;
+        }
+        diagnostics.extend(
+            diags
+                .iter()
+                .filter_map(|(diag, provider)| store_diagnostic(cx.editor, uri, diag, provider)),
+        );
+    }
     let picker = diag_picker(cx, diagnostics, DiagnosticsFormat::ShowSourcePath);
     cx.push_layer(Box::new(overlaid(picker)));
 }
@@ -694,8 +787,11 @@ pub(crate) fn code_actions_for_range(
                 diagnostics: doc
                     .diagnostics()
                     .iter()
+                    // Internal diagnostics, like misspellings, mean nothing to a language server.
                     .filter(|&diag| {
-                        range.overlaps(&helix_core::Range::new(diag.range.start, diag.range.end))
+                        diag.provider.language_server_id().is_some()
+                            && range
+                                .overlaps(&helix_core::Range::new(diag.range.start, diag.range.end))
                     })
                     .map(|diag| diagnostic_to_lsp_diagnostic(doc.text(), diag, offset_encoding))
                     .collect(),

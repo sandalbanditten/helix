@@ -2234,7 +2234,8 @@ impl Document {
         provider: DiagnosticProvider,
         offset_encoding: helix_lsp::OffsetEncoding,
     ) -> Option<Diagnostic> {
-        use helix_core::diagnostic::{Range, Severity::*};
+        use helix_core::diagnostic::{DiagnosticTag, Range};
+        use helix_lsp::util::{lsp_code_to_code, lsp_severity_to_severity};
 
         // TODO: convert inside server
         let start =
@@ -2252,16 +2253,7 @@ impl Document {
             return None;
         };
 
-        let severity = diagnostic.severity.and_then(|severity| match severity {
-            lsp::DiagnosticSeverity::ERROR => Some(Error),
-            lsp::DiagnosticSeverity::WARNING => Some(Warning),
-            lsp::DiagnosticSeverity::INFORMATION => Some(Info),
-            lsp::DiagnosticSeverity::HINT => Some(Hint),
-            severity => {
-                log::error!("unrecognized diagnostic severity: {:?}", severity);
-                None
-            }
-        });
+        let severity = diagnostic.severity.and_then(lsp_severity_to_severity);
 
         if let Some(lang_conf) = language_config {
             if let Some(severity) = severity {
@@ -2270,15 +2262,7 @@ impl Document {
                 }
             }
         };
-        use helix_core::diagnostic::{DiagnosticTag, NumberOrString};
-
-        let code = match diagnostic.code.clone() {
-            Some(x) => match x {
-                lsp::NumberOrString::Number(x) => Some(NumberOrString::Number(x)),
-                lsp::NumberOrString::String(x) => Some(NumberOrString::String(x)),
-            },
-            None => None,
-        };
+        let code = diagnostic.code.clone().map(lsp_code_to_code);
 
         let tags = if let Some(tags) = &diagnostic.tags {
             let new_tags = tags
@@ -2309,7 +2293,7 @@ impl Document {
             severity,
             code,
             tags,
-            source: diagnostic.source.clone(),
+            source: diagnostic.source.clone().map(Cow::Owned),
             data: diagnostic.data.clone(),
             provider,
         })
@@ -2320,32 +2304,34 @@ impl Document {
         &self.diagnostics
     }
 
+    /// Replaces `provider`'s diagnostics with `diagnostics`, except for those whose source is in
+    /// `unchanged_sources`, which are kept.
     pub fn replace_diagnostics(
         &mut self,
         diagnostics: impl IntoIterator<Item = Diagnostic>,
         unchanged_sources: &[String],
-        provider: Option<&DiagnosticProvider>,
+        provider: &DiagnosticProvider,
     ) {
-        if unchanged_sources.is_empty() {
-            if let Some(provider) = provider {
-                self.diagnostics
-                    .retain(|diagnostic| &diagnostic.provider != provider);
-            } else {
-                self.diagnostics.clear();
-            }
-        } else {
-            self.diagnostics.retain(|d| {
-                if provider.is_some_and(|provider| provider != &d.provider) {
-                    return true;
-                }
+        self.diagnostics.retain(|d| {
+            &d.provider != provider
+                || d.source.as_ref().is_some_and(|source| {
+                    unchanged_sources
+                        .iter()
+                        .any(|unchanged| unchanged.as_str() == source.as_ref())
+                })
+        });
+        self.extend_diagnostics(diagnostics);
+    }
 
-                if let Some(source) = &d.source {
-                    unchanged_sources.contains(source)
-                } else {
-                    false
-                }
-            });
-        }
+    /// Replaces the diagnostics of every language server with `diagnostics`, keeping those of
+    /// internal providers such as the spell checker.
+    pub fn replace_lsp_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        self.diagnostics
+            .retain(|d| d.provider.language_server_id().is_none());
+        self.extend_diagnostics(diagnostics);
+    }
+
+    fn extend_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
         self.diagnostics.extend(diagnostics);
         self.diagnostics.sort_by_key(|diagnostic| {
             (
@@ -2645,6 +2631,54 @@ mod test {
         // a cursor inside the fold opens it
         doc.set_selection(view, Selection::point(11));
         assert!(doc.folds(view).is_empty());
+    }
+
+    fn diagnostic(start: usize, end: usize, provider: DiagnosticProvider) -> Diagnostic {
+        Diagnostic {
+            range: helix_core::diagnostic::Range { start, end },
+            ends_at_word: true,
+            starts_at_word: true,
+            zero_width: false,
+            line: 0,
+            message: String::new(),
+            severity: None,
+            code: None,
+            provider,
+            tags: Vec::new(),
+            source: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn lsp_refresh_keeps_internal_diagnostics() {
+        let lsp = DiagnosticProvider::Lsp {
+            server_id: Default::default(),
+            identifier: None,
+        };
+        let mut doc = Document::from(
+            Rope::from("helo wrld"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let providers = |doc: &Document| -> Vec<_> {
+            doc.diagnostics()
+                .iter()
+                .map(|diag| diag.provider.clone())
+                .collect()
+        };
+
+        doc.replace_diagnostics(
+            [diagnostic(0, 4, DiagnosticProvider::Spelling)],
+            &[],
+            &DiagnosticProvider::Spelling,
+        );
+        doc.replace_diagnostics([diagnostic(5, 9, lsp.clone())], &[], &lsp);
+        assert_eq!(providers(&doc), [DiagnosticProvider::Spelling, lsp.clone()]);
+
+        doc.replace_lsp_diagnostics([]);
+        assert_eq!(providers(&doc), [DiagnosticProvider::Spelling]);
     }
 
     #[test]

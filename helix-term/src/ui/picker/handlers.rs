@@ -104,7 +104,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook
                         &editor.diagnostics,
                         doc,
                     );
-                    doc.replace_diagnostics(diagnostics, &[], None);
+                    doc.replace_lsp_diagnostics(diagnostics);
                     doc.syntax = Some(syntax);
                 });
             });

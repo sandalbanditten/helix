@@ -2124,7 +2124,7 @@ impl Editor {
         self.refresh_language_servers(doc_id);
         let doc = doc_mut!(self, &doc_id);
         let diagnostics = Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, doc);
-        doc.replace_diagnostics(diagnostics, &[], None);
+        doc.replace_lsp_diagnostics(diagnostics);
         doc.reset_all_inlay_hints();
     }
 
@@ -2432,7 +2432,7 @@ impl Editor {
 
             let diagnostics =
                 Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, &doc);
-            doc.replace_diagnostics(diagnostics, &[], None);
+            doc.replace_lsp_diagnostics(diagnostics);
 
             let trust_full = self
                 .workspace_trust

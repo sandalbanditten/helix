@@ -2429,7 +2429,7 @@ fn language(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> any
     let doc = doc_mut!(cx.editor);
     let diagnostics =
         Editor::doc_diagnostics(&cx.editor.language_servers, &cx.editor.diagnostics, doc);
-    doc.replace_diagnostics(diagnostics, &[], None);
+    doc.replace_lsp_diagnostics(diagnostics);
     Ok(())
 }
 

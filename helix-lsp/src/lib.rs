@@ -131,12 +131,38 @@ pub mod util {
             range: range_to_lsp_range(doc, range, offset_encoding),
             severity,
             code,
-            source: diag.source.clone(),
+            source: diag.source.as_ref().map(|source| source.to_string()),
             message: diag.message.to_owned(),
             related_information: None,
             tags,
             data: diag.data.to_owned(),
             ..Default::default()
+        }
+    }
+
+    /// Converts an [`lsp::DiagnosticSeverity`], or returns `None` for an unrecognized one.
+    pub fn lsp_severity_to_severity(
+        severity: lsp::DiagnosticSeverity,
+    ) -> Option<helix_core::diagnostic::Severity> {
+        use helix_core::diagnostic::Severity::*;
+
+        match severity {
+            lsp::DiagnosticSeverity::ERROR => Some(Error),
+            lsp::DiagnosticSeverity::WARNING => Some(Warning),
+            lsp::DiagnosticSeverity::INFORMATION => Some(Info),
+            lsp::DiagnosticSeverity::HINT => Some(Hint),
+            severity => {
+                log::error!("unrecognized diagnostic severity: {:?}", severity);
+                None
+            }
+        }
+    }
+
+    /// Converts the code of an [`lsp::Diagnostic`].
+    pub fn lsp_code_to_code(code: lsp::NumberOrString) -> NumberOrString {
+        match code {
+            lsp::NumberOrString::Number(x) => NumberOrString::Number(x),
+            lsp::NumberOrString::String(x) => NumberOrString::String(x),
         }
     }
 

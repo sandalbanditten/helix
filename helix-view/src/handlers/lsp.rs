@@ -362,7 +362,7 @@ impl Editor {
                 doc,
                 diagnostic_of_language_server_and_not_in_unchanged_sources,
             );
-            doc.replace_diagnostics(diagnostics, &unchanged_diag_sources, Some(provider));
+            doc.replace_diagnostics(diagnostics, &unchanged_diag_sources, provider);
 
             let doc = doc.id();
             helix_event::dispatch(DiagnosticsDidChange { editor: self, doc });

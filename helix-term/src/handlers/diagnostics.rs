@@ -223,7 +223,7 @@ fn request_document_diagnostics_for_language_servers(
                     })
                     .await;
                 }
-                Some(Some((Err(err), DiagnosticProvider::Lsp { server_id, .. }, _))) => {
+                Some(Some((Err(err), provider, _))) => {
                     let parsed_cancellation_data = if let helix_lsp::Error::Rpc(error) = err {
                         error.data.and_then(|data| {
                             serde_json::from_value::<lsp::DiagnosticServerCancellationData>(data)
@@ -234,7 +234,7 @@ fn request_document_diagnostics_for_language_servers(
                         continue;
                     };
                     if parsed_cancellation_data.is_some_and(|data| data.retrigger_request) {
-                        retry_language_servers.insert(server_id);
+                        retry_language_servers.extend(provider.language_server_id());
                     }
                 }
                 Some(None) => break,
