@@ -64,6 +64,11 @@ impl LsColors {
         (!specs.is_empty()).then(|| Self::parse(&specs.join(":")))
     }
 
+    /// The colors GNU `ls` uses when `LS_COLORS` is not set.
+    pub fn gnu() -> Self {
+        Self::parse("di=01;34:ln=01;36:pi=33:so=01;35:bd=01;33:cd=01;33:ex=01;32")
+    }
+
     /// Parses a specification such as `di=1;34:*.rs=38;5;208`. Unreadable rules are skipped:
     /// real specifications collect entries from many tools.
     pub fn parse(spec: &str) -> Self {

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use gix::bstr::ByteSlice;
 use gix::diff::Rewrites;
-use gix::dir::{entry::Status, walk::EmissionMode};
+use gix::dir::entry::Status;
 use gix::objs::tree::EntryKind;
 use gix::sec::trust::DefaultForLevel;
 use gix::status::{
@@ -156,7 +156,7 @@ fn status(
         .ok_or_else(|| anyhow::anyhow!("working tree not found"))?
         .to_path_buf();
 
-    let mut status_platform = repo
+    let status_platform = repo
         .status(gix::progress::Discard)?
         // Here we discard the `status.showUntrackedFiles` config, as it makes little sense in
         // our case to not list new (untracked) files. We could have respected this config
@@ -170,12 +170,6 @@ fn status(
             limit: 1000,
             ..Default::default()
         }));
-    if options.ignored {
-        // Like `git status --ignored=matching`: an ignored directory is not descended into.
-        status_platform = status_platform
-            .dirwalk_options(|dirwalk| dirwalk.emit_ignored(Some(EmissionMode::Matching)));
-    }
-
     // No filtering based on path
     let empty_patterns = vec![];
 
@@ -232,7 +226,6 @@ fn index_worktree_change(work_dir: &Path, item: Item) -> Result<Option<FileChang
             let path = work_dir.join(entry.rela_path.to_path()?);
             match entry.status {
                 Status::Untracked => FileChange::Untracked { path },
-                Status::Ignored(_) => FileChange::Ignored { path },
                 _ => return Ok(None),
             }
         }

@@ -59,33 +59,38 @@ impl Styles {
     pub fn new(theme: &Theme) -> Self {
         // `try_get` would fall back to `ui`, so a scope of the tree falls back explicitly.
         let scope = |scope: &str, fallbacks: &[&str]| {
-            theme
-                .try_get_exact(scope)
-                .or_else(|| {
-                    fallbacks
-                        .iter()
-                        .find_map(|fallback| theme.try_get(fallback))
-                })
-                .unwrap_or_default()
+            theme.try_get_exact(scope).unwrap_or_else(|| {
+                fallbacks
+                    .iter()
+                    .find_map(|fallback| theme.try_get(fallback))
+                    .unwrap_or_default()
+            })
         };
         let base = theme
             .try_get_exact("ui.file-tree")
             .unwrap_or_else(|| theme.get("ui.background").patch(theme.get("ui.text")));
         let track = theme.get("ui.window");
+        let guide = scope(
+            "ui.file-tree.guide",
+            &["ui.virtual.indent-guide", "ui.virtual.whitespace"],
+        );
         Self {
             base,
-            selected: base.patch(scope("ui.file-tree.selected", &["ui.text.focus"])),
-            pinned: base.patch(scope("ui.file-tree.pinned", &["ui.virtual.ruler"])),
-            active: base.patch(scope(
+            // Next to its `>` mark the cursor row is bold, keeping the colors of its entry.
+            selected: theme
+                .try_get_exact("ui.file-tree.selected")
+                .unwrap_or_else(|| Style::default().add_modifier(Modifier::BOLD)),
+            // Pinned rows look like the others unless the theme says otherwise.
+            pinned: theme
+                .try_get_exact("ui.file-tree.pinned")
+                .unwrap_or_default(),
+            active: scope(
                 "ui.file-tree.active",
                 &["ui.bufferline.active", "ui.statusline.active"],
-            )),
-            guide: scope(
-                "ui.file-tree.guide",
-                &["ui.virtual.indent-guide", "ui.virtual.whitespace"],
             ),
+            guide,
             directory: scope("ui.file-tree.directory", &["ui.text.directory"]),
-            buffer: scope("ui.file-tree.buffer", &["hint"]),
+            buffer: theme.try_get_exact("ui.file-tree.buffer").unwrap_or(guide),
             buffer_focused: scope("ui.file-tree.buffer.focused", &["info"]),
             unsaved: scope("ui.file-tree.unsaved", &["info"]),
             error: scope("ui.file-tree.error", &["error"]),
@@ -163,6 +168,8 @@ pub struct Scene<'a> {
     pub start: usize,
     pub icons: bool,
     pub guides: bool,
+    /// The marks of collapsed and expanded directories, if any.
+    pub expanders: Option<[&'a str; 2]>,
     pub side: FileTreeSide,
     pub edit: Option<EditRow<'a>>,
     /// A row and the characters of its label that match the search, in order.
@@ -194,9 +201,14 @@ impl Scene<'_> {
         }
 
         let thumb = viewport::thumb(self.rows, self.start, height).unwrap_or_default();
+        // A half block like the scrollbars of menus, on the tree's half of the rail.
+        let thumb_symbol = match self.side {
+            FileTreeSide::Left => "▌",
+            FileTreeSide::Right => "▐",
+        };
         for (i, y) in (area.top()..area.bottom()).enumerate() {
             let (symbol, style) = if thumb.contains(&i) {
-                ("┃", self.styles.thumb)
+                (thumb_symbol, self.styles.thumb)
             } else {
                 ("│", self.styles.track)
             };
@@ -229,15 +241,17 @@ impl Scene<'_> {
             && (matches!(node.children, Children::Unreadable)
                 || node.kind == Kind::Link(LinkTarget::Broken));
 
-        let row_style = if self.cursor == Some(index) {
-            styles.selected
-        } else if pinned {
-            styles.pinned
-        } else if focused_buffer {
-            styles.active
-        } else {
-            styles.base
-        };
+        // Each layer only replaces what it defines, so the cursor row keeps its entry's colors.
+        let mut row_style = styles.base;
+        if focused_buffer {
+            row_style = row_style.patch(styles.active);
+        }
+        if pinned {
+            row_style = row_style.patch(styles.pinned);
+        }
+        if self.cursor == Some(index) {
+            row_style = row_style.patch(styles.selected);
+        }
         surface.set_style(area, row_style);
 
         let mut parts: Vec<(&str, Style)> = Vec::with_capacity(8 + row.depth);
@@ -270,8 +284,12 @@ impl Scene<'_> {
                 (true, false) => "├─",
             };
             parts.push((branch, guide));
-            parts.push(if entry && node.kind == Kind::Directory {
-                (if node.expanded { "▾" } else { "▸" }, guide)
+            let expander = self
+                .expanders
+                .filter(|_| entry && node.kind == Kind::Directory)
+                .map(|[collapsed, expanded]| if node.expanded { expanded } else { collapsed });
+            parts.push(if let Some(expander) = expander {
+                (expander, guide)
             } else if focused_buffer {
                 ("*", row_style.patch(styles.buffer_focused))
             } else if entry && self.marks.open.contains(path) {
@@ -282,7 +300,17 @@ impl Scene<'_> {
         }
 
         let label_style = if entry {
-            self.label_style(node, path, row_style, failed)
+            let style = self.label_style(node, row, row_style, failed);
+            // The focused buffer's file reads like its tab in the bufferline, over the row's
+            // background.
+            if focused_buffer {
+                style.patch(Style {
+                    bg: None,
+                    ..styles.active
+                })
+            } else {
+                style
+            }
         } else {
             row_style
         };
@@ -340,7 +368,7 @@ impl Scene<'_> {
         None
     }
 
-    fn label_style(&self, node: &Node, path: &Path, row_style: Style, failed: bool) -> Style {
+    fn label_style(&self, node: &Node, row: &Row, row_style: Style, failed: bool) -> Style {
         let (entry_type, target) = match node.kind {
             Kind::Directory => (EntryType::Directory, None),
             Kind::File { executable: false } => (EntryType::File, None),
@@ -369,7 +397,7 @@ impl Scene<'_> {
         if failed {
             style.fg = self.styles.error.fg.or(style.fg);
         }
-        if self.git.is_ignored(path) {
+        if row.ignored {
             style = style.add_modifier(Modifier::DIM);
         }
         style
@@ -474,6 +502,7 @@ mod tests {
             start: 0,
             icons,
             guides: true,
+            expanders: Some(["▸", "▾"]),
             side,
             edit: None,
             highlight: None,
@@ -499,7 +528,7 @@ mod tests {
         assert_eq!(
             render(20, 2, true, FileTreeSide::Right),
             [
-                "┃▍ \u{f0645} root          +",
+                "▐▍ \u{f0645} root          +",
                 "│ >├─▾ \u{f115} docs      +",
             ]
         );

@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn parsing_file_tree_config() {
         use helix_view::editor::{
-            FileTreeConfig, FileTreeSide, FileTreeSort, FileTreeStart, LsColors,
+            Expanders, FileTreeConfig, FileTreeSide, FileTreeSort, FileTreeStart, LsColors,
         };
 
         let file_tree = |config: &str| Config::load_test(config).editor.file_tree;
@@ -322,6 +322,7 @@ mod tests {
                 side: FileTreeSide::Right,
                 icons: false,
                 guides: false,
+                expanders: Expanders::Enabled(true),
                 flatten_dirs: false,
                 sort: FileTreeSort::Alphabetical,
                 ls_colors: LsColors::Environment(true),
@@ -331,12 +332,25 @@ mod tests {
             file_tree("[editor.file-tree]\nls-colors = \"di=1;34:*.rs=33\"").ls_colors,
             LsColors::Spec("di=1;34:*.rs=33".to_owned())
         );
+        assert_eq!(
+            file_tree("[editor.file-tree]\nexpanders = false").expanders,
+            Expanders::Enabled(false)
+        );
+        assert_eq!(
+            file_tree("[editor.file-tree]\nexpanders = [\"+\", \"-\"]")
+                .expanders
+                .characters(),
+            Some(['+', '-'])
+        );
 
         for invalid in [
             "[editor.file-tree]\nside = \"middle\"",
             "[editor.file-tree]\nstart = \"sometimes\"",
             "[editor.file-tree]\nls-colors = 1",
             "[editor.file-tree]\nwidth = 30",
+            "[editor.file-tree]\nexpanders = [\"+\"]",
+            "[editor.file-tree]\nexpanders = [\"+\", \"\\t\"]",
+            "[editor.file-tree]\nexpanders = [\"+\", \"界\"]",
         ] {
             let invalid = invalid.to_owned();
             assert!(

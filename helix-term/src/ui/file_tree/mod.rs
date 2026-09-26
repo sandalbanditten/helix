@@ -17,6 +17,7 @@ mod rows;
 mod search;
 mod tree;
 mod viewport;
+mod watch;
 
 use std::{
     cell::RefCell,
@@ -28,7 +29,7 @@ use std::{
 use helix_core::Position;
 use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::{
-    path::{canonicalize, normalize},
+    path::{canonicalize, get_relative_path, normalize},
     Url,
 };
 use helix_vcs::StatusOptions;
@@ -42,7 +43,7 @@ use helix_view::{
     smooth_scroll::SmoothOffset,
     Editor,
 };
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::unbounded_channel;
 use tui::buffer::Buffer as Surface;
 
 use self::{
@@ -57,6 +58,7 @@ use self::{
     search::{Candidates, Direction, Hit},
     tree::{Kind, Listing, NodeId, Reveal, Tree},
     viewport::Align,
+    watch::Watcher,
 };
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
@@ -90,7 +92,7 @@ pub struct FileTree {
     /// The tree of the current workspace, created when the panel is first shown.
     workspace: Option<Workspace>,
     palette: Palette,
-    lister: Option<UnboundedSender<ListRequest>>,
+    lister: Option<std::sync::mpsc::Sender<ListRequest>>,
     last_generation: u64,
     /// The keys of an unfinished sequence like `z`.
     pending: Vec<KeyEvent>,
@@ -111,6 +113,7 @@ impl FileTree {
     pub fn show(&mut self, editor: &Editor) {
         self.visibility = Visibility::Always;
         self.ensure_workspace(editor);
+        self.catch_up(editor);
     }
 
     /// Switches between always showing the panel and showing it only while focused.
@@ -133,10 +136,13 @@ impl FileTree {
         }
         self.focused = true;
         self.ensure_workspace(editor);
+        self.catch_up(editor);
         let lister = self.lister(editor);
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        // Files in collapsed directories are not watched, so their status may be old.
+        workspace.refresh_git(editor);
         workspace.cursor = workspace.tree.root();
         if let Some(path) = focused_document_path(editor, &workspace.root) {
             workspace.reveal(path, Purpose::Cursor);
@@ -168,10 +174,91 @@ impl FileTree {
         for path in paths {
             workspace.reveal(path, Purpose::Show);
         }
+        workspace.watcher = Watcher::new(workspace.generation)
+            .inspect_err(|err| log::warn!("file tree cannot watch for changes: {err}"))
+            .ok();
         let lister = self.lister(editor);
         workspace.update(&lister, &config.file_tree);
         workspace.refresh_git(editor);
         self.workspace = Some(workspace);
+    }
+
+    /// Starts over when the editor's working directory is no longer the tree's root.
+    pub fn follow_working_directory(&mut self, editor: &Editor) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        if *workspace.root != helix_stdx::env::current_working_dir() {
+            self.workspace = None;
+            self.pending.clear();
+            if self.is_presented() {
+                self.ensure_workspace(editor);
+            }
+        }
+    }
+
+    /// Lists every expanded directory again and refreshes the git status, e.g. when the
+    /// terminal gets focus back after other programs ran.
+    pub fn refresh(&mut self, editor: &Editor) {
+        if !self.is_presented() {
+            if let Some(workspace) = &mut self.workspace {
+                workspace.outdated = true;
+            }
+            return;
+        }
+        if let Some(workspace) = &mut self.workspace {
+            workspace.tree.invalidate_all();
+            workspace.refresh_git(editor);
+        }
+        self.update(editor);
+    }
+
+    /// Refreshes the git status, e.g. after a save.
+    pub fn refresh_git(&mut self, editor: &Editor) {
+        let presented = self.is_presented();
+        if let Some(workspace) = &mut self.workspace {
+            if presented {
+                workspace.refresh_git(editor);
+            } else {
+                workspace.outdated = true;
+            }
+        }
+    }
+
+    /// Catches up with the changes that were let pass while the panel was hidden.
+    fn catch_up(&mut self, editor: &Editor) {
+        if self
+            .workspace
+            .as_mut()
+            .is_some_and(|workspace| std::mem::take(&mut workspace.outdated))
+        {
+            self.refresh(editor);
+        }
+    }
+
+    /// Handles the changes the watcher saw in the workspace `generation`.
+    fn changed(&mut self, generation: u64, paths: HashSet<PathBuf>, editor: &Editor) {
+        let presented = self.is_presented();
+        let Some(workspace) = self.workspace_of(generation) else {
+            return;
+        };
+        // A hidden tree does not need to follow along; it catches up when shown.
+        if !presented {
+            workspace.outdated = true;
+            return;
+        }
+        for path in &paths {
+            if let Ok(path) = path.strip_prefix(&workspace.root) {
+                // A changed directory, or an entry that appeared or went in one.
+                workspace.tree.invalidate(path);
+                if let Some(parent) = path.parent() {
+                    workspace.tree.invalidate(parent);
+                }
+            }
+        }
+        // Changes to files and to `.git` alike can change the git status.
+        workspace.refresh_git(editor);
+        self.update(editor);
     }
 
     /// The background task listing directories, started on first use.
@@ -329,9 +416,14 @@ impl FileTree {
             Action::PreviousMatch => self.find_next(Direction::Backward, editor),
             Action::OpenExternally => {
                 if let Some(path) = self.workspace.as_ref().and_then(Workspace::cursor_path) {
+                    let name = get_relative_path(&path).display().to_string();
                     match Url::from_file_path(&path) {
-                        Ok(url) => cx.jobs.callback(crate::open_external_url_callback(url)),
-                        Err(()) => editor.set_error(format!("Cannot open {}", path.display())),
+                        Ok(url) => {
+                            editor
+                                .set_status(format!("Opening '{name}' in the default application"));
+                            cx.jobs.callback(crate::open_external_url_callback(url));
+                        }
+                        Err(()) => editor.set_error(format!("Cannot open '{name}'")),
                     }
                 }
             }
@@ -482,6 +574,11 @@ impl FileTree {
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
         let highlight = workspace.highlight();
+        let expanders = config
+            .file_tree
+            .expanders
+            .characters()
+            .map(|characters| characters.map(String::from));
         let edit_area = Scene {
             tree: &workspace.tree,
             rows: &workspace.rows,
@@ -493,6 +590,9 @@ impl FileTree {
             start,
             icons: config.file_tree.icons,
             guides: config.file_tree.guides,
+            expanders: expanders
+                .as_ref()
+                .map(|[collapsed, expanded]| [collapsed.as_str(), expanded.as_str()]),
             side: config.file_tree.side,
             edit: workspace.edit_row(),
             highlight: highlight
@@ -611,6 +711,11 @@ struct Workspace {
     /// Where the line of an inline edit was drawn last.
     edit_area: Option<Rect>,
     search: Search,
+    watcher: Option<Watcher>,
+    /// The repository's `.git` directory, which is watched for changes of the git status.
+    git_dir: Option<PathBuf>,
+    /// Whether changes were let pass while the panel was hidden.
+    outdated: bool,
 }
 
 /// A path to reveal once the directories leading to it are listed.
@@ -676,6 +781,10 @@ impl Workspace {
             .map_or_else(|| root.as_os_str().to_owned(), ToOwned::to_owned);
         let tree = Tree::new(name, config.sort);
         let rows = Rows::build(&tree, config.flatten_dirs, None);
+        let git_dir = root
+            .ancestors()
+            .map(|dir| dir.join(".git"))
+            .find(|git_dir| git_dir.is_dir());
         Self {
             generation,
             cursor: tree.root(),
@@ -696,6 +805,9 @@ impl Workspace {
             edit: None,
             edit_area: None,
             search: Search::default(),
+            watcher: None,
+            git_dir,
+            outdated: false,
         }
     }
 
@@ -1141,7 +1253,22 @@ impl Workspace {
 
         if std::mem::take(&mut self.dirty) {
             self.rebuild_rows();
+            self.watch();
         }
+    }
+
+    /// Watches the directories the tree has listed, and `.git`.
+    fn watch(&mut self) {
+        let Some(watcher) = &mut self.watcher else {
+            return;
+        };
+        let mut dirs: HashSet<_> = self
+            .tree
+            .loaded_directories()
+            .map(|dir| self.root.join(self.tree.path(dir)))
+            .collect();
+        dirs.extend(self.git_dir.clone());
+        watcher.watch(dirs);
     }
 
     /// Rebuilds `rows`, keeping the cursor and the first ordinary row on the same entries, or
@@ -1228,10 +1355,7 @@ impl Workspace {
         let providers = editor.diff_providers.clone();
         in_background(
             move || {
-                let options = StatusOptions {
-                    staged: true,
-                    ignored: true,
-                };
+                let options = StatusOptions { staged: true };
                 let changes = RefCell::new(Vec::new());
                 // No repository simply means no marks.
                 let _ = providers.for_each_status_entry(&root, trust_full, options, |change| {
@@ -1247,13 +1371,20 @@ impl Workspace {
     }
 }
 
-/// Runs `work` on a blocking thread, then `apply` with its result on the file tree.
+/// Runs `work` in the background, then `apply` with its result on the file tree.
+///
+/// The work gets a thread of its own rather than one of tokio's blocking threads, as the file
+/// picker's walk does: quitting waits for those, and a git status can take seconds.
 fn in_background<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut FileTree, T, &mut Editor) + Send + 'static,
 ) {
+    let (sender, result) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
     tokio::spawn(async move {
-        let Ok(result) = tokio::task::spawn_blocking(work).await else {
+        let Ok(result) = result.await else {
             return;
         };
         job::dispatch(move |editor, compositor| {
@@ -1289,7 +1420,9 @@ impl Palette {
         if self.source.as_ref() != Some(source) {
             self.colors = match source {
                 LsColorsSource::Environment(false) => None,
-                LsColorsSource::Environment(true) => LsColors::from_environment().map(Arc::new),
+                LsColorsSource::Environment(true) => Some(Arc::new(
+                    LsColors::from_environment().unwrap_or_else(LsColors::gnu),
+                )),
                 LsColorsSource::Spec(spec) => Some(Arc::new(LsColors::parse(spec))),
             };
             self.source = Some(source.clone());
@@ -1306,37 +1439,36 @@ struct ListRequest {
     options: ListOptions,
 }
 
-/// Hands directories to the background task that lists them.
+/// Hands directories to the background thread that lists them.
 struct Lister {
-    sender: UnboundedSender<ListRequest>,
+    sender: std::sync::mpsc::Sender<ListRequest>,
     /// Whether listings should tell executables apart.
     executables: bool,
 }
 
 impl Lister {
     fn request(&self, request: ListRequest) {
-        // The task only ends with the runtime.
+        // The thread only stops once the tree is gone.
         let _ = self.sender.send(request);
     }
 }
 
-/// Starts the task that lists directories one request after another, so results arrive in the
-/// order they were asked for.
-fn spawn_lister() -> UnboundedSender<ListRequest> {
-    let (sender, mut requests) = unbounded_channel::<ListRequest>();
+/// Starts listing directories in the background, one request after another so that the results
+/// arrive in the order they were asked for. Like [`in_background`], the listing has a thread of
+/// its own.
+fn spawn_lister() -> std::sync::mpsc::Sender<ListRequest> {
+    let (sender, requests) = std::sync::mpsc::channel::<ListRequest>();
+    let (listed, mut results) = unbounded_channel();
+    std::thread::spawn(move || {
+        for request in requests {
+            let listings = fs::list_all(&request.root, request.dirs, request.options);
+            if listed.send((request.generation, listings)).is_err() {
+                break;
+            }
+        }
+    });
     tokio::spawn(async move {
-        while let Some(request) = requests.recv().await {
-            let ListRequest {
-                generation,
-                root,
-                dirs,
-                options,
-            } = request;
-            let listings =
-                tokio::task::spawn_blocking(move || fs::list_all(&root, dirs, options)).await;
-            let Ok(listings) = listings else {
-                continue;
-            };
+        while let Some((generation, listings)) = results.recv().await {
             job::dispatch(move |editor, compositor| {
                 if let Some(file_tree) = file_tree(compositor) {
                     file_tree.apply_listings(generation, listings, editor);

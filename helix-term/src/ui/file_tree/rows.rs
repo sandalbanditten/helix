@@ -26,6 +26,8 @@ pub struct Row {
     pub label_width: usize,
     /// Whether this is the row a new entry's name is typed in rather than an entry.
     pub input: bool,
+    /// Whether git ignores the entry, or a directory holding it.
+    pub ignored: bool,
 }
 
 /// A row to type the name of a new entry in, shown among the entries of the directory `dir`
@@ -61,6 +63,7 @@ impl Rows {
                 label_width: label.width(),
                 label,
                 input: false,
+                ignored: false,
             }],
             index: HashMap::from([(root, 0)]),
             input: None,
@@ -96,6 +99,7 @@ impl Rows {
             let mut node = head;
             let mut path = self.rows[parent].path.join(&tree.node(head).name);
             let mut label = display_name(&tree.node(head).name);
+            let mut ignored = self.rows[parent].ignored || tree.node(head).ignored;
             self.index.insert(head, index);
             if flatten_dirs && tree.node(head).kind == Kind::Directory {
                 while let Some(next) = tree.only_directory_child(node) {
@@ -103,6 +107,7 @@ impl Rows {
                     path.push(&tree.node(next).name);
                     label.push('/');
                     label.push_str(&display_name(&tree.node(next).name));
+                    ignored |= tree.node(next).ignored;
                     self.index.insert(next, index);
                 }
             }
@@ -116,6 +121,7 @@ impl Rows {
                 label_width: label.width(),
                 label,
                 input: false,
+                ignored,
             });
             if tree.node(node).expanded {
                 self.push_children(tree, index, flatten_dirs, input);
@@ -138,6 +144,7 @@ impl Rows {
             label: String::new(),
             label_width: 0,
             input: true,
+            ignored: false,
         });
     }
 
@@ -208,7 +215,10 @@ fn display_name(name: &OsStr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tree::tests::{dir, file, run, tree_with};
+    use super::super::tree::{
+        tests::{dir, file, run, tree_with},
+        Entry,
+    };
     use super::*;
 
     fn labels(rows: &Rows) -> Vec<&str> {
@@ -300,6 +310,31 @@ mod tests {
         assert!(rows[2].last);
         assert_eq!(rows[2].depth, 1);
         assert_eq!(rows.index_of(a), Some(1));
+    }
+
+    #[test]
+    fn rows_below_an_ignored_directory_are_ignored() {
+        let mut tree = tree_with(vec![
+            Entry {
+                ignored: true,
+                ..dir("target")
+            },
+            file("lib.rs"),
+        ]);
+        let target = tree.find("target".as_ref()).unwrap();
+        tree.expand(target);
+        tree.apply_listing(target, Some(vec![file("hx")]));
+        let rows = Rows::build(&tree, true, None);
+        let ignored: Vec<_> = rows.iter().map(|row| (&*row.label, row.ignored)).collect();
+        assert_eq!(
+            ignored,
+            [
+                ("root", false),
+                ("target", true),
+                ("hx", true),
+                ("lib.rs", false)
+            ]
+        );
     }
 
     #[test]

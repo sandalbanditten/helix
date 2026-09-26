@@ -15,7 +15,7 @@ It should render and work much like `grove.hx` a steel plugin with (modified by 
 It should be idiomatic rust and helix-like, but as performant as possible.
 It should be able to use `LS_COLORS` like grove, and have the same feature-set.
 Like `grove` it should render the tree much like `eza -aoTg`.
-The theming should be helix-like: the pane separator is a `│` rail in `ui.window` (like split separators) that carries the scrollbar thumb in `ui.menu.scroll` (like popups).
+The theming should be helix-like: the pane separator is a `│` rail in `ui.window` (like split separators) that carries the scrollbar thumb in `ui.menu.scroll` (like popups), a half block `▌`/`▐` on the tree's side of the separator.
 The panel starts at the top row (the bufferline only spans the editor columns) and ends _above_ the statusline, so the bottom statusline and the command line continue to span the entire width of helix' viewport.
 
 Consider these wanted features when making design and implementation decisions:
@@ -26,6 +26,10 @@ It should preserve the following features from `grove`:
   - On startup (first time the tree is shown) the viewport width should always be fitted
 - `+`/`-` for growing/shrinking the view.
 - The `eza`-like styling and `LS_COLORS`/`EZA_COLORS` support.
+  - `ls-colors = true` is the default: entries are colored like `eza` shows them, with the colors of GNU `ls` when neither variable is set.
+  - The `▸`/`▾` marks of collapsed and expanded directories are configurable: `expanders = true` (default), `false` for none, or two characters like `["+", "-"]`.
+  - The cursor row keeps its background and colors and only turns bold (next to its `>` mark); the focused buffer's file keeps the color of its bufferline tab under it.
+  - Pinned ancestor rows keep the regular background.
   - Icons are `eza`'s, except that an expanded directory always shows the open folder `` (U+F115), even one with an icon of its own; collapsed directories keep theirs.
 - Aggregation of long single-chain paths like `src/main/java/project/framework`, instead of `src\n\tmain\n\t\tjava\n\t\t\tproject\n\t\t\t\tframework`
 - The rest of grove: git marks, unsaved `+` marks, icons, guides, pinned ancestor rows, splits (`C-s`/`C-v`), delete (`d`), mouse support.
@@ -36,8 +40,9 @@ Expanding on `grove` it should have the following features:
 - Trying to go up from the top item should cycle you to the bottom and vice-versa.
 - The view should be scrollable with <C-d>, <C-u>, and `zz`/`zb`/`zt` like for example LSP-popups.
 - Add a viewport only `?` keybind to list possible keybinds in the viewport
-- `enter` runs `xdg-open` on the entry (files and directories), `o` opens a file in a buffer (and toggles a directory). `space` is not bound in the tree.
+- `enter` opens a file in a buffer (and toggles a directory), `o` runs `xdg-open` on the entry (files and directories) and says so in the status line. `space` is not bound in the tree.
 - Add an element showing which of the files currently are open in different buffers, with a differently colored `*` to the one showing the currently _focused_ buffer.
+  - The `*` of a buffer that is open but not focused has the color of the guides and the `▸`/`▾` marks.
 - The keybinds to toggle and focus it should be configurable: commands `focus_file_tree` (default `space e`) and `toggle_file_tree` (default `space E`).
   - Toggle switches between "always shown" and "shown only while focused". Focusing a hidden tree shows it until focus leaves it.
 - While the tree is focused, a key it does not bind returns focus to the editor and runs there (the toggle/focus commands still work from the tree).
@@ -74,3 +79,6 @@ Possibly a `dired` style view in the editor.
 Consider how it should integrate with the file-tree.
 Either zero integration, i.e. it opens in a buffer unrelated to the file-tree.
 Maybe full integration, where the filetree _is_ a `dired` buffer.
+
+<!-- MAYBE -->
+## File watching with `notify` crate

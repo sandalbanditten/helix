@@ -17,9 +17,6 @@ pub enum FileChange {
         from_path: PathBuf,
         to_path: PathBuf,
     },
-    /// Ignored by the VCS. An ignored directory is reported instead of its contents. Only
-    /// reported with [`StatusOptions::ignored`].
-    Ignored { path: PathBuf },
 }
 
 /// What a status query reports besides the changes between the index and the working tree.
@@ -27,8 +24,6 @@ pub enum FileChange {
 pub struct StatusOptions {
     /// Also report the changes staged in the index, i.e. between `HEAD` and the index.
     pub staged: bool,
-    /// Also report ignored paths.
-    pub ignored: bool,
 }
 
 impl FileChange {
@@ -40,7 +35,6 @@ impl FileChange {
             Self::Conflict { path } => path,
             Self::Deleted { path } => path,
             Self::Renamed { to_path, .. } => to_path,
-            Self::Ignored { path } => path,
         }
     }
 }

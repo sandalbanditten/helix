@@ -172,7 +172,6 @@ fn status_entries(repo: &Path, options: crate::StatusOptions) -> Vec<(&'static s
             FileChange::Conflict { .. } => "conflict",
             FileChange::Deleted { .. } => "deleted",
             FileChange::Renamed { .. } => "renamed",
-            FileChange::Ignored { .. } => "ignored",
         };
         let path = change.path().strip_prefix(repo).unwrap();
         entries
@@ -188,7 +187,7 @@ fn status_entries(repo: &Path, options: crate::StatusOptions) -> Vec<(&'static s
 }
 
 #[test]
-fn status_reports_staged_and_ignored_entries_on_request() {
+fn status_reports_staged_entries_on_request() {
     let temp_git = empty_git_repo();
     let repo = temp_git.path();
     std::fs::write(repo.join(".gitignore"), "target/\n*.log\n").unwrap();
@@ -212,17 +211,9 @@ fn status_reports_staged_and_ignored_entries_on_request() {
         ]
     );
     assert_eq!(
-        status_entries(
-            repo,
-            crate::StatusOptions {
-                staged: true,
-                ignored: true
-            }
-        ),
+        status_entries(repo, crate::StatusOptions { staged: true }),
         [
             entry("added", "staged.txt"),
-            entry("ignored", "build.log"),
-            entry("ignored", "target"),
             entry("modified", "committed.txt"),
             entry("untracked", "untracked.txt"),
         ]

@@ -70,6 +70,8 @@ log = { version = "0.4", features = ["std"] }
 nucleo.workspace = true
 ignore = "0.4"
 slotmap.workspace = true
+# Watching the directories the file tree shows
+notify = { version = "8.2", default-features = false }
 grep-regex = "0.1"
 grep-searcher = "0.1"
 grep-matcher = "0.1"

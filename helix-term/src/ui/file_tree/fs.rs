@@ -1,6 +1,8 @@
 //! Reading directories for the file tree. Everything here blocks, so it runs off the main thread.
 
 use std::{
+    collections::HashSet,
+    ffi::OsString,
     fs::{self, DirEntry, FileType},
     path::{Path, PathBuf},
 };
@@ -33,6 +35,7 @@ pub fn list_all(root: &Path, dirs: Vec<PathBuf>, options: ListOptions) -> Vec<(P
 /// Lists the directory `dir` in tree order, probing each subdirectory for a single-child run.
 /// VCS directories are left out, links are not followed.
 pub fn list(dir: &Path, options: ListOptions) -> Listing {
+    let kept = not_ignored(dir);
     let mut entries: Vec<_> = fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)
@@ -43,8 +46,10 @@ pub fn list(dir: &Path, options: ListOptions) -> Listing {
                 Kind::Directory => probe(&entry.path()).map(Box::new),
                 _ => None,
             };
+            let name = entry.file_name();
             Some(Entry {
-                name: entry.file_name(),
+                ignored: !kept.contains(&name),
+                name,
                 kind,
                 only_child,
             })
@@ -60,6 +65,25 @@ pub fn list(dir: &Path, options: ListOptions) -> Listing {
     Some(entries)
 }
 
+/// The names of the entries of `dir` that git does not ignore, by the rules the file picker
+/// follows (`.gitignore` files, `.git/info/exclude` and the global excludes). Outside of a
+/// repository that is every entry.
+fn not_ignored(dir: &Path) -> HashSet<OsString> {
+    ignore::WalkBuilder::new(dir)
+        .max_depth(Some(1))
+        .hidden(false)
+        .ignore(false)
+        .parents(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.depth() == 1)
+        .map(|entry| entry.file_name().to_owned())
+        .collect()
+}
+
 /// The only entry of `dir` if that is a directory, probed in turn.
 fn probe(dir: &Path) -> Option<Entry> {
     let mut entries = fs::read_dir(dir)
@@ -73,6 +97,8 @@ fn probe(dir: &Path) -> Option<Entry> {
     Some(Entry {
         name: only.file_name(),
         kind: Kind::Directory,
+        // Ignored directories are only the ones the listing of their parent names.
+        ignored: false,
         only_child: probe(&only.path()).map(Box::new),
     })
 }
@@ -172,6 +198,39 @@ mod tests {
         assert_eq!(entries[2].kind, Kind::File { executable: false });
 
         assert_eq!(list(&root.join("missing"), OPTIONS), None);
+    }
+
+    #[test]
+    fn listings_tell_what_git_ignores() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/build.log"), "").unwrap();
+        fs::write(root.join("src/lib.rs"), "").unwrap();
+
+        let ignored = |dir: &Path| -> Vec<(String, bool)> {
+            list(dir, OPTIONS)
+                .unwrap()
+                .into_iter()
+                .map(|entry| (entry.name.to_string_lossy().into_owned(), entry.ignored))
+                .collect()
+        };
+        assert_eq!(
+            ignored(root),
+            [
+                ("src".to_owned(), false),
+                ("target".to_owned(), true),
+                (".gitignore".to_owned(), false),
+            ]
+        );
+        // The rules of the parent directory apply too.
+        assert_eq!(
+            ignored(&root.join("src")),
+            [("build.log".to_owned(), true), ("lib.rs".to_owned(), false)]
+        );
     }
 
     #[cfg(unix)]

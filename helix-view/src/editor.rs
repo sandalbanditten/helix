@@ -278,13 +278,16 @@ pub struct FileTreeConfig {
     pub icons: bool,
     /// Whether tree guides are drawn. Defaults to `true`.
     pub guides: bool,
+    /// The characters marking a directory as collapsed and as expanded: `true` for `▸` and `▾`,
+    /// `false` for none, or two characters like `["+", "-"]`. Defaults to `true`.
+    pub expanders: Expanders,
     /// Whether a run of single-child directories is shown as one row. Defaults to `true`.
     pub flatten_dirs: bool,
     /// How the entries of a directory are ordered. Defaults to `directories-first`.
     pub sort: FileTreeSort,
     /// Where entry colors come from: `false` uses the theme, `true` reads `LS_COLORS` and then
-    /// `EZA_COLORS` from the environment, and a string is an `LS_COLORS` specification.
-    /// Defaults to `false`.
+    /// `EZA_COLORS` from the environment (falling back to the colors of GNU `ls` when neither is
+    /// set), and a string is an `LS_COLORS` specification. Defaults to `true`.
     pub ls_colors: LsColors,
 }
 
@@ -295,6 +298,7 @@ impl Default for FileTreeConfig {
             side: FileTreeSide::default(),
             icons: true,
             guides: true,
+            expanders: Expanders::default(),
             flatten_dirs: true,
             sort: FileTreeSort::default(),
             ls_colors: LsColors::default(),
@@ -349,8 +353,55 @@ pub enum LsColors {
 
 impl Default for LsColors {
     fn default() -> Self {
-        Self::Environment(false)
+        Self::Environment(true)
     }
+}
+
+/// The characters marking directories in the file tree as collapsed or expanded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Expanders {
+    /// `▸` and `▾`, or none.
+    Enabled(bool),
+    /// The characters for collapsed and for expanded directories.
+    #[serde(deserialize_with = "deserialize_expanders")]
+    Characters([char; 2]),
+}
+
+impl Expanders {
+    /// The characters for collapsed and for expanded directories, if any.
+    pub fn characters(&self) -> Option<[char; 2]> {
+        match self {
+            Self::Enabled(true) => Some(['▸', '▾']),
+            Self::Enabled(false) => None,
+            Self::Characters(characters) => Some(*characters),
+        }
+    }
+}
+
+impl Default for Expanders {
+    fn default() -> Self {
+        Self::Enabled(true)
+    }
+}
+
+/// Accepts two printable characters one column wide, which keep the rows of the tree aligned.
+fn deserialize_expanders<'de, D>(deserializer: D) -> Result<[char; 2], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use helix_core::unicode::width::UnicodeWidthChar;
+
+    let characters = <[char; 2]>::deserialize(deserializer)?;
+    if characters
+        .iter()
+        .any(|c| c.is_control() || c.width() != Some(1))
+    {
+        return Err(serde::de::Error::custom(
+            "the expanders must be printable characters one column wide",
+        ));
+    }
+    Ok(characters)
 }
 
 fn serialize_alphabet<S>(alphabet: &[char], serializer: S) -> Result<S::Ok, S::Error>

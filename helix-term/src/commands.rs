@@ -405,7 +405,7 @@ impl MappableCommand {
         file_explorer, "Open file explorer in workspace root",
         file_explorer_in_current_buffer_directory, "Open file explorer at current buffer's directory",
         file_explorer_in_current_directory, "Open file explorer at current working directory",
-        focus_file_tree, "Focus file tree, or return focus to the editor",
+        focus_file_tree, "Focus/unfocus file tree",
         toggle_file_tree, "Toggle file tree",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
@@ -3450,7 +3450,6 @@ fn changed_file_picker(cx: &mut Context) {
                 FileChange::Conflict { .. } => Span::styled("x conflict", data.style_conflict),
                 FileChange::Deleted { .. } => Span::styled("- deleted", data.style_deleted),
                 FileChange::Renamed { .. } => Span::styled("> renamed", data.style_renamed),
-                FileChange::Ignored { .. } => Span::raw("! ignored"),
             }
             .into()
         }),

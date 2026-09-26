@@ -91,6 +91,10 @@ impl EditorView {
         surface: &mut Surface,
         is_focused: bool,
     ) {
+        // While the file tree has the keys, the text is drawn as unfocused; the statusline still
+        // shows the view's focus and mode.
+        let statusline_focused = is_focused;
+        let is_focused = is_focused && !self.file_tree.is_focused();
         let inner = view.inner_area(doc);
         let area = view.area;
         let theme = &editor.theme;
@@ -252,7 +256,7 @@ impl EditorView {
         }
 
         let mut context =
-            statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
+            statusline::RenderContext::new(editor, doc, view, statusline_focused, &self.spinners);
 
         statusline::render(&mut context, statusline_area, surface);
     }
@@ -1668,6 +1672,8 @@ impl Component for EditorView {
             Event::IdleTimeout => self.handle_idle_timeout(&mut cx),
             Event::FocusGained => {
                 self.terminal_focused = true;
+                // Other programs may have changed files meanwhile.
+                self.file_tree.refresh(context.editor);
                 EventResult::Consumed(None)
             }
             Event::FocusLost => {
@@ -1725,8 +1731,6 @@ impl Component for EditorView {
             Self::render_bufferline(cx.editor, views_area.with_height(1), surface);
         }
 
-        // While the file tree has the keys, no view is drawn as focused.
-        let file_tree_focused = self.file_tree.is_focused();
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
             let statusline_area = statusline_area(view.area, file_tree_area);
@@ -1737,7 +1741,7 @@ impl Component for EditorView {
                 views_area,
                 statusline_area,
                 surface,
-                is_focused && !file_tree_focused,
+                is_focused,
             );
         }
 

@@ -81,6 +81,8 @@ pub struct Node {
     listed: bool,
     /// Whether the directory changed since it was listed and a new listing is on its way.
     stale: bool,
+    /// Whether git ignores the entry.
+    pub ignored: bool,
 }
 
 /// One entry of a directory listing.
@@ -88,6 +90,8 @@ pub struct Node {
 pub struct Entry {
     pub name: OsString,
     pub kind: Kind,
+    /// Whether git ignores the entry.
+    pub ignored: bool,
     /// For a directory whose only entry is a directory: that directory, probed the same way.
     pub only_child: Option<Box<Entry>>,
 }
@@ -98,6 +102,7 @@ impl Entry {
         Self {
             name: name.into(),
             kind,
+            ignored: false,
             only_child: None,
         }
     }
@@ -126,6 +131,7 @@ impl Tree {
             expanded: true,
             listed: false,
             stale: false,
+            ignored: false,
         });
         Self {
             nodes,
@@ -224,7 +230,6 @@ impl Tree {
     }
 
     /// Every directory whose entries are loaded, i.e. the directories worth watching.
-    #[expect(dead_code, reason = "used by the watcher")]
     pub fn loaded_directories(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes
             .iter()
@@ -296,6 +301,7 @@ impl Tree {
                 None => self.insert(dir, &entry),
             };
             self.nodes[id].kind = entry.kind;
+            self.nodes[id].ignored = entry.ignored;
             if is_directory && !self.nodes[id].expanded {
                 self.set_run(id, entry.only_child.as_deref());
             }
@@ -319,6 +325,7 @@ impl Tree {
             expanded: false,
             listed: false,
             stale: false,
+            ignored: entry.ignored,
         })
     }
 
@@ -387,6 +394,16 @@ impl Tree {
         if node.kind == Kind::Directory && node.expanded {
             node.stale = true;
             self.listing_requests.push(id);
+        }
+    }
+
+    /// Asks for new listings of every expanded directory, like [`invalidate`](Self::invalidate).
+    pub fn invalidate_all(&mut self) {
+        for (id, node) in &mut self.nodes {
+            if node.kind == Kind::Directory && node.expanded {
+                node.stale = true;
+                self.listing_requests.push(id);
+            }
         }
     }
 
