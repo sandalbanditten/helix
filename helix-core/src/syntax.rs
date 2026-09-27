@@ -7,6 +7,7 @@ use std::{
     fmt, iter,
     ops::{self, RangeBounds},
     path::Path,
+    slice,
     sync::Arc,
     time::Duration,
 };
@@ -930,6 +931,9 @@ impl Syntax {
     ) -> Vec<ops::Range<usize>> {
         let mut spell: Vec<ops::Range<usize>> = Vec::new();
         let mut nospell: Vec<ops::Range<usize>> = Vec::new();
+        // The captures of each injected layer, and the ranges of the text it is injected into.
+        let mut captures: Vec<(Layer, ops::Range<usize>, bool)> = Vec::new();
+        let mut layer_ranges: HashMap<Layer, Vec<ops::Range<usize>>> = HashMap::new();
         let mut query_iter = self.query_iter::<_, (), _>(
             source,
             |lang| loader.spellcheck_query(lang).map(|q| &q.query),
@@ -937,8 +941,14 @@ impl Syntax {
         );
 
         while let Some(event) = query_iter.next() {
-            let QueryIterEvent::Match(mat) = event else {
-                continue;
+            let mat = match event {
+                QueryIterEvent::Match(mat) => mat,
+                QueryIterEvent::EnterInjection(injection) => {
+                    let range = injection.range.start as usize..injection.range.end as usize;
+                    layer_ranges.entry(injection.layer).or_default().push(range);
+                    continue;
+                }
+                QueryIterEvent::ExitInjection { .. } => continue,
             };
             let spellcheck_query = loader
                 .spellcheck_query(query_iter.current_language())
@@ -947,11 +957,34 @@ impl Syntax {
             let bytes = mat.node.byte_range();
             let region = bytes.start as usize..bytes.end as usize;
             let capture = Some(mat.capture);
-            if capture == spellcheck_query.spell_capture {
-                spell.push(region);
+            let is_spell = if capture == spellcheck_query.spell_capture {
+                true
             } else if capture == spellcheck_query.nospell_capture {
-                nospell.push(region);
+                false
+            } else {
+                continue;
+            };
+            let layer = query_iter.current_layer();
+            if layer == self.root_layer() {
+                if is_spell { &mut spell } else { &mut nospell }.push(region);
+            } else {
+                captures.push((layer, region, is_spell));
             }
+        }
+
+        // The nodes of a combined injection span the text between its ranges, like the code
+        // between Rust doc comments, so captures are clipped to their layer's ranges. A node
+        // spanning several ranges comes before the later ones are entered, hence afterwards.
+        for (layer, region, is_spell) in captures {
+            let ranges = layer_ranges
+                .get(&layer)
+                .map_or(slice::from_ref(&region), Vec::as_slice);
+            let first = ranges.partition_point(|range| range.end <= region.start);
+            let clipped = ranges[first..]
+                .iter()
+                .take_while(|range| range.start < region.end)
+                .map(|range| range.start.max(region.start)..range.end.min(region.end));
+            if is_spell { &mut spell } else { &mut nospell }.extend(clipped);
         }
 
         merge_regions(&mut spell);
@@ -1833,6 +1866,24 @@ mod test {
                 "today", "See", "and", "and", "and", "escaped", "Content", "in", "a", "block", "A",
                 "comment", "here",
             ]
+        );
+    }
+
+    #[test]
+    fn test_spell_regions_combined_injection() {
+        // Consecutive doc comments are one Markdown paragraph, whose nodes span the code between
+        // them, but only the comments are checked.
+        let source = indoc::indoc! {"
+            struct Superblock {
+                /// Must be magik
+                magic: u32,
+                /// The versoin
+                version: u32,
+            }
+        "};
+        assert_eq!(
+            spell_checked_words("rust", source),
+            ["Must", "be", "magik", "The", "versoin"]
         );
     }
 
