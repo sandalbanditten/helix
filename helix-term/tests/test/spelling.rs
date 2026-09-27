@@ -74,6 +74,11 @@ async fn goto_misspellings() -> anyhow::Result<()> {
                 Some("[s"),
                 Some(&|app| assert_selected(app, "heding", false)),
             ),
+            (Some("]S"), Some(&|app| assert_selected(app, "wrld", true))),
+            (
+                Some("[S"),
+                Some(&|app| assert_selected(app, "heding", true)),
+            ),
         ],
         false,
     )

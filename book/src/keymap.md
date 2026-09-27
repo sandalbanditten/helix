@@ -374,6 +374,8 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 | `[D`     | Go to first diagnostic in document (**LSP**) | `goto_first_diag`       |
 | `]s`     | Go to next misspelling                       | `goto_next_spelling`    |
 | `[s`     | Go to previous misspelling                   | `goto_prev_spelling`    |
+| `]S`     | Go to last misspelling in document           | `goto_last_spelling`    |
+| `[S`     | Go to first misspelling in document          | `goto_first_spelling`   |
 | `]f`     | Go to next function (**TS**)                 | `goto_next_function`    |
 | `[f`     | Go to previous function (**TS**)             | `goto_prev_function`    |
 | `]t`     | Go to next type definition (**TS**)          | `goto_next_class`       |

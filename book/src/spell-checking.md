@@ -74,6 +74,8 @@ out of the gutter, the statusline, the diagnostics pickers and `]d`/`[d`. Set
 | ---       | ---                                                                                 |
 | `]s`      | Go to the next misspelling                                                          |
 | `[s`      | Go to the previous misspelling                                                      |
+| `]S`      | Go to the last misspelling                                                          |
+| `[S`      | Go to the first misspelling                                                         |
 | `Space A` | Fix the misspelling under the cursor: pick a suggestion, or add it to a dictionary  |
 | `Space a` | Code actions, including the fixes of the misspelling under the cursor               |
 

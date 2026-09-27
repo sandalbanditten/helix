@@ -458,6 +458,8 @@ impl MappableCommand {
         goto_prev_diag, "Goto previous diagnostic",
         goto_next_spelling, "Goto next misspelling",
         goto_prev_spelling, "Goto previous misspelling",
+        goto_first_spelling, "Goto first misspelling",
+        goto_last_spelling, "Goto last misspelling",
         fix_spelling, "Fix misspelling under cursor",
         goto_next_change, "Goto next change",
         goto_prev_change, "Goto previous change",
@@ -4096,32 +4098,38 @@ fn exit_select_mode(cx: &mut Context) {
 }
 
 fn goto_first_diag(cx: &mut Context) {
-    let (view, doc) = current!(cx.editor);
-    let selection = match doc
-        .diagnostics()
-        .iter()
-        .find(|diag| doc.shows_diagnostic(diag))
-    {
-        Some(diag) => Selection::single(diag.range.start, diag.range.end),
-        None => return,
-    };
-    push_jump(view, doc);
-    doc.set_selection(view.id, selection);
-    view.diagnostics_handler
-        .immediately_show_diagnostic(doc, view.id);
+    goto_first_diagnostic_impl(cx, false, Document::shows_diagnostic);
 }
 
 fn goto_last_diag(cx: &mut Context) {
+    goto_first_diagnostic_impl(cx, true, Document::shows_diagnostic);
+}
+
+fn goto_first_spelling(cx: &mut Context) {
+    goto_first_diagnostic_impl(cx, false, is_misspelling);
+}
+
+fn goto_last_spelling(cx: &mut Context) {
+    goto_first_diagnostic_impl(cx, true, is_misspelling);
+}
+
+/// Selects the first diagnostic of the document that `filter` accepts, or the last one.
+fn goto_first_diagnostic_impl(
+    cx: &mut Context,
+    last: bool,
+    filter: fn(&Document, &Diagnostic) -> bool,
+) {
     let (view, doc) = current!(cx.editor);
-    let last = doc
-        .diagnostics()
-        .iter()
-        .rev()
-        .find(|diag| doc.shows_diagnostic(diag));
-    let selection = match last {
-        Some(diag) => Selection::single(diag.range.start, diag.range.end),
-        None => return,
+    let mut diagnostics = doc.diagnostics().iter().filter(|diag| filter(doc, diag));
+    let diag = if last {
+        diagnostics.next_back()
+    } else {
+        diagnostics.next()
     };
+    let Some(diag) = diag else {
+        return;
+    };
+    let selection = Selection::single(diag.range.start, diag.range.end);
     push_jump(view, doc);
     doc.set_selection(view.id, selection);
     view.diagnostics_handler
