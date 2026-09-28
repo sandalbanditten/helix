@@ -12,8 +12,8 @@
 //! ```
 //!
 //! A closing bracket that starts the last line and closes a bracket of the header line is pulled
-//! up onto the row. Otherwise the fold hides the rest of the region, up to the end of its last
-//! line's content. The hidden lines after the header form the fold's *interior*. Folds chain, so
+//! up onto the row, as is the closing delimiter of a comment or string: `/**…*/`. Otherwise the
+//! fold hides the rest of the region, up to the end of its last line's content. The hidden lines after the header form the fold's *interior*. Folds chain, so
 //! one visual row can span several document lines: `if a {…} else {…}`.
 
 use std::cell::OnceCell;
@@ -35,8 +35,8 @@ pub struct Fold {
     pub start: usize,
     /// The char index where the header's visual row continues after the hidden text.
     pub end: usize,
-    /// Whether `end` is a closing bracket pulled up from the last hidden line. Edits keep such an
-    /// end on the first non-whitespace char of its line.
+    /// Whether `end` is a closing bracket or delimiter pulled up from the start of the last hidden
+    /// line. Edits keep such an end on the first non-whitespace char of its line.
     pub pulled_up: bool,
 }
 
@@ -44,8 +44,8 @@ impl Fold {
     /// Returns the fold hiding the region `region` (char indices) behind its first line, or
     /// `None` if the region has no content after its first line.
     ///
-    /// `closer` is the char index of a closing bracket that starts the region's last line and
-    /// closes a bracket opened on its first line. It is pulled up onto the header's row.
+    /// `closer` is the char index of a closing bracket or delimiter on the region's last line,
+    /// which is pulled up onto the header's row.
     pub fn from_region(
         text: RopeSlice,
         region: ops::Range<usize>,
@@ -57,7 +57,11 @@ impl Fold {
             return None;
         }
         let (end, pulled_up) = match closer {
-            Some(closer) => (closer, true),
+            Some(closer) => {
+                let line = text.char_to_line(closer);
+                let first_char = text.line(line).first_non_whitespace_char();
+                (closer, first_char == Some(closer - text.line_to_char(line)))
+            }
             None => (next_grapheme_boundary(text, last), false),
         };
         let fold = Fold {
@@ -105,7 +109,7 @@ impl Fold {
             let line = self.last_line(text);
             let first_char = text.line(line).first_non_whitespace_char();
             match first_char.map(|col| text.line_to_char(line) + col) {
-                Some(closer) if is_closing_bracket(text.char(closer)) => self.end = closer,
+                Some(closer) if !text.char(closer).is_alphanumeric() => self.end = closer,
                 _ => self.pulled_up = false,
             }
         }
@@ -553,7 +557,8 @@ pub fn regions(
         .filter_map(|(first, last)| {
             let region = text.byte_to_char(first.start_byte() as usize)
                 ..text.byte_to_char(content_end(text, &last) as usize);
-            let closer = pulled_up_closer(text, &last, region.clone());
+            let closer = pulled_up_closer(text, &last, region.clone())
+                .or_else(|| delimiter_closer(text, &last, region.clone()));
             Fold::from_region(text, region, closer)
         });
     nest(regions.map(|fold| (fold, false)).collect())
@@ -604,6 +609,68 @@ fn pulled_up_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> 
     let opener = matching_opener(text, &last.descendant_for_byte_range(byte, byte + 1)?)?;
     let opener_line = text.byte_to_line(opener.start_byte() as usize);
     (opener_line == text.char_to_line(region.start)).then_some(closer)
+}
+
+/// The closing delimiter of a comment or string that ends `region` and starts on its first line,
+/// according to the tree of `last`, the region's last node.
+fn delimiter_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> Option<usize> {
+    let last_char = last_non_whitespace(text, region.clone())?;
+    let byte = text.char_to_byte(last_char) as u32;
+    let header = text.char_to_line(region.start);
+    let mut node = last.descendant_for_byte_range(byte, byte + 1)?;
+    // not a part of it like the `string_end` of a string
+    let start = loop {
+        let start = text.byte_to_char(node.start_byte() as usize);
+        let kind = node.kind();
+        if (kind.contains("comment") || kind.contains("string"))
+            && text.char_to_line(start) == header
+        {
+            break start;
+        }
+        if node.byte_range() == last.byte_range() {
+            return None;
+        }
+        node = node.parent()?;
+    };
+    let ends_region = text.byte_to_char(node.end_byte() as usize) == last_char + 1;
+    ends_region
+        .then(|| closing_delimiter(text, start..region.end))
+        .flatten()
+}
+
+/// The closing delimiter of `region`, a comment or string: the punctuation at its end made of the
+/// chars of its opening delimiter, like `*/` of `/**`, `--]]` of `--[[` or `"""` of `f"""`.
+fn closing_delimiter(text: RopeSlice, region: ops::Range<usize>) -> Option<usize> {
+    let is_delimiter = |ch: char| !ch.is_alphanumeric() && !ch.is_whitespace();
+    let mirrored = |ch| match ch {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        '<' => '>',
+        ch => ch,
+    };
+    // after a prefix like the `f` of `f"""`
+    let opener: Vec<char> = text
+        .slice(region.clone())
+        .chars()
+        .skip_while(|ch| ch.is_alphanumeric())
+        .take_while(|&ch| is_delimiter(ch))
+        .flat_map(|ch| [ch, mirrored(ch)])
+        .collect();
+    let end = next_grapheme_boundary(text, last_non_whitespace(text, region.clone())?);
+    let run: Vec<char> = text
+        .chars_at(end)
+        .reversed()
+        .take_while(|&ch| is_delimiter(ch))
+        .collect();
+    // the punctuation ending the text before the delimiter, like the `.` of `tokens.*/`
+    let foreign = run
+        .iter()
+        .rev()
+        .take_while(|ch| !opener.contains(ch))
+        .count();
+    let closer = end - run.len() + foreign;
+    (closer < end).then_some(closer)
 }
 
 /// The bracket that `closer`, a closing bracket token, closes among its siblings. Some grammars
@@ -871,6 +938,71 @@ fn f() {
         );
     }
 
+    #[test]
+    fn closing_delimiters() {
+        for (language, source, rows) in [
+            // the closer is pulled up whether or not text precedes it
+            ("java", "/**\n * Splits text.\n */\n", &["/**…*/"][..]),
+            (
+                "java",
+                "/* Splits text\n   into tokens. */\n",
+                &["/* Splits text…*/"],
+            ),
+            ("c", "/* a\n   b.*/ int x;\n", &["/* a…*/ int x;"]),
+            ("rust", "/*!\n * Crate.\n */\n", &["/*!…*/"]),
+            ("css", "/*\n  a\n*/\n", &["/*…*/"]),
+            (
+                "javascript",
+                "const s = `\n  a ${b}\n`;\n",
+                &["const s = `…`;"],
+            ),
+            ("python", "s = rb'''\na\n'''\n", &["s = rb'''…'''"]),
+            (
+                "python",
+                "def f():\n    \"\"\"\n    Doc.\n    \"\"\"\n",
+                &["def f():…", "\"\"\"…\"\"\""],
+            ),
+            ("lua", "--[[\n  a\n--]]\n", &["--[[…--]]"]),
+            (
+                "lua",
+                "local s = [==[\n  a\n]==]\n",
+                &["local s = [==[…]==]"],
+            ),
+            ("julia", "#=\n  a\n=#\n", &["#=…=#"]),
+            (
+                "julia",
+                "\"\"\"\n    f(x)\n\"\"\"\nf(x) = 1\n",
+                &["\"\"\"…\"\"\""],
+            ),
+            (
+                "kotlin",
+                "val s = \"\"\"\n  a\n\"\"\"\n",
+                &["val s = \"\"\"…\"\"\""],
+            ),
+            (
+                "nix",
+                "{\n  a = ''\n    b\n  '';\n}\n",
+                &["{…}", "a = ''…'';"],
+            ),
+            ("scheme", "#|\n  a\n|#\n", &["#|…|#"]),
+            ("matlab", "%{\n  a\n%}\n", &["%{…%}"]),
+            ("html", "<!--\n  a\n-->\n", &["<!--…-->"]),
+            // a delimiter of letters and a run of comments are hidden
+            (
+                "latex",
+                "\\begin{comment}\n  a\n\\end{comment}\n",
+                &["\\begin{comment}…"],
+            ),
+            ("c", "/* a\n */\n/* b\n */\n", &["/* a…"]),
+        ] {
+            assert_eq!(
+                region_rows(language, source),
+                rows,
+                "{language}: {source:?}"
+            );
+        }
+    }
+
     /// The fully folded rendering of a sample for every language whose `folds.scm` was reviewed.
     /// Haskell is left out: its grammar corrupts the heap for some inputs.
     #[test]
@@ -1057,7 +1189,7 @@ public class Lexer {
 "##,
                 r##"import java.util.List;…
 
-/**…
+/**…*/
 @SuppressWarnings({…})
 public class Lexer {…}
 "##,
@@ -1244,7 +1376,7 @@ local function f(x)…
 if a then…
 for i = 1, 3 do…
 call(…)
-local s = [[…
+local s = [[…]]
 "##,
             ),
             (
@@ -1421,7 +1553,7 @@ if (ready) {…} else {…}
 
 app.get("/", function (req, res) {…});
 
-const sql = `…;
+const sql = `…`;
 "##,
             ),
             (
@@ -1594,7 +1726,7 @@ h1,…
   });
 </script>
 "##,
-                r##"<!--…
+                r##"<!--…-->
 <nav class="top">…
 <img…
 <style>…
@@ -1881,6 +2013,34 @@ env:…
         let (mut text, mut folds) = function();
         edited(&mut text, &mut folds, vec![(8, 8, Some("\r"))]);
         assert!(folds.is_empty());
+    }
+
+    #[test]
+    fn delimiter_edits() {
+        let comment = |source: &str, closer| {
+            let text = Rope::from(source);
+            let region = 0..source.trim_end().chars().count();
+            let fold = Fold::from_region(text.slice(..), region, Some(closer)).unwrap();
+            let mut folds = Folds::default();
+            folds.close([fold]);
+            (text, folds)
+        };
+
+        // re-indenting a closer that starts its line keeps it pulled up
+        let (mut text, mut folds) = comment("/**\n * a\n */\nx\n", 10);
+        edited(&mut text, &mut folds, vec![(10, 10, Some("  "))]);
+        assert_eq!(render(&text, &folds), "/**…*/\nx\n");
+
+        // typing before a closer after text stays outside the fold
+        let (mut text, mut folds) = comment("/* a\n   b */\nx\n", 10);
+        edited(&mut text, &mut folds, vec![(10, 10, Some("c "))]);
+        assert_eq!(render(&text, &folds), "/* a…c */\nx\n");
+
+        // a closer replaced by a word is no longer pulled up
+        let (mut text, mut folds) = comment("/**\n * a\n */\nx\n", 10);
+        edited(&mut text, &mut folds, vec![(10, 12, Some("end"))]);
+        assert!(!folds.outermost()[0].pulled_up);
+        assert_eq!(render(&text, &folds), "/**…end\nx\n");
     }
 
     #[test]

@@ -45,11 +45,15 @@ from its keyword to the end of its body:
 ## How a region is folded
 
 A fold always starts at the end of the region's first line, which stays visible, and ends in one
-of two ways:
+of three ways:
 
 - If the region's last line starts with a closing bracket (`)`, `]` or `}`) that the syntax tree
   pairs with a bracket on the first line, the fold ends right before it, and the bracket is pulled
   onto the first line: `class Lexer {…};`.
+- If the region ends with a comment or string starting on its first line, a node whose kind
+  contains `comment` or `string`, the closing delimiter is pulled onto the first line:
+  `/**…*/`, `--[[…]]` or `"""…"""`. The delimiter is the punctuation at the node's end, without
+  leading characters that its opening delimiter lacks.
 - Otherwise the fold hides everything up to the region's last non-whitespace character:
   `def f():…` or `main = do…`.
 
