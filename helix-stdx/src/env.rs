@@ -12,7 +12,7 @@ use once_cell::sync::Lazy;
 static CWD: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 /// Get the current working directory.
-/// This information is managed internally as the call to std::env::current_dir
+/// This information is managed internally as the call to `std::env::current_dir`
 /// might fail if the cwd has been deleted.
 pub fn current_working_dir() -> PathBuf {
     if let Some(path) = &*CWD.read().unwrap() {
@@ -128,16 +128,13 @@ fn expand_impl(src: &OsStr, mut resolve: impl FnMut(&OsStr) -> Option<OsString>)
         // safety: this is a codepoint aligned substring of an osstr (always valid)
         let var = unsafe { OsStr::from_encoded_bytes_unchecked(var) };
         let expansion = resolve(var);
-        let expansion = match &expansion {
-            Some(val) => {
-                if val.is_empty() && pattern_id < 2 {
-                    default
-                } else {
-                    val.as_encoded_bytes()
-                }
+        let expansion = expansion.as_ref().map_or(default, |val| {
+            if val.is_empty() && pattern_id < 2 {
+                default
+            } else {
+                val.as_encoded_bytes()
             }
-            None => default,
-        };
+        });
         res.extend_from_slice(&bytes[pos..range.start]);
         pos = range.end;
         res.extend_from_slice(expansion);

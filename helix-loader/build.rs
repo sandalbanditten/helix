@@ -13,7 +13,7 @@ fn main() {
         .ok()
         .filter(|output| output.status.success())
         .and_then(|x| String::from_utf8(x.stdout).ok())
-        .or_else(|| option_env!("HELIX_NIX_BUILD_REV").map(|s| s.to_string()));
+        .or_else(|| option_env!("HELIX_NIX_BUILD_REV").map(str::to_string));
 
     let minor = if MINOR.len() == 1 {
         // Print single-digit months in '0M' format
@@ -36,7 +36,7 @@ fn main() {
         std::env::var("TARGET").unwrap()
     );
 
-    println!("cargo:rustc-env=VERSION_AND_GIT_HASH={}", version);
+    println!("cargo:rustc-env=VERSION_AND_GIT_HASH={version}");
 
     if git_hash.is_none() {
         return;

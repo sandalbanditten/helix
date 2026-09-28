@@ -61,7 +61,7 @@ impl Url {
     /// Parse an absolute URI. Mirrors `url::Url::parse`'s rejection of relative
     /// references: the input must begin with a valid scheme (`ALPHA *( ALPHA /
     /// DIGIT / "+" / "-" / "." ) ":"`).
-    pub fn parse(input: &str) -> Result<Url, ParseError> {
+    pub fn parse(input: &str) -> Result<Self, ParseError> {
         let colon = input.find(':').ok_or(ParseError)?;
         let scheme = &input[..colon];
         let mut bytes = scheme.bytes();
@@ -81,10 +81,7 @@ impl Url {
 
     /// The scheme (the part before the first `:`), e.g. `file`.
     pub fn scheme(&self) -> &str {
-        match self.0.find(':') {
-            Some(i) => &self.0[..i],
-            None => "",
-        }
+        self.0.find(':').map_or("", |i| &self.0[..i])
     }
 
     /// The (still percent-encoded) path component, matching `url::Url::path`.

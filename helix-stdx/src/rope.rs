@@ -1,4 +1,4 @@
-//! Functions and types for working with [RopeSlice]
+//! Functions and types for working with [`RopeSlice`]
 use std::fmt;
 use std::ops::{Bound, RangeBounds};
 
@@ -9,7 +9,7 @@ use ropey::iter::Chunks;
 use ropey::RopeSlice;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
-/// Additional utility functions for [RopeSlice]
+/// Additional utility functions for [`RopeSlice`]
 pub trait RopeSliceExt<'a>: Sized {
     fn ends_with(self, text: &str) -> bool;
     fn starts_with(self, text: &str) -> bool;
@@ -592,7 +592,7 @@ const fn is_utf8_char_boundary(b: u8) -> bool {
 
 /// An iterator over the graphemes of a `RopeSlice`.
 ///
-/// This iterator is cursor-like: rather than implementing DoubleEndedIterator it can be reversed
+/// This iterator is cursor-like: rather than implementing `DoubleEndedIterator` it can be reversed
 /// like a cursor. This style matches `Bytes` and `Chars` iterator types in Ropey and is more
 /// natural and useful for wrapping `GraphemeCursor`.
 #[derive(Clone)]
@@ -637,7 +637,7 @@ impl<'a> RopeGraphemes<'a> {
         }
     }
 
-    pub fn reverse(&mut self) {
+    pub const fn reverse(&mut self) {
         self.is_reversed = !self.is_reversed;
     }
 
@@ -728,7 +728,7 @@ impl<'a> Iterator for RopeGraphemes<'a> {
 /// cluster starts.
 ///
 /// This iterator wraps `RopeGraphemes` and is also cursor-like. Use `reverse` or `reversed` to
-/// toggle the direction of the iterator. See [RopeGraphemes].
+/// toggle the direction of the iterator. See [`RopeGraphemes`].
 #[derive(Debug, Clone)]
 pub struct RopeGraphemeIndices<'a> {
     front_offset: usize,
@@ -754,7 +754,7 @@ impl<'a> RopeGraphemeIndices<'a> {
         }
     }
 
-    pub fn reverse(&mut self) {
+    pub const fn reverse(&mut self) {
         self.is_reversed = !self.is_reversed;
     }
 
