@@ -52,7 +52,8 @@ use helix_core::{
             AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap, SpellingConfig,
         },
     },
-    Change, LineEnding, Position, Range, Selection, SpellingLanguage, Uri, NATIVE_LINE_ENDING,
+    Change, LineEnding, Position, Range, Selection, SpellingLanguage, Tendril, Uri,
+    NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
@@ -1285,28 +1286,31 @@ pub struct FoldingConfig {
     /// Whether everything is folded when a document is first shown in a view. Defaults to
     /// `false`.
     pub start_folded: bool,
-    /// The character that folded text is drawn as. Defaults to `…`.
+    /// The text that folded text is drawn as. Defaults to ` … `.
     #[serde(deserialize_with = "deserialize_fold_placeholder")]
-    pub placeholder: char,
+    pub placeholder: Tendril,
 }
 
 impl Default for FoldingConfig {
     fn default() -> Self {
         Self {
             start_folded: false,
-            placeholder: '…',
+            placeholder: " … ".into(),
         }
     }
 }
 
-fn deserialize_fold_placeholder<'de, D>(deserializer: D) -> Result<char, D::Error>
+fn deserialize_fold_placeholder<'de, D>(deserializer: D) -> Result<Tendril, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let placeholder = char::deserialize(deserializer)?;
-    if placeholder.is_control() || helix_core::chars::char_is_line_ending(placeholder) {
+    let placeholder = Tendril::deserialize(deserializer)?;
+    if placeholder.is_empty()
+        || placeholder.contains(|c: char| c.is_control())
+        || placeholder.contains(helix_core::chars::char_is_line_ending)
+    {
         return Err(serde::de::Error::custom(
-            "the fold placeholder must be a printable character",
+            "the fold placeholder must be printable text",
         ));
     }
     Ok(placeholder)

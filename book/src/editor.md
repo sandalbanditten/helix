@@ -581,7 +581,7 @@ treat a folded line as one line.
 | Key | Description | Default |
 | --- | --- | --- |
 | `start-folded` | Fold everything when a document is first shown in a view | `false` |
-| `placeholder` | The character that folded text is drawn as | `"…"` |
+| `placeholder` | The text that folded text is drawn as | `" … "` |
 
 The placeholder is styled with the `ui.virtual.fold` theme scope.
 

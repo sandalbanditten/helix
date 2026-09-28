@@ -226,7 +226,7 @@ fn folded_text(text: &str, softwrap: bool, folds: &[Fold], char_pos: usize) -> S
     DocumentFormatter::new_at_prev_checkpoint(
         text.into(),
         &TextFormat::new_test(softwrap),
-        TextAnnotations::default().add_folds(folds, '…'),
+        TextAnnotations::default().add_folds(folds, " … ".into()),
         char_pos,
     )
     .collect_to_str()
@@ -237,15 +237,18 @@ fn folds() {
     let text = "fn f() {\n    1\n}\nx\n";
     let folds = [fold(8, 15)];
     for softwrap in [false, true] {
-        assert_eq!(folded_text(text, softwrap, &folds, 0), "fn f() {…} \nx \n ");
+        assert_eq!(
+            folded_text(text, softwrap, &folds, 0),
+            "fn f() { … } \nx \n "
+        );
     }
     // a formatter starting inside a fold starts at the fold's row
-    assert_eq!(folded_text(text, false, &folds, 11), "fn f() {…} \nx \n ");
-    assert_eq!(folded_text(text, false, &folds, 15), "fn f() {…} \nx \n ");
+    assert_eq!(folded_text(text, false, &folds, 11), "fn f() { … } \nx \n ");
+    assert_eq!(folded_text(text, false, &folds, 15), "fn f() { … } \nx \n ");
     // a fold hiding the end of the text
     assert_eq!(
         folded_text("fn f() {\n    1\n}", false, &[fold(8, 16)], 0),
-        "fn f() {… "
+        "fn f() { …  "
     );
     // a fold ending beyond a truncated text is not folded
     assert_eq!(
@@ -256,19 +259,19 @@ fn folds() {
 
 #[test]
 fn chained_folds() {
-    let text = "if a {\n    b\n} else {\n    c\n}\nd\n";
-    let folds = [fold(6, 13), fold(21, 28)];
+    let text = "a {\n b\n} b {\n c\n}\nd\n";
+    let folds = [fold(3, 7), fold(12, 16)];
     assert_eq!(
         folded_text(text, false, &folds, 0),
-        "if a {…} else {…} \nd \n "
+        "a { … } b { … } \nd \n "
     );
     assert_eq!(
-        folded_text(text, false, &folds, 23),
+        folded_text(text, false, &folds, 14),
         folded_text(text, false, &folds, 0)
     );
 
     let mut annotations = TextAnnotations::default();
-    annotations.add_folds(&folds, '…');
+    annotations.add_folds(&folds, " … ".into());
     let text_fmt = TextFormat::new_test(false);
     let formatter =
         DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0);
@@ -280,17 +283,17 @@ fn chained_folds() {
                 grapheme.source.is_fold(),
             )
         })
-        .filter(|&(char_idx, _, _)| [5, 6, 13, 21, 28, 30].contains(&char_idx))
+        .filter(|&(char_idx, _, _)| [2, 3, 7, 12, 16, 18].contains(&char_idx))
         .collect();
     assert_eq!(
         lines,
         [
-            (5, 0, false),
-            (6, 0, true),
-            (13, 2, false),
-            (21, 2, true),
-            (28, 4, false),
-            (30, 5, false)
+            (2, 0, false),
+            (3, 0, true),
+            (7, 2, false),
+            (12, 2, true),
+            (16, 4, false),
+            (18, 5, false)
         ]
     );
 }
@@ -299,8 +302,53 @@ fn chained_folds() {
 fn soft_wrapped_fold() {
     // the placeholder is a word of its own, so the row wraps around it
     assert_eq!(
+        folded_text("aaaa bbb ccc {\n  x\n} y\n", true, &[fold(14, 19)], 0),
+        "aaaa bbb ccc { … \n.} y \n "
+    );
+    // a placeholder that does not fit the row wraps as a whole
+    assert_eq!(
         folded_text("aaaa bbbb cccc {\n  x\n} y\n", true, &[fold(16, 21)], 0),
-        "aaaa bbbb cccc {…\n.} y \n "
+        "aaaa bbbb cccc {\n. … } y \n "
+    );
+}
+
+#[test]
+fn fold_placeholder_width() {
+    let text = "a {\n b\n}\n";
+    let folds = [fold(3, 7)];
+    for (placeholder, width) in [("…", 1), (" … ", 3), ("⋯⋯", 2), ("折", 2), ("folded", 6)]
+    {
+        let mut annotations = TextAnnotations::default();
+        annotations.add_folds(&folds, placeholder.into());
+        for softwrap in [false, true] {
+            let text_fmt = TextFormat::new_test(softwrap);
+            let graphemes: Vec<_> =
+                DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+                    .map(|g| (g.char_idx, g.visual_pos, g.width(), g.is_whitespace()))
+                    .collect();
+            // the placeholder is measured as a whole and never whitespace, whatever it starts with
+            assert_eq!(graphemes[2], (2, Position::new(0, 2), 1, false));
+            assert_eq!(graphemes[3], (3, Position::new(0, 3), width, false));
+            assert_eq!(
+                graphemes[4],
+                (7, Position::new(0, 3 + width), 1, false),
+                "{placeholder:?}"
+            );
+        }
+    }
+    // a placeholder starting with a word char does not join the following word
+    let folds = [fold(16, 20)];
+    let mut annotations = TextAnnotations::default();
+    annotations.add_folds(&folds, "a".into());
+    assert_eq!(
+        DocumentFormatter::new_at_prev_checkpoint(
+            "aaaa bbbb cccc {\n x\n}\n".into(),
+            &TextFormat::new_test(true),
+            &annotations,
+            0
+        )
+        .collect_to_str(),
+        "aaaa bbbb cccc {a\n.} \n "
     );
 }
 
@@ -321,12 +369,12 @@ fn fold_and_annotations() {
             TextAnnotations::default()
                 .add_inline_annotations(&inline, None)
                 .add_overlay(&overlays, None)
-                .add_folds(&folds, '…'),
+                .add_folds(&folds, " … ".into()),
             0,
         )
         .collect_to_str(),
         // annotations at the fold's start are shown before it, hidden ones are skipped
-        "fn f() {A…C} \nY \n "
+        "fn f() {A … C} \nY \n "
     );
 }
 
@@ -370,7 +418,7 @@ fn fold_and_virtual_lines() {
     let folds = [fold(8, 15)];
     let text_fmt = TextFormat::new_test(false);
     let mut annotations = TextAnnotations::default();
-    annotations.add_folds(&folds, '…');
+    annotations.add_folds(&folds, " … ".into());
     // anchors on the header, inside the fold and after it
     annotations.add_line_annotation(Box::new(VirtualLineAtAnchors {
         anchors: vec![2, 12, 17],

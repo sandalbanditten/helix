@@ -855,7 +855,7 @@ mod test {
                 Fold::from_region(text, text.line_to_char(a.min(b))..end, None)
             }));
             let mut annotations = TextAnnotations::default();
-            annotations.add_folds(folds.outermost(), '…');
+            annotations.add_folds(folds.outermost(), " … ".into());
             if virtual_lines {
                 annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine));
             }
@@ -896,17 +896,17 @@ mod test {
             pulled_up: true,
         }];
         let mut annotations = TextAnnotations::default();
-        annotations.add_folds(&folds, '…');
+        annotations.add_folds(&folds, " … ".into());
 
         // hidden positions are drawn on the fold cell
         let offset =
             |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
         assert_eq!(offset(0, 11), (Position::new(0, 8), 0));
-        assert_eq!(offset(0, 15), (Position::new(0, 9), 0));
+        assert_eq!(offset(0, 15), (Position::new(0, 11), 0));
         assert_eq!(offset(0, 17), (Position::new(1, 0), 0));
         // a block starting inside the fold starts at its row
         assert_eq!(offset(11, 17), (Position::new(1, 0), 0));
-        assert_eq!(offset(15, 15), (Position::new(0, 9), 0));
+        assert_eq!(offset(15, 15), (Position::new(0, 11), 0));
         assert_eq!(
             visual_offset_from_anchor(slice, 11, 17, &text_fmt, &annotations, 10),
             Ok((Position::new(1, 0), 0))
@@ -916,7 +916,8 @@ mod test {
             char_idx_at_visual_offset(slice, anchor, rows, col, &text_fmt, &annotations)
         };
         assert_eq!(char_at(0, 0, 8), (8, 0), "the fold cell");
-        assert_eq!(char_at(0, 0, 9), (15, 0), "the pulled up closer");
+        assert_eq!(char_at(0, 0, 10), (8, 0), "the fold cell's last column");
+        assert_eq!(char_at(0, 0, 11), (15, 0), "the pulled up closer");
         assert_eq!(char_at(0, 0, 20), (16, 0), "the end of the row");
         assert_eq!(char_at(17, -1, 3), (3, 0), "up across the fold");
         assert_eq!(char_at(17, -1, 0), (0, 0));

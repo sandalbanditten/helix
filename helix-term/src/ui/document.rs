@@ -2,10 +2,11 @@ use std::cmp::min;
 use std::ops;
 
 use helix_core::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSource, TextFormat};
-use helix_core::graphemes::Grapheme;
+use helix_core::graphemes::{grapheme_width, Grapheme};
 use helix_core::str_utils::char_to_byte_idx;
 use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
 use helix_core::text_annotations::TextAnnotations;
+use helix_core::unicode::segmentation::UnicodeSegmentation;
 use helix_core::{visual_offset_from_block, Position, RopeSlice, Syntax};
 use helix_stdx::rope::RopeSliceExt;
 use helix_view::editor::{WhitespaceConfig, WhitespaceRenderValue};
@@ -365,6 +366,7 @@ impl<'a> TextRenderer<'a> {
         style = style.patch(grapheme_style.overlay_style);
 
         let width = grapheme.width();
+        let is_fold = grapheme.source.is_fold();
         let mut is_tab = false;
         let space = if is_virtual { " " } else { &self.space };
         let nbsp = if is_virtual { " " } else { &self.nbsp };
@@ -400,6 +402,14 @@ impl<'a> TextRenderer<'a> {
                 // `render-whitespace` pads. A single `set_grapheme` would pack
                 // them into one wide cell and leave the rest unstyled.
                 self.surface.set_tab(x, y, grapheme, style);
+            } else if is_fold {
+                // the placeholder may be several graphemes, each gets its own cells
+                let mut x = x;
+                for g in grapheme.graphemes(true) {
+                    let width = grapheme_width(g);
+                    self.surface.set_grapheme(x, y, g, width, style);
+                    x += width as u16;
+                }
             } else {
                 self.surface.set_grapheme(x, y, grapheme, width, style);
             }

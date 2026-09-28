@@ -21,7 +21,7 @@ use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 
 use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 
-use crate::graphemes::{Grapheme, GraphemeStr};
+use crate::graphemes::{grapheme_width, Grapheme, GraphemeStr};
 use crate::syntax::Highlight;
 use crate::text_annotations::TextAnnotations;
 use crate::{fold, Position, RopeSlice};
@@ -67,6 +67,24 @@ impl GraphemeSource {
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
+
+    // A fold's placeholder may be several graphemes, like ` … `, so it is measured as a whole
+    // and is a non-whitespace word of its own whatever it starts with.
+
+    fn width(self, grapheme: &Grapheme) -> usize {
+        match grapheme {
+            Grapheme::Other { g } if self.is_fold() => g.graphemes(true).map(grapheme_width).sum(),
+            _ => grapheme.width(),
+        }
+    }
+
+    fn is_whitespace(self, grapheme: &Grapheme) -> bool {
+        !self.is_fold() && grapheme.is_whitespace()
+    }
+
+    fn is_word_boundary(self, grapheme: &Grapheme) -> bool {
+        self.is_fold() || grapheme.is_word_boundary()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,15 +108,15 @@ impl FormattedGrapheme<'_> {
     }
 
     pub fn is_whitespace(&self) -> bool {
-        self.raw.is_whitespace()
+        self.source.is_whitespace(&self.raw)
     }
 
     pub fn width(&self) -> usize {
-        self.raw.width()
+        self.source.width(&self.raw)
     }
 
     pub fn is_word_boundary(&self) -> bool {
-        self.raw.is_word_boundary()
+        self.source.is_word_boundary(&self.raw)
     }
 }
 
@@ -132,7 +150,7 @@ impl<'a> GraphemeWithSource<'a> {
     }
 
     fn is_whitespace(&self) -> bool {
-        self.grapheme.is_whitespace()
+        self.source.is_whitespace(&self.grapheme)
     }
 
     fn is_newline(&self) -> bool {
@@ -144,11 +162,11 @@ impl<'a> GraphemeWithSource<'a> {
     }
 
     fn width(&self) -> usize {
-        self.grapheme.width()
+        self.source.width(&self.grapheme)
     }
 
     fn is_word_boundary(&self) -> bool {
-        self.grapheme.is_word_boundary()
+        self.source.is_word_boundary(&self.grapheme)
     }
 }
 
@@ -384,6 +402,7 @@ impl<'t> DocumentFormatter<'t> {
         self.word_buf.clear();
         let mut word_width = 0;
         let mut word_chars = 0;
+        let mut wrapped_fold = false;
 
         if self.exhausted {
             return;
@@ -424,6 +443,19 @@ impl<'t> DocumentFormatter<'t> {
             let Some(grapheme) = self.next_grapheme(col, char_pos) else {
                 return;
             };
+            // a placeholder that does not fit the row wraps instead of overflowing it, once
+            if grapheme.source.is_fold()
+                && !wrapped_fold
+                && col + grapheme.width() > self.text_fmt.viewport_width as usize
+            {
+                self.peeked_grapheme = Some(grapheme);
+                if word_width > self.text_fmt.max_wrap as usize {
+                    return;
+                }
+                word_width = self.wrap_word();
+                wrapped_fold = true;
+                continue;
+            }
             word_chars += grapheme.doc_chars();
 
             // Track indentation

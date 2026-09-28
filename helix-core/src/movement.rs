@@ -758,7 +758,7 @@ mod test {
         ) -> Range;
         let moved = |move_fn: MoveFn, range, dir, count, behaviour| {
             let mut annotations = TextAnnotations::default();
-            annotations.add_folds(&folds, '…');
+            annotations.add_folds(&folds, " … ".into());
             let text_fmt = TextFormat::default();
             let range = move_fn(
                 slice,
@@ -813,7 +813,7 @@ mod test {
                 "{name}"
             );
             let from_closer = moved(move_fn, Range::point(15), Forward, 1, Move);
-            assert_eq!(from_closer, (26, 26), "{name}");
+            assert_eq!(from_closer, (28, 28), "{name}");
             // extending over the fold covers it
             assert_eq!(
                 moved(move_fn, Range::new(2, 3), Forward, 1, Extend),

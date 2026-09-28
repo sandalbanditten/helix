@@ -282,16 +282,16 @@ mod tests {
 
         assert_eq!(folding(""), FoldingConfig::default());
         assert_eq!(
-            folding("[editor.folding]\nstart-folded = true\nplaceholder = \"⋯\""),
+            folding("[editor.folding]\nstart-folded = true\nplaceholder = \" … \""),
             FoldingConfig {
                 start_folded: true,
-                placeholder: '⋯',
+                placeholder: " … ".into(),
             }
         );
 
         for invalid in [
             "[editor.folding]\nstart-fold = true",
-            "[editor.folding]\nplaceholder = \"...\"",
+            "[editor.folding]\nplaceholder = \"\"",
             "[editor.folding]\nplaceholder = \"\\n\"",
             "[editor.folding]\nplaceholder = \"\\t\"",
         ] {

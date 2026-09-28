@@ -406,12 +406,12 @@ impl<'a> TextAnnotations<'a> {
     ///
     /// The folds **must be sorted** by their start and **must not overlap**, like
     /// [`Folds::outermost`](crate::fold::Folds::outermost).
-    pub fn add_folds(&mut self, folds: &'a [Fold], placeholder: char) -> &mut Self {
+    pub fn add_folds(&mut self, folds: &'a [Fold], placeholder: Tendril) -> &mut Self {
         debug_assert!(folds.windows(2).all(|pair| pair[0].end <= pair[1].start));
         self.folds = FoldLayer {
             folds,
             next: Cell::new(0),
-            placeholder: placeholder.encode_utf8(&mut [0; 4]).into(),
+            placeholder,
         };
         self
     }

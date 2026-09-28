@@ -687,7 +687,11 @@ impl View {
                 .add_inline_annotations(padding_after_inlay_hints, None);
         };
         let config = doc.config.load();
-        text_annotations.add_folds(doc.outermost_folds(self.id), config.folding.placeholder);
+        // Clone here is okay since it is _very_ cheap when placeholder.len() <= 23 bytes.
+        text_annotations.add_folds(
+            doc.outermost_folds(self.id),
+            config.folding.placeholder.clone(),
+        );
 
         if config.lsp.display_color_swatches {
             if let Some(DocumentColorSwatches {
