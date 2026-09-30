@@ -30,7 +30,10 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{chars::char_is_line_ending, indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{
+    chars::char_is_line_ending, conceal::SymbolTable, indent::IndentQuery, tree_sitter, ChangeSet,
+    Language,
+};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -49,6 +52,7 @@ pub struct LanguageData {
     breadcrumb_query: OnceCell<Option<BreadcrumbQuery>>,
     fold_query: OnceCell<Option<FoldQuery>>,
     spellcheck_query: OnceCell<Option<SpellcheckQuery>>,
+    conceal_query: OnceCell<Option<ConcealQuery>>,
 }
 
 impl LanguageData {
@@ -63,6 +67,7 @@ impl LanguageData {
             breadcrumb_query: OnceCell::new(),
             fold_query: OnceCell::new(),
             spellcheck_query: OnceCell::new(),
+            conceal_query: OnceCell::new(),
         }
     }
 
@@ -329,6 +334,36 @@ impl LanguageData {
             .as_ref()
     }
 
+    /// Compiles the conceals.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_conceal_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<ConcealQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "conceals.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let conceal_query = ConcealQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile conceals.scm query for '{name}'"))?;
+        Ok(Some(conceal_query))
+    }
+
+    fn conceal_query(&self, loader: &Loader) -> Option<&ConcealQuery> {
+        self.conceal_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_conceal_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
     fn reconfigure(&self, scopes: &[String]) {
         if let Some(Some(config)) = self.syntax.get() {
             reconfigure_highlights(config, scopes);
@@ -532,6 +567,10 @@ impl Loader {
 
     fn spellcheck_query(&self, lang: Language) -> Option<&SpellcheckQuery> {
         self.language(lang).spellcheck_query(self)
+    }
+
+    pub(crate) fn conceal_query(&self, lang: Language) -> Option<&ConcealQuery> {
+        self.language(lang).conceal_query(self)
     }
 
     pub fn language_server_configs(&self) -> &HashMap<String, LanguageServerConfiguration> {
@@ -920,6 +959,45 @@ impl Syntax {
         })
     }
 
+    /// Iterates the matches of the `conceals.scm` queries in the byte `range`, including those of
+    /// injected languages.
+    pub fn conceal_matches<'a>(
+        &'a self,
+        source: RopeSlice<'a>,
+        loader: &'a Loader,
+        range: ops::Range<u32>,
+    ) -> impl Iterator<Item = ConcealMatch> + 'a {
+        let mut matches = QueryMatchIter::<_, ()>::new(
+            &self.inner,
+            source,
+            |lang| loader.conceal_query(lang).map(|query| &query.query),
+            range,
+        );
+        iter::from_fn(move || loop {
+            let QueryMatchIterEvent::Match(mat) = matches.next()? else {
+                continue;
+            };
+            let Some(query) = loader.conceal_query(matches.current_language()) else {
+                continue;
+            };
+            let table = query.tables.get(&mat.pattern).copied();
+            let capture = match table {
+                Some(_) => query.conceal_capture,
+                None => query.noconceal_capture,
+            };
+            let Some(capture) = capture else {
+                continue;
+            };
+            let bytes = mat
+                .nodes_for_capture(capture)
+                .map(|node| node.byte_range())
+                .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end));
+            if let Some(bytes) = bytes {
+                return Some(ConcealMatch { bytes, table });
+            }
+        })
+    }
+
     /// Returns the byte ranges within `byte_range` that should be spell-checked, according to the
     /// `spellcheck.scm` query of every layer overlapping the range. `@nospell` wins over `@spell`
     /// across layers, so a code block's `@nospell` also excludes the comments injected into it.
@@ -994,7 +1072,7 @@ impl Syntax {
 }
 
 /// Merges `regions` in place into sorted, disjoint ranges.
-fn merge_regions(regions: &mut Vec<ops::Range<usize>>) {
+pub(crate) fn merge_regions(regions: &mut Vec<ops::Range<usize>>) {
     regions.sort_unstable_by_key(|region| region.start);
     let mut merged: Vec<ops::Range<usize>> = Vec::with_capacity(regions.len());
     for region in regions.drain(..) {
@@ -1591,6 +1669,54 @@ impl SpellcheckQuery {
     }
 }
 
+/// A match of a `conceals.scm` query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConcealMatch {
+    /// The bytes from the first to the last node of the match's `@conceal` or `@noconceal`
+    /// capture.
+    pub bytes: ops::Range<u32>,
+    /// The table that resolves the text of a `@conceal` match, or `None` for a `@noconceal`
+    /// match, whose text nothing is concealed in.
+    pub table: Option<SymbolTable>,
+}
+
+#[derive(Debug)]
+pub struct ConcealQuery {
+    query: Query,
+    /// `@conceal`
+    conceal_capture: Option<Capture>,
+    /// `@noconceal`
+    noconceal_capture: Option<Capture>,
+    /// The table of each pattern that captures `@conceal`, from `(#set! conceal.symbols "…")`.
+    tables: HashMap<Pattern, SymbolTable>,
+}
+
+impl ConcealQuery {
+    fn new(grammar: Grammar, source: &str) -> Result<Self, tree_sitter::query::ParseError> {
+        let mut tables = HashMap::new();
+        let query = Query::new(grammar, source, |pattern, predicate| match predicate {
+            UserPredicate::SetProperty {
+                key: "conceal.symbols",
+                val,
+            } => {
+                let table = val
+                    .ok_or("property 'conceal.symbols' needs a symbol table")?
+                    .parse()?;
+                tables.insert(pattern, table);
+                Ok(())
+            }
+            _ => Err(InvalidPredicateError::unknown(predicate)),
+        })?;
+
+        Ok(Self {
+            conceal_capture: query.get_capture("conceal"),
+            noconceal_capture: query.get_capture("noconceal"),
+            tables,
+            query,
+        })
+    }
+}
+
 /// A syntax node enclosing a position, such as a function or a class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Breadcrumb<'a> {
@@ -1666,6 +1792,22 @@ mod test {
     use crate::{Rope, Transaction};
 
     static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
+
+    #[test]
+    fn conceal_query_tables() {
+        let language = LOADER.language_for_name("typst").unwrap();
+        let grammar = LOADER.get_config(language).unwrap().grammar;
+        let tables = |source| ConcealQuery::new(grammar, source).map(|query| query.tables.len());
+        let valid = r#"((ident) @conceal (#set! conceal.symbols "typst-math"))"#;
+        assert_eq!(tables(valid).ok(), Some(1));
+        for invalid in [
+            r#"((ident) @conceal (#set! conceal.symbols "typst"))"#,
+            r#"((ident) @conceal (#set! conceal.symbols))"#,
+            r#"((ident) @conceal (#set! conceal "α"))"#,
+        ] {
+            assert!(tables(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn test_textobject_queries() {

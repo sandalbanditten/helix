@@ -6,6 +6,7 @@ pub mod chars;
 pub mod command_line;
 pub mod comment;
 pub mod completion;
+pub mod conceal;
 pub mod config;
 pub mod diagnostic;
 pub mod diff;

@@ -20,6 +20,7 @@ pub enum TsFeature {
     Breadcrumbs,
     Folds,
     Spellcheck,
+    Conceals,
 }
 
 impl TsFeature {
@@ -33,6 +34,7 @@ impl TsFeature {
             Self::Breadcrumbs,
             Self::Folds,
             Self::Spellcheck,
+            Self::Conceals,
         ]
     }
 
@@ -46,6 +48,7 @@ impl TsFeature {
             Self::Breadcrumbs => "breadcrumbs.scm",
             Self::Folds => "folds.scm",
             Self::Spellcheck => "spellcheck.scm",
+            Self::Conceals => "conceals.scm",
         }
     }
 
@@ -59,6 +62,7 @@ impl TsFeature {
             Self::Breadcrumbs => "Breadcrumbs",
             Self::Folds => "Code Folding",
             Self::Spellcheck => "Spell Checking",
+            Self::Conceals => "Conceal",
         }
     }
 
@@ -72,6 +76,7 @@ impl TsFeature {
             Self::Breadcrumbs => "Breadcrumbs",
             Self::Folds => "Folds",
             Self::Spellcheck => "Spellcheck",
+            Self::Conceals => "Conceal",
         }
     }
 }

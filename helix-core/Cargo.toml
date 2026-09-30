@@ -39,6 +39,7 @@ regex = "1"
 whatlang.workspace = true
 bitflags.workspace = true
 foldhash.workspace = true
+codex.workspace = true
 
 log = "0.4"
 anyhow = "1.0"

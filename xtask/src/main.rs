@@ -41,6 +41,7 @@ pub mod tasks {
             LanguageData::compile_breadcrumb_query(grammar, config)?;
             LanguageData::compile_fold_query(grammar, config)?;
             LanguageData::compile_spellcheck_query(grammar, config)?;
+            LanguageData::compile_conceal_query(grammar, config)?;
         }
 
         println!("Query check succeeded");
