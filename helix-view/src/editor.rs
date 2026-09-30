@@ -45,6 +45,7 @@ use anyhow::{anyhow, bail, Error};
 pub use helix_core::diagnostic::Severity;
 use helix_core::{
     auto_pairs::AutoPairs,
+    conceal::ConcealReveal,
     diagnostic::DiagnosticProvider,
     syntax::{
         self,
@@ -444,6 +445,8 @@ pub struct Config {
     pub smooth_scroll: SmoothScrollConfig,
     /// Code folding.
     pub folding: FoldingConfig,
+    /// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math.
+    pub conceal: ConcealConfig,
     /// Mouse support. Defaults to true.
     pub mouse: bool,
     /// Which register to use for mouse yank.
@@ -1279,6 +1282,26 @@ impl SmoothScrollConfig {
     }
 }
 
+/// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math, from the
+/// language's `conceals.scm` query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ConcealConfig {
+    /// Whether text is concealed. Defaults to `true`.
+    pub enable: bool,
+    /// When a cursor of the focused view shows concealed text as it is. Defaults to `adjacent`.
+    pub reveal: ConcealReveal,
+}
+
+impl Default for ConcealConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            reveal: ConcealReveal::default(),
+        }
+    }
+}
+
 /// Code folding: text hidden behind a placeholder at the end of its first line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -1466,6 +1489,7 @@ impl Default for Config {
             scroll_lines: 3,
             smooth_scroll: SmoothScrollConfig::default(),
             folding: FoldingConfig::default(),
+            conceal: ConcealConfig::default(),
             mouse: true,
             mouse_yank_register: '*',
             shell: if cfg!(windows) {

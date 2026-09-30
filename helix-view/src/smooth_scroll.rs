@@ -515,7 +515,7 @@ impl Path {
     fn new(view: &View, doc: &Document, from: ViewPosition, to: ViewPosition) -> Self {
         let text = doc.text().slice(..);
         let text_fmt = doc.text_format(view.inner_area(doc).width, None);
-        let annotations = view.text_annotations_at(doc, None, to.horizontal_offset);
+        let annotations = view.text_annotations_at(doc, None, to.horizontal_offset, true);
         // walk the last two screens row by row, which also bounds the cost of measuring
         let limit = (2 * view.inner_height()).max(2);
 
@@ -582,7 +582,7 @@ impl Path {
     ) -> ViewPosition {
         let text = doc.text().slice(..);
         let text_fmt = doc.text_format(view.inner_area(doc).width, None);
-        let annotations = view.text_annotations_at(doc, None, horizontal_offset);
+        let annotations = view.text_annotations_at(doc, None, horizontal_offset, true);
         let walk_rows = |offset: ViewPosition, rows: isize| {
             let (anchor, vertical_offset) = char_idx_at_visual_offset(
                 text,
@@ -688,7 +688,8 @@ impl SelectionAnimation {
                 };
                 let text_fmt = doc.text_format(view.inner_area(doc).width, None);
                 // `move_vertically_visual` clears the line annotations
-                let mut annotations = view.text_annotations_at(doc, None, offset.horizontal_offset);
+                let mut annotations =
+                    view.text_annotations_at(doc, None, offset.horizontal_offset, true);
                 self.stepped = self.stepped.clone().transform(|range| {
                     move_vertically_visual(
                         text,

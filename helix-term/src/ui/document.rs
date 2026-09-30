@@ -174,7 +174,11 @@ pub fn render_text<'a>(
                 overlay_style: overlay_highlighter.style,
             },
             // a conceal is styled like the start of the text it conceals
-            GraphemeSource::Document { .. } | GraphemeSource::Conceal { .. } => GraphemeStyle {
+            GraphemeSource::Conceal { .. } => GraphemeStyle {
+                syntax_style: syntax_highlighter.style.patch(renderer.conceal_style),
+                overlay_style: overlay_highlighter.style,
+            },
+            GraphemeSource::Document { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter.style,
                 overlay_style: overlay_highlighter.style,
             },
@@ -208,6 +212,7 @@ pub struct TextRenderer<'a> {
     pub text_style: Style,
     pub whitespace_style: Style,
     pub fold_style: Style,
+    pub conceal_style: Style,
     pub indent_guide_char: String,
     pub indent_guide_style: Style,
     pub newline: String,
@@ -288,6 +293,7 @@ impl<'a> TextRenderer<'a> {
             virtual_tab,
             whitespace_style: theme.get("ui.virtual.whitespace"),
             fold_style: text_style.patch(theme.get("ui.virtual.fold")),
+            conceal_style: theme.get("ui.virtual.conceal"),
             indent_width,
             starting_indent: offset.col / indent_width as usize
                 + !offset.col.is_multiple_of(indent_width as usize) as usize

@@ -473,7 +473,7 @@ impl View {
         let height = self.inner_height();
         let scrolloff = scrolloff.min(height.saturating_sub(1) / 2);
         let text_fmt = doc.text_format(self.inner_area(doc).width, None);
-        let annotations = self.text_annotations_at(doc, None, offset.horizontal_offset);
+        let annotations = self.text_annotations_at(doc, None, offset.horizontal_offset, true);
         let cursor = range.cursor(doc_text);
 
         let head = match direction {
@@ -525,12 +525,19 @@ impl View {
     }
 
     /// The text annotations to draw the view with at its [render offset](Self::render_offset).
+    /// Only a `focused` view reveals concealed text at its cursors.
     pub fn render_text_annotations<'a>(
         &self,
         doc: &'a Document,
         theme: Option<&Theme>,
+        focused: bool,
     ) -> TextAnnotations<'a> {
-        self.text_annotations_at(doc, theme, self.render_offset(doc).horizontal_offset)
+        self.text_annotations_at(
+            doc,
+            theme,
+            self.render_offset(doc).horizontal_offset,
+            focused,
+        )
     }
 
     /// Whether the cursor and its decorations are hidden while the view smoothly scrolls.
@@ -639,21 +646,24 @@ impl View {
     }
 
     /// Get the text annotations to display in the current view for the given document and theme.
+    /// They are those of the focused view, whose cursors reveal concealed text.
     pub fn text_annotations<'a>(
         &self,
         doc: &'a Document,
         theme: Option<&Theme>,
     ) -> TextAnnotations<'a> {
-        self.text_annotations_at(doc, theme, doc.view_offset(self.id).horizontal_offset)
+        self.text_annotations_at(doc, theme, doc.view_offset(self.id).horizontal_offset, true)
     }
 
     /// Get the text annotations for the view scrolled to `horizontal_offset`, which the layout
-    /// of inline diagnostics depends on.
+    /// of inline diagnostics depends on. Only a `focused` view reveals concealed text at its
+    /// cursors.
     pub(crate) fn text_annotations_at<'a>(
         &self,
         doc: &'a Document,
         theme: Option<&Theme>,
         horizontal_offset: usize,
+        focused: bool,
     ) -> TextAnnotations<'a> {
         let mut text_annotations = TextAnnotations::default();
 
@@ -692,6 +702,15 @@ impl View {
             doc.outermost_folds(self.id),
             config.folding.placeholder.clone(),
         );
+
+        // jump labels are placed on the words of the text as it is
+        let conceal = &config.conceal;
+        if conceal.enable && !doc.jump_labels.contains_key(&self.id) {
+            let reveal = focused.then(|| (doc.selection(self.id), conceal.reveal));
+            if let Some(conceals) = doc.conceals(reveal) {
+                text_annotations.add_conceals(conceals);
+            }
+        }
 
         if config.lsp.display_color_swatches {
             if let Some(DocumentColorSwatches {
@@ -816,19 +835,21 @@ impl View {
 
     /// Translates a screen position to position in the text document.
     /// Returns a usize typed position in bounds of the text if found in this view, None if out of view.
+    /// The view is drawn with concealed text revealed at its cursors if it is `focused`.
     pub fn pos_at_screen_coords(
         &self,
         doc: &Document,
         row: u16,
         column: u16,
         ignore_virtual_text: bool,
+        focused: bool,
     ) -> Option<usize> {
         self.text_pos_at_screen_coords(
             doc,
             row,
             column,
             doc.text_format(self.inner_width(doc), None),
-            &self.render_text_annotations(doc, None),
+            &self.render_text_annotations(doc, None, focused),
             ignore_virtual_text,
         )
     }

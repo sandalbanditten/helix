@@ -103,7 +103,7 @@ impl EditorView {
 
         let view_offset = view.render_offset(doc);
 
-        let text_annotations = view.render_text_annotations(doc, Some(theme));
+        let text_annotations = view.render_text_annotations(doc, Some(theme), is_focused);
         let mut decorations = DecorationManager::default();
         let draw_cursor = !view.hides_cursor(doc);
 
@@ -1269,6 +1269,13 @@ impl EditorView {
             self.handle_non_key_input(cxt)
         }
 
+        // The views were drawn as unfocused while the file tree had the keys, which a press in
+        // the editor takes back below.
+        let file_tree_focused = self.file_tree.is_focused();
+        // Whether a view was drawn as focused, revealing concealed text at its cursors.
+        let drawn_focused =
+            |editor: &Editor, view_id| editor.tree.focus == view_id && !file_tree_focused;
+
         if let Some(result) = self.file_tree.handle_mouse(event, cxt.editor) {
             return result;
         }
@@ -1293,6 +1300,7 @@ impl EditorView {
                     row,
                     column,
                     ignore_virtual_text,
+                    drawn_focused(editor, view.id),
                 )
                 .map(|pos| (pos, view.id))
             })
@@ -1341,6 +1349,7 @@ impl EditorView {
                 }
 
                 if let Some((_, view_id)) = gutter_coords_and_view(editor, row, column) {
+                    let focused = drawn_focused(editor, view_id);
                     editor.focus(view_id);
 
                     let (view, doc) = current!(cxt.editor);
@@ -1350,7 +1359,7 @@ impl EditorView {
                     };
 
                     if let Some(char_idx) =
-                        view.pos_at_screen_coords(doc, row, view.inner_area(doc).x, true)
+                        view.pos_at_screen_coords(doc, row, view.inner_area(doc).x, true, focused)
                     {
                         let line = doc.text().char_to_line(char_idx);
                         commands::dap_toggle_breakpoint_impl(cxt, path, line);
@@ -1364,10 +1373,11 @@ impl EditorView {
             MouseEventKind::Drag(MouseButton::Left) => {
                 let (view, doc) = current!(cxt.editor);
 
-                let pos = match view.pos_at_screen_coords(doc, row, column, true) {
-                    Some(pos) => pos,
-                    None => return EventResult::Ignored(None),
-                };
+                let pos =
+                    match view.pos_at_screen_coords(doc, row, column, true, !file_tree_focused) {
+                        Some(pos) => pos,
+                        None => return EventResult::Ignored(None),
+                    };
 
                 let mut selection = doc.selection(view.id).clone();
                 let primary = selection.primary_mut();
@@ -1434,6 +1444,7 @@ impl EditorView {
 
             MouseEventKind::Up(MouseButton::Right) => {
                 if let Some((_, view_id)) = gutter_coords_and_view(cxt.editor, row, column) {
+                    let focused = drawn_focused(cxt.editor, view_id);
                     cxt.editor.focus(view_id);
 
                     if let Some((pos, _)) = pos_and_view(cxt.editor, row, column, true) {
@@ -1441,9 +1452,13 @@ impl EditorView {
                     } else {
                         let (view, doc) = current!(cxt.editor);
 
-                        if let Some(pos) =
-                            view.pos_at_screen_coords(doc, row, view.inner_area(doc).x, true)
-                        {
+                        if let Some(pos) = view.pos_at_screen_coords(
+                            doc,
+                            row,
+                            view.inner_area(doc).x,
+                            true,
+                            focused,
+                        ) {
                             doc.set_selection(view_id, Selection::point(pos));
                             match modifiers {
                                 KeyModifiers::ALT => {
