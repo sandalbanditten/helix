@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -77,6 +77,50 @@ impl Overlay {
             char_idx,
             grapheme: grapheme.into(),
         }
+    }
+}
+
+/// Document text shown as another grapheme, like `α` for `alpha` in Typst math.
+///
+/// The concealed text lies within one line and `replacement` is a single visible grapheme, so the
+/// document formatter treats a conceal like a grapheme of the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conceal {
+    /// The char index of the first concealed char.
+    pub start: usize,
+    /// The char index after the last concealed char, greater than `start`.
+    pub end: usize,
+    /// The grapheme shown instead of the concealed text.
+    pub replacement: &'static str,
+}
+
+impl Conceal {
+    pub fn new(start: usize, end: usize, replacement: &'static str) -> Self {
+        Self {
+            start,
+            end,
+            replacement,
+        }
+    }
+}
+
+/// Provides [`Conceal`]s as the document formatter reaches the text they conceal, so that only
+/// the text that is shown or measured has to be looked at.
+///
+/// Like a [`LineAnnotation`], a source may compute its conceals on the fly.
+pub trait ConcealSource {
+    /// Appends the conceals starting at or after `char_idx` and before the returned char index to
+    /// `conceals`, sorted and disjoint. The returned index must be greater than `char_idx`; the
+    /// conceals starting at or after it are asked for with another call.
+    fn conceals_from(&self, char_idx: usize, conceals: &mut Vec<Conceal>) -> usize;
+}
+
+/// Conceals that are known ahead of time, sorted and disjoint.
+impl ConcealSource for &[Conceal] {
+    fn conceals_from(&self, char_idx: usize, conceals: &mut Vec<Conceal>) -> usize {
+        let first = self.partition_point(|conceal| conceal.start < char_idx);
+        conceals.extend_from_slice(&self[first..]);
+        usize::MAX
     }
 }
 
@@ -282,6 +326,71 @@ struct FoldLayer<'a> {
     placeholder: Tendril,
 }
 
+/// Conceals fetched from a [`ConcealSource`] as the document formatter reaches them.
+struct ConcealLayer<'a> {
+    source: Box<dyn ConcealSource + 'a>,
+    /// The conceals starting in `fetched`, sorted and disjoint.
+    conceals: RefCell<Vec<Conceal>>,
+    /// The char range whose conceals are in `conceals`.
+    fetched: Cell<(usize, usize)>,
+    /// The index in `conceals` of the next conceal the formatter may reach.
+    next: Cell<usize>,
+}
+
+impl ConcealLayer<'_> {
+    fn fetch(&self, char_idx: usize) {
+        let mut conceals = self.conceals.borrow_mut();
+        conceals.clear();
+        let end = self.source.conceals_from(char_idx, &mut conceals);
+        debug_assert!(end > char_idx);
+        debug_assert!(conceals
+            .iter()
+            .all(|conceal| char_idx <= conceal.start && conceal.start < conceal.end));
+        debug_assert!(conceals.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        self.fetched.set((char_idx, end));
+        self.next.set(0);
+    }
+
+    fn reset_pos(&self, char_idx: usize) {
+        let (start, end) = self.fetched.get();
+        if (start..end).contains(&char_idx) {
+            let conceals = self.conceals.borrow();
+            let next = conceals.partition_point(|conceal| conceal.start < char_idx);
+            self.next.set(next);
+        } else {
+            self.fetch(char_idx);
+        }
+    }
+
+    fn conceal_at(&self, char_idx: usize) -> Option<Conceal> {
+        if char_idx >= self.fetched.get().1 {
+            self.fetch(char_idx);
+        }
+        let conceals = self.conceals.borrow();
+        loop {
+            let conceal = *conceals.get(self.next.get())?;
+            match conceal.start.cmp(&char_idx) {
+                Ordering::Greater => return None,
+                Ordering::Equal => {
+                    self.next.set(self.next.get() + 1);
+                    return Some(conceal);
+                }
+                // starts inside a grapheme that was already passed
+                Ordering::Less => self.next.set(self.next.get() + 1),
+            }
+        }
+    }
+}
+
+impl Debug for ConcealLayer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConcealLayer")
+            .field("conceals", &self.conceals)
+            .field("fetched", &self.fetched)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Annotations that change that is displayed when the document is render.
 /// Also commonly called virtual text.
 #[derive(Default)]
@@ -290,6 +399,7 @@ pub struct TextAnnotations<'a> {
     overlays: Vec<Layer<'a, Overlay, Option<Highlight>>>,
     line_annotations: Vec<(Cell<usize>, RawBox<dyn LineAnnotation + 'a>)>,
     folds: FoldLayer<'a>,
+    conceals: Option<ConcealLayer<'a>>,
 }
 
 impl Debug for TextAnnotations<'_> {
@@ -298,6 +408,7 @@ impl Debug for TextAnnotations<'_> {
             .field("inline_annotations", &self.inline_annotations)
             .field("overlays", &self.overlays)
             .field("folds", &self.folds)
+            .field("conceals", &self.conceals)
             .finish_non_exhaustive()
     }
 }
@@ -314,6 +425,9 @@ impl<'a> TextAnnotations<'a> {
         folds
             .next
             .set(folds.folds.partition_point(|fold| fold.start < char_idx));
+        if let Some(conceals) = &self.conceals {
+            conceals.reset_pos(char_idx);
+        }
     }
 
     pub fn collect_overlay_highlights(&self, char_range: Range<usize>) -> OverlayHighlights {
@@ -438,11 +552,33 @@ impl<'a> TextAnnotations<'a> {
         &self.folds.placeholder
     }
 
-    /// Skips the inline annotations and overlays of the text hidden by a fold ending at `end`.
-    /// Line annotations skip their concealed anchors by themselves.
-    pub(crate) fn skip_folded(&self, end: usize) {
+    /// Adds conceals, which show document text as other graphemes, replacing any added before.
+    /// They are fetched from `source` as the document formatter reaches them.
+    pub fn add_conceals(&mut self, source: impl ConcealSource + 'a) -> &mut Self {
+        self.conceals = Some(ConcealLayer {
+            source: Box::new(source),
+            conceals: RefCell::default(),
+            fetched: Cell::new((0, 0)),
+            next: Cell::new(0),
+        });
+        self
+    }
+
+    /// Returns the conceal starting at `char_idx` of a text with `len_chars` chars, if it ends
+    /// within the text.
+    pub(crate) fn conceal_at(&self, char_idx: usize, len_chars: usize) -> Option<Conceal> {
+        let conceal = self.conceals.as_ref()?.conceal_at(char_idx)?;
+        (conceal.end <= len_chars).then_some(conceal)
+    }
+
+    /// Skips the inline annotations, overlays and conceals of the text hidden by a fold or a
+    /// conceal ending at `end`. Line annotations skip their concealed anchors by themselves.
+    pub(crate) fn skip_hidden(&self, end: usize) {
         reset_pos(&self.inline_annotations, end, |annot| annot.char_idx);
         reset_pos(&self.overlays, end, |annot| annot.char_idx);
+        if let Some(conceals) = &self.conceals {
+            conceals.reset_pos(end);
+        }
     }
 
     pub(crate) fn next_inline_annotation_at(

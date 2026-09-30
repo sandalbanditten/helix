@@ -41,6 +41,10 @@ pub enum GraphemeSource {
     Fold {
         codepoints: u32,
     },
+    /// Document text shown as another grapheme, see [`Conceal`](crate::text_annotations::Conceal).
+    Conceal {
+        codepoints: u32,
+    },
 }
 
 impl GraphemeSource {
@@ -61,9 +65,9 @@ impl GraphemeSource {
 
     pub fn doc_chars(self) -> usize {
         match self {
-            GraphemeSource::Document { codepoints } | GraphemeSource::Fold { codepoints } => {
-                codepoints as usize
-            }
+            GraphemeSource::Document { codepoints }
+            | GraphemeSource::Fold { codepoints }
+            | GraphemeSource::Conceal { codepoints } => codepoints as usize,
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
@@ -292,17 +296,27 @@ impl<'t> DocumentFormatter<'t> {
     }
 
     fn advance_grapheme(&mut self, col: usize, char_pos: usize) -> Option<GraphemeWithSource<'t>> {
+        let len_chars = self.text.len_chars();
         let (grapheme, source) =
             if let Some((grapheme, highlight)) = self.next_inline_annotation_grapheme(char_pos) {
                 (grapheme.into(), GraphemeSource::VirtualText { highlight })
-            } else if let Some(fold) = self.annotations.fold_at(char_pos, self.text.len_chars()) {
+            } else if let Some(fold) = self.annotations.fold_at(char_pos, len_chars) {
                 self.graphemes = self.text.slice(fold.end..).graphemes();
-                self.annotations.skip_folded(fold.end);
+                self.annotations.skip_hidden(fold.end);
                 let codepoints = u32::try_from(fold.end - fold.start)
                     .expect("folds come from syntax trees, which are smaller than 4 GiB");
                 (
                     self.annotations.fold_placeholder().into(),
                     GraphemeSource::Fold { codepoints },
+                )
+            } else if let Some(conceal) = self.annotations.conceal_at(char_pos, len_chars) {
+                self.graphemes = self.text.slice(conceal.end..).graphemes();
+                self.annotations.skip_hidden(conceal.end);
+                let codepoints = u32::try_from(conceal.end - conceal.start)
+                    .expect("conceals hide a part of a line");
+                (
+                    conceal.replacement.into(),
+                    GraphemeSource::Conceal { codepoints },
                 )
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;

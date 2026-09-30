@@ -453,7 +453,7 @@ pub fn char_idx_at_visual_block_offset(
 mod test {
     use super::*;
     use crate::fold::{Fold, Folds};
-    use crate::text_annotations::InlineAnnotation;
+    use crate::text_annotations::{Conceal, ConcealSource, InlineAnnotation};
     use crate::Rope;
 
     #[test]
@@ -829,6 +829,40 @@ mod test {
             }
         }
 
+        /// Conceals every run of three or more ASCII letters, one line at a time.
+        struct ConcealWords<'a>(RopeSlice<'a>);
+
+        impl ConcealSource for ConcealWords<'_> {
+            fn conceals_from(&self, char_idx: usize, conceals: &mut Vec<Conceal>) -> usize {
+                let text = self.0;
+                let line = text.char_to_line(char_idx);
+                let end = text.line_to_char(line + 1).max(char_idx + 1);
+                let mut word_start = None;
+                for (i, ch) in text
+                    .slice(char_idx..end.min(text.len_chars()))
+                    .chars()
+                    .enumerate()
+                {
+                    let i = char_idx + i;
+                    match (ch.is_ascii_alphabetic(), word_start) {
+                        (true, None) => word_start = Some(i),
+                        (false, Some(start)) => {
+                            if i - start >= 3 {
+                                conceals.push(Conceal::new(start, i, "λ"));
+                            }
+                            word_start = None;
+                        }
+                        _ => (),
+                    }
+                }
+                if let Some(start) = word_start.filter(|start| end - start >= 3) {
+                    conceals.push(Conceal::new(start, end.min(text.len_chars()), "λ"));
+                }
+                end
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
         fn composes(
             lines: Vec<String>,
             start_line: usize,
@@ -837,6 +871,7 @@ mod test {
             soft_wrap: bool,
             virtual_lines: bool,
             fold_lines: Vec<(u8, u8)>,
+            conceal_words: bool,
         ) -> TestResult {
             if (first < 0 && second > 0) || (first > 0 && second < 0) {
                 return TestResult::discard();
@@ -858,6 +893,9 @@ mod test {
             annotations.add_folds(folds.outermost(), " … ".into());
             if virtual_lines {
                 annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine));
+            }
+            if conceal_words {
+                annotations.add_conceals(ConcealWords(text));
             }
             let scroll = |(anchor, vertical_offset): (usize, usize), rows: isize| {
                 char_idx_at_visual_offset(
@@ -881,8 +919,41 @@ mod test {
         }
 
         QuickCheck::new().tests(500).quickcheck(
-            composes as fn(Vec<String>, usize, i8, i8, bool, bool, Vec<(u8, u8)>) -> TestResult,
+            composes
+                as fn(Vec<String>, usize, i8, i8, bool, bool, Vec<(u8, u8)>, bool) -> TestResult,
         );
+    }
+
+    #[test]
+    fn test_positions_across_conceals() {
+        let text = Rope::from("$2 alpha^2$\n#emoji.face x\n");
+        let slice = text.slice(..);
+        let text_fmt = TextFormat::default();
+        // `alpha` is shown as `α` and `#emoji.face` as the wide `😀`
+        let conceals = [Conceal::new(3, 8, "α"), Conceal::new(12, 23, "😀")];
+        let mut annotations = TextAnnotations::default();
+        annotations.add_conceals(&conceals[..]);
+
+        // concealed positions are drawn on the conceal
+        let offset =
+            |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
+        assert_eq!(offset(0, 5), (Position::new(0, 3), 0));
+        assert_eq!(offset(0, 8), (Position::new(0, 4), 0));
+        assert_eq!(offset(12, 20), (Position::new(0, 0), 12));
+        assert_eq!(offset(12, 24), (Position::new(0, 3), 12));
+
+        let char_at = |anchor, rows, col| {
+            char_idx_at_visual_offset(slice, anchor, rows, col, &text_fmt, &annotations)
+        };
+        assert_eq!(char_at(0, 0, 3), (3, 0), "the conceal");
+        assert_eq!(char_at(0, 0, 4), (8, 0), "after the conceal");
+        assert_eq!(
+            char_at(12, 0, 1),
+            (12, 0),
+            "the wide conceal's second column"
+        );
+        assert_eq!(char_at(0, 1, 3), (24, 0), "down");
+        assert_eq!(char_at(24, -1, 4), (8, 0), "up");
     }
 
     #[test]

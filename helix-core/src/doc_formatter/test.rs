@@ -1,6 +1,10 @@
-use crate::doc_formatter::{DocumentFormatter, FormattedGrapheme, TextFormat};
+use std::cell::Cell;
+
+use crate::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSource, TextFormat};
 use crate::fold::Fold;
-use crate::text_annotations::{InlineAnnotation, LineAnnotation, Overlay, TextAnnotations};
+use crate::text_annotations::{
+    Conceal, ConcealSource, InlineAnnotation, LineAnnotation, Overlay, TextAnnotations,
+};
 use crate::Position;
 
 impl TextFormat {
@@ -432,4 +436,177 @@ fn fold_and_virtual_lines() {
             .collect();
     // the header's anchor adds a line below the fold's row, the hidden one adds none
     assert_eq!(rows, [(0, 0), (8, 0), (15, 0), (17, 2), (19, 4)]);
+}
+
+fn concealed_text(text: &str, softwrap: bool, conceals: &[Conceal], char_pos: usize) -> String {
+    DocumentFormatter::new_at_prev_checkpoint(
+        text.into(),
+        &TextFormat::new_test(softwrap),
+        TextAnnotations::default().add_conceals(conceals),
+        char_pos,
+    )
+    .collect_to_str()
+}
+
+#[test]
+fn conceals() {
+    let text = "$2 alpha^2$\n";
+    let conceals = [Conceal::new(3, 8, "α")];
+    for softwrap in [false, true] {
+        assert_eq!(concealed_text(text, softwrap, &conceals, 0), "$2 α^2$ \n ");
+    }
+    // a formatter starting inside a conceal starts at its line
+    assert_eq!(concealed_text(text, false, &conceals, 5), "$2 α^2$ \n ");
+    // a conceal ending beyond a truncated text is not concealed
+    assert_eq!(concealed_text("$2 alp", false, &conceals, 0), "$2 alp ");
+
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .map(|g| {
+                let concealed = matches!(g.source, GraphemeSource::Conceal { .. });
+                (g.char_idx, g.visual_pos.col, g.doc_chars(), concealed)
+            })
+            .collect();
+    assert_eq!(graphemes[3], (3, 3, 5, true), "the conceal covers `alpha`");
+    assert_eq!(
+        graphemes[4],
+        (8, 4, 1, false),
+        "`^` follows in the next column"
+    );
+}
+
+#[test]
+fn conceal_widths() {
+    // a wide replacement takes two columns
+    let conceals = [Conceal::new(0, 11, "😀")];
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> = DocumentFormatter::new_at_prev_checkpoint(
+        "#emoji.face x".into(),
+        &text_fmt,
+        &annotations,
+        0,
+    )
+    .map(|g| (g.char_idx, g.visual_pos.col, g.width()))
+    .collect();
+    assert_eq!(graphemes[..3], [(0, 0, 2), (11, 2, 1), (12, 3, 1)]);
+
+    // text that only fits a row once it is concealed is not wrapped
+    let text = "alpha beta gamma delta\n";
+    let conceals = [
+        Conceal::new(0, 5, "α"),
+        Conceal::new(6, 10, "β"),
+        Conceal::new(11, 16, "γ"),
+        Conceal::new(17, 22, "δ"),
+    ];
+    assert_eq!(
+        concealed_text(text, true, &[], 0),
+        "alpha beta gamma \n.delta \n "
+    );
+    assert_eq!(concealed_text(text, true, &conceals, 0), "α β γ δ \n ");
+}
+
+#[test]
+fn conceal_and_annotations() {
+    let inline = [
+        InlineAnnotation::new(3, "A"),
+        InlineAnnotation::new(5, "B"),
+        InlineAnnotation::new(8, "C"),
+    ];
+    let overlays = [Overlay::new(4, "X"), Overlay::new(9, "Y")];
+    let conceals = [Conceal::new(3, 8, "α")];
+    assert_eq!(
+        DocumentFormatter::new_at_prev_checkpoint(
+            "$2 alpha^2$\n".into(),
+            &TextFormat::new_test(false),
+            TextAnnotations::default()
+                .add_inline_annotations(&inline, None)
+                .add_overlay(&overlays, None)
+                .add_conceals(&conceals[..]),
+            0,
+        )
+        .collect_to_str(),
+        // annotations at the conceal's start are shown before it, concealed ones are skipped
+        "$2 AαC^Y$ \n "
+    );
+}
+
+#[test]
+fn conceals_in_folds() {
+    let text = "fn f() {\n    alpha\n}\nx\n";
+    let folds = [fold(8, 19)];
+    // one conceal is hidden by the fold, the one after it is shown
+    let conceals = [Conceal::new(13, 18, "α"), Conceal::new(21, 22, "χ")];
+    assert_eq!(
+        DocumentFormatter::new_at_prev_checkpoint(
+            text.into(),
+            &TextFormat::new_test(false),
+            TextAnnotations::default()
+                .add_folds(&folds, " … ".into())
+                .add_conceals(&conceals[..]),
+            0,
+        )
+        .collect_to_str(),
+        "fn f() { … } \nχ \n "
+    );
+}
+
+/// Hands out conceals in windows of `window` chars, like a source that computes them on the fly.
+struct WindowedConceals<'a> {
+    conceals: &'a [Conceal],
+    window: usize,
+    fetches: &'a Cell<usize>,
+}
+
+impl ConcealSource for WindowedConceals<'_> {
+    fn conceals_from(&self, char_idx: usize, conceals: &mut Vec<Conceal>) -> usize {
+        self.fetches.set(self.fetches.get() + 1);
+        let end = char_idx + self.window;
+        let in_window = self
+            .conceals
+            .iter()
+            .filter(|conceal| (char_idx..end).contains(&conceal.start));
+        conceals.extend(in_window);
+        end
+    }
+}
+
+#[test]
+fn conceals_are_fetched_on_the_fly() {
+    let text = "alpha beta\ngamma delta\n";
+    let conceals = [
+        Conceal::new(0, 5, "α"),
+        Conceal::new(6, 10, "β"),
+        Conceal::new(11, 16, "γ"),
+        Conceal::new(17, 22, "δ"),
+    ];
+    let fetches = Cell::new(0);
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(WindowedConceals {
+        conceals: &conceals,
+        window: 3,
+        fetches: &fetches,
+    });
+    let text_fmt = TextFormat::new_test(false);
+    let format = |char_pos| {
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, char_pos)
+            .collect_to_str()
+    };
+    assert_eq!(format(0), "α β \nγ δ \n ");
+    let fetched_once = fetches.get();
+    // traversals that start earlier or later fetch again as needed
+    assert_eq!(format(13), "γ δ \n ");
+    assert_eq!(format(0), "α β \nγ δ \n ");
+    assert!(fetches.get() > fetched_once);
+
+    // a conceal that starts inside a grapheme is skipped, later ones are not
+    let conceals = [Conceal::new(1, 2, "X"), Conceal::new(3, 4, "Y")];
+    assert_eq!(
+        concealed_text("a\u{301}bc", false, &conceals, 0),
+        "a\u{301}bY "
+    );
 }

@@ -739,6 +739,56 @@ mod test {
     ";
 
     #[test]
+    fn moves_vertically_across_conceals() {
+        // `alpha beta` is shown as `α β`, so its columns differ from the next line's
+        let text = Rope::from("alpha beta\nabcdefghij\n");
+        let slice = text.slice(..);
+        let conceals = [
+            crate::text_annotations::Conceal::new(0, 5, "α"),
+            crate::text_annotations::Conceal::new(6, 10, "β"),
+        ];
+        for soft_wrap in [false, true] {
+            let text_fmt = TextFormat {
+                soft_wrap,
+                ..TextFormat::default()
+            };
+            let moved = |pos, dir| {
+                let mut annotations = TextAnnotations::default();
+                annotations.add_conceals(&conceals[..]);
+                let range = Range::point(pos);
+                let range = if soft_wrap {
+                    move_vertically_visual(
+                        slice,
+                        range,
+                        dir,
+                        1,
+                        Movement::Move,
+                        &text_fmt,
+                        &mut annotations,
+                    )
+                } else {
+                    move_vertically(
+                        slice,
+                        range,
+                        dir,
+                        1,
+                        Movement::Move,
+                        &text_fmt,
+                        &mut annotations,
+                    )
+                };
+                range.head
+            };
+            // the third column of `α β` is `β`, the third of the next line is `c`
+            assert_eq!(moved(13, Direction::Backward), 6, "soft wrap: {soft_wrap}");
+            assert_eq!(moved(6, Direction::Forward), 13, "soft wrap: {soft_wrap}");
+            // the first column is the conceal of `alpha`, wherever in it the cursor was
+            assert_eq!(moved(11, Direction::Backward), 0, "soft wrap: {soft_wrap}");
+            assert_eq!(moved(3, Direction::Forward), 11, "soft wrap: {soft_wrap}");
+        }
+    }
+
+    #[test]
     fn moves_across_folds() {
         let text = Rope::from("fn f() {\n    1\n}\nxyzxyzxyzxyz\nabc\n");
         let slice = text.slice(..);
