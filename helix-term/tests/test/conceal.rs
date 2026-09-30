@@ -143,6 +143,18 @@ async fn conceal_while_typing() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn edits_update_conceals() -> anyhow::Result<()> {
+    // the symbol is replaced while the cursor ends up away from it
+    conceal_test(
+        "#[x|]# $alpha$\n",
+        "%salpha<ret>cbeta<esc>gh",
+        "#[x|]# $beta$\n",
+        &["x $β$"],
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn jump_labels_show_source_text() -> anyhow::Result<()> {
     let mut app = typst_app("#[x|]# $alpha + beta$\n", ConcealConfig::default())?;
     let labelled = |app: &Application| {

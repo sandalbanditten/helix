@@ -8,13 +8,17 @@
 //! concealed, and of nested conceals only the outermost is shown.
 //!
 //! [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except the
-//! ones that the cursors of a selection reveal (see [`ConcealReveal`]).
+//! ones that the cursors of a selection reveal (see [`ConcealReveal`]). The conceals of a line
+//! are computed once and kept in a [`ConcealCache`] until the tree changes: a query costs about
+//! as much as walking to the line through the tree, which an editor would otherwise do several
+//! times per key press.
 
 mod typst;
 
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::ops;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -31,9 +35,14 @@ use crate::{RopeSlice, Selection};
 /// as they are, which bounds the work for a query capturing large nodes.
 const MAX_CONCEALED_BYTES: usize = 64;
 
-/// The most lines whose conceals are computed at once. A fetch starts with the line the document
-/// formatter is on and covers twice as many lines as the previous one.
-const MAX_FETCHED_LINES: usize = 256;
+/// The most lines whose conceals are computed at once: the line the document formatter reaches,
+/// up to a quarter before it, which covers traversals that step back line by line, and the lines
+/// after it.
+const FETCHED_LINES: usize = 128;
+
+/// The most lines whose conceals are handed to the document formatter at once. A traversal that
+/// steps back line by line is handed them again for every line.
+const SERVED_LINES: usize = 16;
 
 /// A table of symbols that the text a `conceals.scm` query captures is looked up in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +126,31 @@ impl ConcealReveal {
     }
 }
 
+/// The conceals of the lines of a syntax tree, computed as they are needed and kept for later
+/// traversals, before any are revealed. It has to be cleared whenever the tree changes.
+#[derive(Debug, Default)]
+pub struct ConcealCache {
+    /// The conceals of each line computed so far, sorted and disjoint.
+    lines: HashMap<usize, Vec<Conceal>>,
+}
+
+impl ConcealCache {
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
+
+    /// The window of lines around `line` whose conceals are computed together, leaving out lines
+    /// already known.
+    fn window(&self, line: usize, len_lines: usize) -> ops::Range<usize> {
+        let unknown = |line: &usize| !self.lines.contains_key(line);
+        let before = (line.saturating_sub(FETCHED_LINES / 4)..line).rev();
+        let first = before.take_while(unknown).last().unwrap_or(line);
+        let after = (line + 1..len_lines).take(FETCHED_LINES - (line + 1 - first));
+        let end = after.take_while(unknown).last().unwrap_or(line) + 1;
+        first..end
+    }
+}
+
 /// The conceals that a syntax tree's `conceals.scm` queries capture, fetched as the document
 /// formatter reaches them.
 pub struct SyntaxConceals<'a> {
@@ -125,17 +159,18 @@ pub struct SyntaxConceals<'a> {
     loader: Arc<Loader>,
     /// The selection whose cursors reveal conceals and how, or `None` to reveal nothing.
     reveal: Option<(&'a Selection, ConcealReveal)>,
-    /// The number of lines the next fetch covers.
-    fetch_lines: Cell<usize>,
+    cache: &'a RefCell<ConcealCache>,
 }
 
 impl<'a> SyntaxConceals<'a> {
     /// The conceals of `syntax`, a tree of `text`, or `None` if its language has no conceals.
+    /// `cache` keeps them for this tree.
     pub fn new(
         text: RopeSlice<'a>,
         syntax: &'a Syntax,
         loader: Arc<Loader>,
         reveal: Option<(&'a Selection, ConcealReveal)>,
+        cache: &'a RefCell<ConcealCache>,
     ) -> Option<Self> {
         loader.conceal_query(syntax.root_language())?;
         Some(Self {
@@ -143,12 +178,28 @@ impl<'a> SyntaxConceals<'a> {
             syntax,
             loader,
             reveal,
-            fetch_lines: Cell::new(1),
+            cache,
         })
     }
 
-    /// The conceals of the chars `range`, which starts at the start of a line, sorted and
-    /// disjoint.
+    /// Computes the conceals of the lines `lines` into `cache`.
+    fn fetch(&self, cache: &mut ConcealCache, lines: ops::Range<usize>) {
+        let text = self.text;
+        let end = if lines.end < text.len_lines() {
+            text.line_to_char(lines.end)
+        } else {
+            text.len_chars()
+        };
+        for line in lines.clone() {
+            cache.lines.insert(line, Vec::new());
+        }
+        for conceal in self.conceals(text.line_to_char(lines.start)..end) {
+            let line = text.char_to_line(conceal.start);
+            cache.lines.entry(line).or_default().push(conceal);
+        }
+    }
+
+    /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint.
     fn conceals(&self, range: ops::Range<usize>) -> Vec<Conceal> {
         let text = self.text;
         let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
@@ -199,10 +250,6 @@ impl<'a> SyntaxConceals<'a> {
                 outermost.push(conceal);
             }
         }
-        if let Some((selection, reveal)) = self.reveal {
-            outermost
-                .retain(|conceal| !reveal.reveals(text, selection, conceal.start..conceal.end));
-        }
         outermost
     }
 }
@@ -210,20 +257,36 @@ impl<'a> SyntaxConceals<'a> {
 impl ConcealSource for SyntaxConceals<'_> {
     fn conceals_from(&self, char_idx: usize, conceals: &mut Vec<Conceal>) -> usize {
         let text = self.text;
-        let line = text.char_to_line(char_idx.min(text.len_chars()));
-        let lines = self.fetch_lines.get();
-        self.fetch_lines.set((lines * 2).min(MAX_FETCHED_LINES));
-        let end_line = line + lines;
+        let first_line = text.char_to_line(char_idx.min(text.len_chars()));
+        let mut cache = self.cache.borrow_mut();
+        if !cache.lines.contains_key(&first_line) {
+            let lines = cache.window(first_line, text.len_lines());
+            self.fetch(&mut cache, lines);
+        }
+
+        // hand out the known lines that follow, except what the cursors reveal
+        let revealed = |conceal: &Conceal| {
+            self.reveal.is_some_and(|(selection, reveal)| {
+                reveal.reveals(text, selection, conceal.start..conceal.end)
+            })
+        };
+        let mut line = first_line;
+        while let Some(line_conceals) = cache.lines.get(&line) {
+            let shown = line_conceals
+                .iter()
+                .filter(|conceal| conceal.start >= char_idx && !revealed(conceal));
+            conceals.extend(shown);
+            line += 1;
+            if line == first_line + SERVED_LINES {
+                break;
+            }
+        }
         // the last line has no line break, so its end is past its last char
-        let end = if end_line < text.len_lines() {
-            text.line_to_char(end_line)
+        if line < text.len_lines() {
+            text.line_to_char(line)
         } else {
             text.len_chars() + 1
-        };
-        let range = text.line_to_char(line)..end.min(text.len_chars());
-        let fetched = self.conceals(range).into_iter();
-        conceals.extend(fetched.filter(|conceal| conceal.start >= char_idx));
-        end.max(char_idx + 1)
+        }
     }
 }
 
@@ -251,7 +314,8 @@ mod test {
         let text = Rope::from(source);
         let slice = text.slice(..);
         let syntax = parse(language, &text);
-        let conceals = SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal).unwrap();
+        let cache = RefCell::default();
+        let conceals = SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
         let mut rendered = String::new();
         let mut pos = 0;
         let mut fetched = 0;
@@ -388,6 +452,39 @@ mod test {
         assert!(ConcealReveal::Symbol.reveals(text, &many, 5..10));
         assert!(ConcealReveal::Symbol.reveals(text, &many, 15..19));
         assert!(!ConcealReveal::Symbol.reveals(text, &many, 2..3));
+    }
+
+    #[test]
+    fn cache_windows() {
+        let mut cache = ConcealCache::default();
+        // a quarter before the line and the rest after it, within the text
+        assert_eq!(cache.window(100, 1000), 68..196);
+        assert_eq!(cache.window(10, 1000), 0..128);
+        assert_eq!(cache.window(990, 1000), 958..1000);
+        // leaving out the lines already known
+        cache.lines.insert(90, Vec::new());
+        cache.lines.insert(150, Vec::new());
+        assert_eq!(cache.window(100, 1000), 91..150);
+    }
+
+    #[test]
+    fn cache_is_shared() {
+        let text = Rope::from("$alpha beta$");
+        let slice = text.slice(..);
+        let syntax = parse("typst", &text);
+        let cache = RefCell::default();
+        // the first cursor reveals `alpha`, the second `beta`, from the same cache
+        for (cursor, shown) in [(2, [(7, "β")]), (8, [(1, "α")])] {
+            let selection = Selection::point(cursor);
+            let reveal = Some((&selection, ConcealReveal::Symbol));
+            let conceals =
+                SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
+            let mut fetched = Vec::new();
+            conceals.conceals_from(0, &mut fetched);
+            let fetched: Vec<_> = fetched.iter().map(|c| (c.start, c.replacement)).collect();
+            assert_eq!(fetched, shown);
+        }
+        assert_eq!(cache.borrow().lines.len(), 1);
     }
 
     #[test]

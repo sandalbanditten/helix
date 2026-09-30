@@ -6,7 +6,7 @@ use futures_util::FutureExt;
 use helix_core::auto_pairs::AutoPairs;
 use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
-use helix_core::conceal::{ConcealReveal, SyntaxConceals};
+use helix_core::conceal::{ConcealCache, ConcealReveal, SyntaxConceals};
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
@@ -25,7 +25,7 @@ use ::parking_lot::Mutex;
 use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
@@ -158,6 +158,8 @@ pub struct Document {
     pub(crate) inlay_hints: HashMap<ViewId, DocumentInlayHints>,
     /// Jump label overlays for each view.
     pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
+    /// The conceals of the syntax tree, which all views share.
+    conceal_cache: RefCell<ConcealCache>,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// LSP code action hints for each view.
@@ -784,6 +786,7 @@ impl Document {
             focused_at: std::time::Instant::now(),
             readonly: false,
             jump_labels: HashMap::new(),
+            conceal_cache: RefCell::default(),
             document_highlights: HashMap::new(),
             code_action_hints: HashSet::new(),
             color_swatches: None,
@@ -1435,6 +1438,7 @@ impl Document {
         loader: &syntax::Loader,
     ) {
         self.language = language_config;
+        self.conceal_cache.get_mut().clear();
         self.syntax = self.language.as_ref().and_then(|config| {
             Syntax::new(self.text.slice(..), config.language(), loader)
                 .map_err(|err| {
@@ -1495,7 +1499,8 @@ impl Document {
         reveal: Option<(&'a Selection, ConcealReveal)>,
     ) -> Option<SyntaxConceals<'a>> {
         let text = self.text().slice(..);
-        SyntaxConceals::new(text, self.syntax()?, self.syn_loader.load_full(), reveal)
+        let loader = self.syn_loader.load_full();
+        SyntaxConceals::new(text, self.syntax()?, loader, reveal, &self.conceal_cache)
     }
 
     /// The folds hidden in the view, if the document is shown in it.
@@ -1664,6 +1669,7 @@ impl Document {
         }
 
         // update tree-sitter syntax tree
+        self.conceal_cache.get_mut().clear();
         if let Some(syntax) = &mut self.syntax {
             let loader = self.syn_loader.load();
             if let Err(err) = syntax.update(
