@@ -5,18 +5,19 @@ use std::{
     mem,
     path::Path,
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    time::Duration,
 };
 
 use helix_stdx::process::{self, GroupStatus, ProcessGroup};
-use helix_view::DocumentId;
+use helix_view::{DocumentId, Editor};
 use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
     output::{End, Lines},
 };
-use crate::job;
+use crate::{compositor::Compositor, job};
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
@@ -31,6 +32,37 @@ pub struct Output {
 }
 
 impl Output {
+    /// Takes the lines of about the first `max` bytes, and how the run ended once nothing is
+    /// left.
+    fn take_front(&mut self, max: usize) -> Output {
+        let bytes = self.text.as_bytes();
+        let split = bytes[..max.min(bytes.len())]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .or_else(|| Some(max + bytes.get(max..)?.iter().position(|&byte| byte == b'\n')?))
+            .map_or(bytes.len(), |line_break| line_break + 1);
+        if split == bytes.len() {
+            return mem::take(self);
+        }
+        let rest = self.text.split_off(split);
+        let text = mem::replace(&mut self.text, rest);
+        let chars = text.chars().count();
+        let rest = self
+            .loci
+            .split_off(self.loci.partition_point(|locus| locus.start < chars));
+        let loci = mem::replace(&mut self.loci, rest);
+        for locus in &mut self.loci {
+            locus.start -= chars;
+        }
+        self.chars -= chars;
+        Output {
+            text,
+            chars,
+            loci,
+            end: None,
+        }
+    }
+
     /// Adds the lines `text` with the `loci` in them.
     fn push(&mut self, text: &str, loci: Vec<Locus>) {
         let start = self.chars;
@@ -53,10 +85,23 @@ impl Output {
 #[derive(Debug, Default)]
 struct Pending {
     output: Output,
-    /// Whether a callback that takes the output is queued. Only one is, so that output arriving
+    /// Whether a callback that takes output is queued. Only one is, so that output arriving
     /// while the editor is busy makes the next batch larger rather than queueing more renders.
     queued: bool,
 }
+
+/// The pending output, and what tells the reader that some was taken.
+#[derive(Debug, Default)]
+struct Shared {
+    pending: Mutex<Pending>,
+    taken: Condvar,
+}
+
+/// A callback appends at most this much output, so that keys wait for no more than that.
+const BATCH: usize = 256 * 1024;
+/// The reader waits while this much output is pending, rather than filling memory with output
+/// that arrives faster than the editor takes it.
+const PENDING: usize = 4 * 1024 * 1024;
 
 /// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
 /// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it.
@@ -103,7 +148,7 @@ fn read(
     doc: DocumentId,
     run: u64,
 ) {
-    let pending = Arc::new(Mutex::new(Pending::default()));
+    let shared = Arc::new(Shared::default());
     let mut lines = Lines::default();
     let mut buf = vec![0; 64 * 1024];
     loop {
@@ -119,9 +164,7 @@ fn read(
         let text = lines.push(&buf[..read]);
         if !text.is_empty() {
             let loci = finder.find(&text);
-            hand_over(&pending, handle, doc, run, |output| {
-                output.push(&text, loci)
-            });
+            hand_over(&shared, handle, doc, run, |output| output.push(&text, loci));
         }
     }
     let rest = lines.finish();
@@ -140,7 +183,7 @@ fn read(
             }
         }
     };
-    hand_over(&pending, handle, doc, run, |output| {
+    hand_over(&shared, handle, doc, run, |output| {
         output.push(&rest, rest_loci);
         output.end = Some(end);
     });
@@ -161,31 +204,99 @@ fn exit_end(exit: std::process::ExitStatus) -> End {
     End::Exited(exit.code().unwrap_or(-1))
 }
 
-/// Adds to the pending output with `add`, and queues a callback that appends all of it to the
-/// buffer unless one is queued already.
+/// Adds to the pending output with `add`, and queues a callback that appends it to the buffer
+/// unless one is queued already. Waits while much is pending.
 fn hand_over(
-    pending: &Arc<Mutex<Pending>>,
+    shared: &Arc<Shared>,
     handle: &Handle,
     doc: DocumentId,
     run: u64,
     add: impl FnOnce(&mut Output),
 ) {
-    {
-        let mut pending = pending.lock().unwrap();
-        add(&mut pending.output);
-        if pending.queued || pending.output.is_empty() {
+    let mut pending = shared.pending.lock().unwrap();
+    add(&mut pending.output);
+    loop {
+        if !pending.queued && !pending.output.is_empty() {
+            pending.queued = true;
+            drop(pending);
+            // Waits while the job queue is full rather than dropping the callback.
+            handle.block_on(job::dispatch(take(shared.clone(), doc, run)));
+            pending = shared.pending.lock().unwrap();
+        }
+        if pending.output.text.len() <= PENDING {
             return;
         }
-        pending.queued = true;
+        (pending, _) = shared
+            .taken
+            .wait_timeout(pending, Duration::from_millis(100))
+            .unwrap();
     }
-    let pending = pending.clone();
-    // Waits while the job queue is full rather than dropping the callback.
-    handle.block_on(job::dispatch(move |editor, _compositor| {
-        let output = {
-            let mut pending = pending.lock().unwrap();
-            pending.queued = false;
-            mem::take(&mut pending.output)
+}
+
+/// The callback that appends the next batch of pending output to the buffer, and queues itself
+/// again for the rest, after the keys that came meanwhile.
+fn take(
+    shared: Arc<Shared>,
+    doc: DocumentId,
+    run: u64,
+) -> impl FnOnce(&mut Editor, &mut Compositor) + Send + 'static {
+    move |editor, _compositor| {
+        let (output, rest) = {
+            let mut pending = shared.pending.lock().unwrap();
+            let output = pending.output.take_front(BATCH);
+            pending.queued = !pending.output.is_empty();
+            (output, pending.queued)
         };
+        shared.taken.notify_all();
+        if rest {
+            tokio::spawn(job::dispatch(take(shared, doc, run)));
+        }
         super::append(editor, doc, run, output);
-    }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_core::{diagnostic::Severity, Position};
+
+    use super::*;
+
+    fn locus(start: usize) -> Locus {
+        Locus {
+            start,
+            len: 1,
+            severity: Severity::Error,
+            message: String::new(),
+            path: "a.rs".into(),
+            position: Position::default(),
+        }
+    }
+
+    #[test]
+    fn output_is_taken_in_whole_lines() {
+        let mut output = Output::default();
+        output.push("äb\ncd\n", vec![locus(0), locus(3)]);
+        output.push("ef\n", vec![locus(1)]);
+        output.end = Some(End::Exited(0));
+
+        // A batch ends at the last line break within it, or the first after it.
+        let first = output.take_front(5);
+        assert_eq!(
+            (first.text.as_str(), first.chars, first.end),
+            ("äb\n", 3, None)
+        );
+        assert_eq!(first.loci, [locus(0)]);
+        assert_eq!((output.text.as_str(), output.chars), ("cd\nef\n", 6));
+        assert_eq!(output.loci, [locus(0), locus(4)]);
+        let second = output.take_front(1);
+        assert_eq!(second.text, "cd\n");
+        // The end comes with the last lines.
+        let last = output.take_front(64);
+        assert_eq!(
+            (last.text.as_str(), last.end),
+            ("ef\n", Some(End::Exited(0)))
+        );
+        assert_eq!(last.loci, [locus(1)]);
+        assert!(output.is_empty());
+    }
 }

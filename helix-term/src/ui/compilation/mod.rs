@@ -201,12 +201,13 @@ fn show(editor: &mut Editor) -> DocumentId {
 /// Replaces the text of the compilation buffer with `text`, without loci, the cursors at its
 /// start.
 fn replace(editor: &mut Editor, doc_id: DocumentId, text: &str) {
-    let doc = doc!(editor, &doc_id);
+    // Dropped before the old text, so that they aren't mapped over its removal.
+    let doc = doc_mut!(editor, &doc_id);
+    doc.replace_diagnostics([], &[], &DiagnosticProvider::Compilation);
     let end = doc.text().len_chars();
     let transaction = Transaction::change(doc.text(), [(0, end, Some(text.into()))].into_iter());
     apply(editor, doc_id, &transaction);
     let doc = doc_mut!(editor, &doc_id);
-    doc.replace_diagnostics([], &[], &DiagnosticProvider::Compilation);
     let views: Vec<ViewId> = doc.selections().keys().copied().collect();
     for view in views {
         doc.set_selection(view, Selection::point(0));
