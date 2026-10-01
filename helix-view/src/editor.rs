@@ -2090,6 +2090,21 @@ impl Editor {
         is_dir: bool,
         create: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<()> {
+        self.will_create_path(path, is_dir);
+        let path = canonicalize(path);
+        if let Some(dir) = path.parent() {
+            if !dir.is_dir() {
+                fs::create_dir_all(dir)?;
+            }
+        }
+        create(&path)?;
+        self.did_create_path(&path, is_dir);
+        Ok(())
+    }
+
+    /// Tells the language servers that `path` is about to be created, applying the edits they
+    /// ask for. Paired with [`Self::did_create_path`] once it exists.
+    pub fn will_create_path(&mut self, path: &Path, is_dir: bool) {
         let path = canonicalize(path);
         let language_servers: Vec<_> = self
             .language_servers
@@ -2112,14 +2127,11 @@ impl Editor {
                 log::error!("failed to apply workspace edit: {err:?}")
             }
         }
+    }
 
-        if let Some(dir) = path.parent() {
-            if !dir.is_dir() {
-                fs::create_dir_all(dir)?;
-            }
-        }
-        create(&path)?;
-
+    /// Tells the language servers that `path` was created.
+    pub fn did_create_path(&self, path: &Path, is_dir: bool) {
+        let path = canonicalize(path);
         for ls in self.language_servers.iter_clients() {
             if !ls.is_initialized() {
                 continue;
@@ -2127,7 +2139,6 @@ impl Editor {
             ls.did_create(&path, is_dir);
         }
         self.language_servers.file_event_handler.file_changed(path);
-        Ok(())
     }
 
     pub fn delete_path(&mut self, path: &Path, recursive: bool) -> io::Result<()> {
