@@ -133,6 +133,12 @@ mod tests {
         )
         .unwrap();
         let sleep: u32 = line.trim().parse().unwrap();
+        // Stopped between its fork and its exec, the shell's child may hold the signal back.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(format!("/proc/{sleep}/comm")).unwrap() != "sleep\n" {
+            assert!(Instant::now() < deadline, "the grandchild never starts");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert!(alive(sleep));
 
         let status = group.status();
