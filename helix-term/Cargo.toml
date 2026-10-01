@@ -70,6 +70,8 @@ log = { version = "0.4", features = ["std"] }
 # File picker
 nucleo.workspace = true
 ignore = "0.4"
+# Dates in dired listings
+jiff = "0.2"
 slotmap.workspace = true
 # Watching the directories the file tree shows
 notify = { version = "8.2", default-features = false }

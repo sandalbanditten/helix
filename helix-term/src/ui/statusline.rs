@@ -2,12 +2,7 @@ use helix_core::indent::IndentStyle;
 use helix_core::{coords_at_pos, encoding, unicode::width::UnicodeWidthStr, Position};
 use helix_lsp::lsp::DiagnosticSeverity;
 use helix_view::document::DEFAULT_LANGUAGE_NAME;
-use helix_view::{
-    document::{Mode, SCRATCH_BUFFER_NAME},
-    graphics::Rect,
-    theme::Style,
-    Document, Editor, View,
-};
+use helix_view::{document::Mode, graphics::Rect, theme::Style, Document, Editor, View};
 
 use crate::ui::ProgressSpinners;
 
@@ -492,14 +487,7 @@ fn render_file_name<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = {
-        let rel_path = context.doc.relative_path();
-        let path = rel_path
-            .as_ref()
-            .map(|p| p.to_string_lossy())
-            .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
-        format!(" {} ", path)
-    };
+    let title = format!(" {} ", context.doc.display_name());
 
     write(context, title.into());
 }
@@ -602,7 +590,7 @@ where
             .doc
             .path()
             .as_ref()
-            .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |p| p.to_string_lossy());
+            .map_or_else(|| context.doc.display_name(), |p| p.to_string_lossy());
         format!(" {} ", path)
     };
 
@@ -643,7 +631,7 @@ where
         let path = rel_path
             .as_ref()
             .and_then(|p| p.file_name().map(|s| s.to_string_lossy()))
-            .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into());
+            .unwrap_or_else(|| context.doc.display_name());
         format!(" {} ", path)
     };
 

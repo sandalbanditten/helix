@@ -232,6 +232,9 @@ pub struct Document {
 
     pub readonly: bool,
 
+    /// The listing this document shows, if it is a dired buffer.
+    pub dired: Option<Box<crate::dired::Listing>>,
+
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -785,6 +788,7 @@ impl Document {
             version_control_head: None,
             focused_at: std::time::Instant::now(),
             readonly: false,
+            dired: None,
             jump_labels: HashMap::new(),
             conceal_cache: RefCell::default(),
             document_highlights: HashMap::new(),
@@ -2002,6 +2006,14 @@ impl Document {
         self.last_saved_revision = current_revision;
     }
 
+    /// Starts the history afresh at the current text, which counts as saved. Commit pending
+    /// changes first.
+    pub fn reset_history(&mut self) {
+        debug_assert!(self.changes.is_empty());
+        self.history.set(History::default());
+        self.last_saved_revision = 0;
+    }
+
     /// Set the document's latest saved revision to the given one.
     pub fn set_last_saved_revision(&mut self, rev: usize, save_time: SystemTime) {
         log::debug!(
@@ -2283,6 +2295,9 @@ impl Document {
     }
 
     pub fn display_name(&self) -> Cow<'_, str> {
+        if let Some(listing) = &self.dired {
+            return listing.display_name().into();
+        }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())
     }

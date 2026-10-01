@@ -176,6 +176,32 @@ fn open_impl(cx: &mut compositor::Context, args: Args, action: Action) -> anyhow
     Ok(())
 }
 
+fn dired(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let (dir, select) = match args.first() {
+        Some(dir) => {
+            let dir =
+                helix_stdx::path::canonicalize(helix_stdx::path::expand_tilde(Path::new(dir)));
+            if !dir.is_dir() {
+                bail!("{} is not a directory", dir.display());
+            }
+            (dir, None)
+        }
+        None => match doc!(cx.editor)
+            .path()
+            .and_then(|path| Some((path.parent()?, path.file_name()?)))
+        {
+            Some((dir, name)) => (dir.to_path_buf(), Some(PathBuf::from(name))),
+            None => (helix_stdx::env::current_working_dir(), None),
+        },
+    };
+    ui::dired::open(cx.editor, helix_view::dired::Source::Directory(dir), select);
+    Ok(())
+}
+
 fn buffer_close_by_ids_impl(
     cx: &mut compositor::Context,
     doc_ids: &[DocumentId],
@@ -3103,6 +3129,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::all(completers::filename),
         signature: Signature {
             positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "dired",
+        aliases: &[],
+        doc: "Open a directory in dired.",
+        fun: dired,
+        completer: CommandCompleter::positional(&[completers::directory]),
+        signature: Signature {
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

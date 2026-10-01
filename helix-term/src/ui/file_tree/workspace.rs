@@ -3,7 +3,7 @@
 
 use std::{
     cell::RefCell,
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -13,6 +13,7 @@ use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::path::{canonicalize, normalize};
 use helix_vcs::StatusOptions;
 use helix_view::{
+    dired::Source,
     editor::{Action as OpenAction, FileTreeConfig, FileTreeSort},
     graphics::Rect,
     smooth_scroll::SmoothOffset,
@@ -310,6 +311,40 @@ impl Workspace {
     pub(super) fn cursor_path(&self) -> Option<PathBuf> {
         let index = self.rows.index_of(self.cursor)?;
         Some(self.root.join(&self.rows[index].path))
+    }
+
+    /// What dired lists for the cursor's entry, and the entry to put dired's cursor on
+    /// (relative to the listing's root): with `tree` every row the tree shows, else the
+    /// directory under the cursor or the one holding the entry under it.
+    pub(super) fn dired_source(&self, tree: bool) -> Option<(Source, Option<PathBuf>)> {
+        let index = self.rows.index_of(self.cursor)?;
+        let row = &self.rows[index];
+        if tree {
+            let mut expanded: BTreeSet<PathBuf> = self
+                .tree
+                .expanded_directories()
+                .map(|dir| self.tree.path(dir))
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect();
+            // A run shown as one row lists each of its directories.
+            for row in self.rows.iter().filter(|row| row.head != row.node) {
+                let mut dir = self.tree.node(row.node).parent;
+                while let Some(id) = dir {
+                    expanded.insert(self.tree.path(id));
+                    if id == row.head {
+                        break;
+                    }
+                    dir = self.tree.node(id).parent;
+                }
+            }
+            let root = self.root.to_path_buf();
+            return Some((Source::Tree { root, expanded }, Some(row.path.clone())));
+        }
+        if index == 0 || self.tree.node(row.node).kind == Kind::Directory {
+            return Some((Source::Directory(self.root.join(&row.path)), None));
+        }
+        let dir = self.root.join(row.path.parent()?);
+        Some((Source::Directory(dir), Some(row.path.file_name()?.into())))
     }
 
     /// The row being typed in, for drawing.

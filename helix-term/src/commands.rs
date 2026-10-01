@@ -3144,6 +3144,23 @@ fn focus_file_tree(cx: &mut Context) {
     if cx.editor.mode == Mode::Insert {
         normal_mode(cx);
     }
+    // From a dired buffer, back to the tree on the entry the buffer's cursor is on.
+    let (view, doc) = current_ref!(cx.editor);
+    if doc.dired.is_some() {
+        if doc.is_modified() {
+            let name = doc.display_name().into_owned();
+            cx.editor.set_error(format!("{name} has unsaved changes"));
+            return;
+        }
+        let path = ui::dired::cursor_path(doc, view.id);
+        let _ = cx.editor.close_document(doc.id(), false);
+        cx.callback.push(Box::new(move |compositor, cx| {
+            if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+                editor_view.file_tree.focus(cx.editor, path);
+            }
+        }));
+        return;
+    }
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
             editor_view.file_tree.toggle_focus(cx.editor);

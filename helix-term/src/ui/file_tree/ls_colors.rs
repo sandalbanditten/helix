@@ -53,13 +53,12 @@ pub struct LsColors {
 }
 
 impl LsColors {
-    /// Reads `LS_COLORS` and then `EZA_COLORS`, whose rules win, like `eza` does. `None` if
-    /// neither is set.
+    /// Reads `LS_COLORS` and then `EZA_COLORS` (or `EXA_COLORS` when that is not set), whose
+    /// rules win, like `eza` does. `None` if none is set.
     pub fn from_environment() -> Option<Self> {
-        let specs: Vec<_> = ["LS_COLORS", "EZA_COLORS"]
+        let specs: Vec<_> = [env("LS_COLORS"), eza_environment()]
             .into_iter()
-            .filter_map(|name| std::env::var(name).ok())
-            .filter(|spec| !spec.trim().is_empty())
+            .flatten()
             .collect();
         (!specs.is_empty()).then(|| Self::parse(&specs.join(":")))
     }
@@ -166,8 +165,20 @@ impl LsColors {
     }
 }
 
+/// The value of the environment variable `name` if it is set and not blank.
+fn env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|spec| !spec.trim().is_empty())
+}
+
+/// `EZA_COLORS`, or `EXA_COLORS` like `eza` falls back to, if one is set.
+pub fn eza_environment() -> Option<String> {
+    env("EZA_COLORS").or_else(|| env("EXA_COLORS"))
+}
+
 /// Parses SGR parameters like `01;38;2;255;0;0`, keeping the foreground and the safe modifiers.
-fn parse_style(value: &str) -> Style {
+pub fn parse_style(value: &str) -> Style {
     let mut style = Style::default();
     let mut codes = value.split(';').map(|code| code.trim().parse::<u8>().ok());
     while let Some(code) = codes.next() {

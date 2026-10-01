@@ -68,7 +68,7 @@ pub fn list(dir: &Path, options: ListOptions) -> Listing {
 /// The names of the entries of `dir` that git does not ignore, by the rules the file picker
 /// follows (`.gitignore` files, `.git/info/exclude` and the global excludes). Outside of a
 /// repository that is every entry.
-fn not_ignored(dir: &Path) -> HashSet<OsString> {
+pub(crate) fn not_ignored(dir: &Path) -> HashSet<OsString> {
     ignore::WalkBuilder::new(dir)
         .max_depth(Some(1))
         .hidden(false)

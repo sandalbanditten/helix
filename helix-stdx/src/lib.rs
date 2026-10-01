@@ -8,6 +8,8 @@ pub mod path;
 pub mod range;
 pub mod rope;
 pub mod uri;
+#[cfg(unix)]
+pub mod users;
 
 pub use range::Range;
 pub use uri::Url;

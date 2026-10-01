@@ -6,6 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
+        dired::Dired,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
         statusline,
@@ -47,6 +48,7 @@ pub struct EditorView {
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
     pub(crate) file_tree: FileTree,
+    pub(crate) dired: Dired,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +73,7 @@ impl EditorView {
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
             file_tree: FileTree::default(),
+            dired: Dired::default(),
         }
     }
 
@@ -132,6 +135,14 @@ impl EditorView {
         let folds = text_annotations.folds();
         let syntax_highlighting =
             Self::doc_syntax_highlighting(doc, folds, view_offset.anchor, inner.height, &loader);
+        let style_spans = if doc.dired.is_some() {
+            let text = doc.text().slice(..);
+            let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
+            self.dired
+                .spans(doc, first..first + inner.height as usize, editor)
+        } else {
+            Vec::new()
+        };
         let mut overlays = Vec::new();
 
         overlays.push(Self::overlay_syntax_highlights(
@@ -232,6 +243,7 @@ impl EditorView {
             view_offset,
             &text_annotations,
             syntax_highlighting,
+            &style_spans,
             overlays,
             theme,
             decorations,
@@ -1745,6 +1757,18 @@ impl Component for EditorView {
             BufferLine::Multiple if cx.editor.documents.len() > 1 => true,
             _ => false,
         };
+
+        // A split covers the editor only while it shows its dired buffer.
+        if let Some(zoomed) = cx.editor.tree.zoomed() {
+            let doc = cx.editor.tree.get(zoomed).doc;
+            if cx
+                .editor
+                .document(doc)
+                .is_none_or(|doc| doc.dired.is_none())
+            {
+                cx.editor.tree.set_zoom(None);
+            }
+        }
 
         // -1 for commandline
         let mut views_area = area.clip_bottom(1);

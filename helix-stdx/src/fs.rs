@@ -2,6 +2,13 @@
 
 use std::{fs, io, path::Path};
 
+/// The major and minor number of a device like the `st_rdev` of its metadata.
+#[cfg(unix)]
+pub fn device_numbers(dev: u64) -> (u32, u32) {
+    let dev = dev as rustix::fs::Dev;
+    (rustix::fs::major(dev), rustix::fs::minor(dev))
+}
+
 /// Moves `from` to `to` like [`fs::rename`]. When the two paths are on different filesystems,
 /// `from` is copied (contents, permissions and symlinks) and then removed instead.
 ///

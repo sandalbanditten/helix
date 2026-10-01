@@ -36,6 +36,10 @@ pub struct SyntaxHighlighting<'a> {
     pub range: ops::Range<u32>,
 }
 
+/// Fixed styles of char ranges, sorted and disjoint. Unlike highlights they need no theme scope,
+/// so they can take any color, like the ones `LS_COLORS` gives dired listings.
+pub type StyleSpans<'a> = &'a [(ops::Range<usize>, Style)];
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_document(
     surface: &mut Surface,
@@ -44,6 +48,7 @@ pub fn render_document(
     offset: ViewPosition,
     doc_annotations: &TextAnnotations,
     syntax_highlighting: Option<SyntaxHighlighting<'_>>,
+    style_spans: StyleSpans,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     decorations: DecorationManager,
@@ -62,12 +67,15 @@ pub fn render_document(
         &doc.text_format(viewport.width, Some(theme)),
         doc_annotations,
         syntax_highlighting,
+        style_spans,
         overlay_highlights,
         theme,
         decorations,
     )
 }
 
+/// Renders `text` with its syntax highlighting, then the `style_spans` patched over it, then the
+/// `overlay_highlights` over both.
 #[allow(clippy::too_many_arguments)]
 pub fn render_text<'a>(
     renderer: &mut TextRenderer,
@@ -76,6 +84,7 @@ pub fn render_text<'a>(
     text_fmt: &TextFormat,
     text_annotations: &TextAnnotations,
     syntax_highlighting: Option<SyntaxHighlighting<'a>>,
+    style_spans: StyleSpans,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     mut decorations: DecorationManager,
@@ -89,6 +98,10 @@ pub fn render_text<'a>(
     let mut syntax_highlighter =
         SyntaxHighlighter::new(syntax_highlighting, text, theme, renderer.text_style);
     let mut overlay_highlighter = OverlayHighlighter::new(overlay_highlights, theme);
+    let mut span_styler = SpanStyler {
+        spans: style_spans,
+        next: 0,
+    };
 
     let mut last_line_pos = LinePos {
         first_visual_line: false,
@@ -175,11 +188,16 @@ pub fn render_text<'a>(
             },
             // a conceal is styled like the start of the text it conceals
             GraphemeSource::Conceal { .. } => GraphemeStyle {
-                syntax_style: syntax_highlighter.style.patch(renderer.conceal_style),
+                syntax_style: syntax_highlighter
+                    .style
+                    .patch(span_styler.style_at(grapheme.char_idx))
+                    .patch(renderer.conceal_style),
                 overlay_style: overlay_highlighter.style,
             },
             GraphemeSource::Document { .. } => GraphemeStyle {
-                syntax_style: syntax_highlighter.style,
+                syntax_style: syntax_highlighter
+                    .style
+                    .patch(span_styler.style_at(grapheme.char_idx)),
                 overlay_style: overlay_highlighter.style,
             },
         };
@@ -613,6 +631,29 @@ impl<'a, 't> SyntaxHighlighter<'a, 't> {
             acc.patch(self.theme.highlight(highlight))
         });
         self.update_pos();
+    }
+}
+
+/// Looks up the style spans of graphemes visited in order.
+struct SpanStyler<'a> {
+    spans: StyleSpans<'a>,
+    /// The first span that does not end before the last grapheme looked up.
+    next: usize,
+}
+
+impl SpanStyler<'_> {
+    fn style_at(&mut self, char_idx: usize) -> Style {
+        while self
+            .spans
+            .get(self.next)
+            .is_some_and(|(range, _)| range.end <= char_idx)
+        {
+            self.next += 1;
+        }
+        match self.spans.get(self.next) {
+            Some((range, style)) if range.start <= char_idx => *style,
+            _ => Style::default(),
+        }
     }
 }
 

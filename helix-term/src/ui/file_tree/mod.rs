@@ -6,14 +6,14 @@
 
 mod background;
 mod edit;
-mod fs;
+pub(crate) mod fs;
 mod git;
-mod icons;
+pub(crate) mod icons;
 mod keys;
-mod ls_colors;
+pub(crate) mod ls_colors;
 mod mouse;
 mod ops;
-mod order;
+pub(crate) mod order;
 mod render;
 mod rows;
 mod search;
@@ -126,6 +126,13 @@ impl FileTree {
             self.focused = false;
             return;
         }
+        let path = focused_document_path(editor);
+        self.focus(editor, path);
+    }
+
+    /// Focuses the tree with its cursor on the entry at the absolute `path` if it lies in the
+    /// workspace, else on the root.
+    pub fn focus(&mut self, editor: &Editor, path: Option<PathBuf>) {
         self.focused = true;
         self.ensure_workspace(editor);
         self.catch_up(editor);
@@ -136,7 +143,9 @@ impl FileTree {
         // Files in collapsed directories are not watched, so their status may be old.
         workspace.refresh_git(editor);
         workspace.cursor = workspace.tree.root();
-        if let Some(path) = focused_document_path(editor, &workspace.root) {
+        if let Some(path) =
+            path.and_then(|path| Some(path.strip_prefix(&workspace.root).ok()?.to_path_buf()))
+        {
             workspace.reveal(path, Purpose::Cursor);
         }
         workspace.update(&lister, &editor.config().file_tree);
@@ -419,6 +428,16 @@ impl FileTree {
                 self.width = Some(width.min(self.max_width).max(MIN_WIDTH));
             }
             Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
+            Action::EditDirectory | Action::EditTree => {
+                let Some(workspace) = &mut self.workspace else {
+                    return;
+                };
+                workspace.cancel_edit();
+                if let Some((source, select)) = workspace.dired_source(action == Action::EditTree) {
+                    crate::ui::dired::open(editor, source, select);
+                    self.focused = false;
+                }
+            }
             Action::Search => self.start_search(editor),
             Action::NextMatch => self.find_next(Direction::Forward, editor),
             Action::PreviousMatch => self.find_next(Direction::Backward, editor),
@@ -671,10 +690,10 @@ impl FileTree {
     }
 }
 
-/// The path of the focused buffer relative to `root`, if it lies below it.
-fn focused_document_path(editor: &Editor, root: &Path) -> Option<PathBuf> {
+/// The path of the focused buffer's file.
+fn focused_document_path(editor: &Editor) -> Option<PathBuf> {
     let doc = editor.document(editor.tree.get(editor.tree.focus).doc)?;
-    Some(doc.path()?.strip_prefix(root).ok()?.to_path_buf())
+    doc.path().map(Path::to_path_buf)
 }
 
 fn file_tree(compositor: &mut Compositor) -> Option<&mut FileTree> {

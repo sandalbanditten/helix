@@ -1,4 +1,5 @@
 mod completion;
+pub(crate) mod dired;
 mod document;
 pub(crate) mod editor;
 mod file_tree;

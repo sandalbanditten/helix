@@ -270,6 +270,27 @@ impl Default for FileExplorerConfig {
     }
 }
 
+/// Dired buffers: directory listings that are edited to change the files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DiredConfig {
+    /// Whether listings take eza's colors, with the rules of `LS_COLORS`, `EZA_COLORS` and
+    /// `EXA_COLORS`, rather than the theme's. The theme is used when none of them is set.
+    /// Defaults to `true`.
+    pub colors: bool,
+    /// Whether names show the icons `eza` shows, which need a Nerd Font. Defaults to `true`.
+    pub icons: bool,
+}
+
+impl Default for DiredConfig {
+    fn default() -> Self {
+        Self {
+            colors: true,
+            icons: true,
+        }
+    }
+}
+
 /// The file tree docked beside the editor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -517,6 +538,8 @@ pub struct Config {
     pub file_explorer: FileExplorerConfig,
     /// The file tree docked beside the editor.
     pub file_tree: FileTreeConfig,
+    /// Dired buffers, directory listings that are edited to change the files.
+    pub dired: DiredConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1517,6 +1540,7 @@ impl Default for Config {
             file_picker: FilePickerConfig::default(),
             file_explorer: FileExplorerConfig::default(),
             file_tree: FileTreeConfig::default(),
+            dired: DiredConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,
@@ -2416,7 +2440,8 @@ impl Editor {
         id
     }
 
-    fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
+    /// Registers `doc` and shows it as `action` says.
+    pub fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
         let id = self.new_document(doc);
         self.switch(id, action);
         id

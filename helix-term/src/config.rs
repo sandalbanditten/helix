@@ -304,6 +304,31 @@ mod tests {
     }
 
     #[test]
+    fn parsing_dired_config() {
+        use helix_view::editor::DiredConfig;
+
+        let dired = |config: &str| Config::load_test(config).editor.dired;
+        assert_eq!(dired(""), DiredConfig::default());
+        assert_eq!(
+            dired("[editor.dired]\ncolors = false\nicons = false"),
+            DiredConfig {
+                colors: false,
+                icons: false,
+            }
+        );
+        for invalid in [
+            "[editor.dired]\ncolors = \"da=32\"",
+            "[editor.dired]\nsort = true",
+        ] {
+            let invalid = invalid.to_owned();
+            assert!(
+                Config::load(Ok(&invalid), Err(ConfigLoadError::default())).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn parsing_file_tree_config() {
         use helix_view::editor::{
             Expanders, FileTreeConfig, FileTreeSide, FileTreeSort, FileTreeStart, LsColors,
