@@ -588,8 +588,13 @@ impl Workspace {
     /// the entry for `purpose`.
     pub(super) fn appeared(&mut self, to: &Path, purpose: Purpose) {
         if let Ok(to) = to.strip_prefix(&self.root) {
-            if let Some(parent) = to.parent() {
-                self.tree.invalidate(parent);
+            // The directories in between may be new too.
+            let known = to
+                .ancestors()
+                .skip(1)
+                .find(|dir| self.tree.find(dir).is_some());
+            if let Some(dir) = known {
+                self.tree.invalidate(dir);
             }
             self.reveal(to.to_path_buf(), purpose);
         }
@@ -1000,6 +1005,19 @@ pub(super) mod tests {
         assert_eq!(search.matches("a", rows, 0..rows.len()), [(4, vec![0])]);
         assert_eq!(search.matches("a", rows, 0..4), []);
         assert_eq!(search.matches("", rows, 0..rows.len()), []);
+    }
+
+    #[test]
+    fn entries_appearing_in_new_directories_list_the_closest_known_one() {
+        let mut workspace = workspace();
+        let docs = workspace.tree.find("docs".as_ref()).unwrap();
+        workspace.tree.expand(docs);
+        workspace
+            .tree
+            .apply_listing(docs, Some(vec![file("guide.md")]));
+        workspace.tree.take_listing_requests();
+        workspace.appeared("/root/docs/new/deep.md".as_ref(), Purpose::Cursor);
+        assert_eq!(workspace.tree.take_listing_requests(), [docs]);
     }
 
     #[test]
