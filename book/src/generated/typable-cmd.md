@@ -6,6 +6,13 @@
 | `:quit!`, `:q!` | Force close the current view, ignoring unsaved changes. |
 | `:open`, `:o`, `:edit`, `:e` | Open a file from disk into the current view. |
 | `:dired` | Open a directory in dired. |
+| `:compile` | Run the compile command of the language in the compilation buffer. |
+| `:compile!` | Run the compile command of the language, even with unsaved buffers. |
+| `:compile-test` | Run the test command of the language in the compilation buffer. |
+| `:compile-test!` | Run the test command of the language, even with unsaved buffers. |
+| `:compile-any` | Run a command in the compilation buffer. |
+| `:compile-any!` | Run a command in the compilation buffer, even with unsaved buffers. |
+| `:compile-kill` | Stop the compilation. |
 | `:buffer-close`, `:bc`, `:bclose` | Close the current buffer. |
 | `:buffer-close!`, `:bc!`, `:bclose!` | Close the current buffer forcefully, ignoring unsaved changes. |
 | `:buffer-close-others`, `:bco`, `:bcloseother` | Close all buffers but the currently focused one. |

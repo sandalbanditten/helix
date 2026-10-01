@@ -17,6 +17,7 @@
   - [Commands](./commands.md)
   - [Language servers](./lsp.md)
   - [Spell checking](./spell-checking.md)
+  - [Compilation](./compilation.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)

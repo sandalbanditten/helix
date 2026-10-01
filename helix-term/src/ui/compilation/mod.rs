@@ -523,3 +523,72 @@ pub fn ensure_saved(editor: &Editor, forced: &str) -> anyhow::Result<()> {
         unsaved,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Instant};
+
+    use arc_swap::ArcSwap;
+    use helix_core::{syntax, Position};
+    use helix_view::editor::Config;
+
+    use super::*;
+
+    /// Times what appending output costs the main thread, by the loci the buffer holds, in
+    /// release: `cargo test --release -p helix-term --lib compilation::tests::measure -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure() {
+        let line = "src/lib.rs:12:5: error: cannot find value `c` in this scope\n";
+        let chars = line.chars().count();
+        let loci = |lines: usize| -> Vec<Locus> {
+            (0..lines)
+                .map(|line| Locus {
+                    start: line * chars,
+                    len: 15,
+                    severity: Severity::Error,
+                    message: "error".to_owned(),
+                    path: "/src/lib.rs".into(),
+                    position: Position::new(11, 4),
+                })
+                .collect()
+        };
+        for held in [0, 10_000, 100_000] {
+            let mut doc = Document::from(
+                Rope::from(line.repeat(held)),
+                None,
+                Arc::new(ArcSwap::from_pointee(Config::default())),
+                Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+            );
+            let view = ViewId::default();
+            doc.ensure_view_init(view);
+            let held_loci = diagnostics(doc.text().slice(..), 0, loci(held));
+            doc.replace_diagnostics(held_loci, &[], &DiagnosticProvider::Compilation);
+
+            // A batch of 64 KiB: a thousand lines with a locus each, or without loci.
+            for with_loci in [true, false] {
+                let batch = line.repeat(1000);
+                let batch_loci = if with_loci { loci(1000) } else { Vec::new() };
+                let start = Instant::now();
+                let end = doc.text().len_chars();
+                let transaction = Transaction::change(
+                    doc.text(),
+                    [(end, end, Some(batch.as_str().into()))].into_iter(),
+                );
+                doc.apply(&transaction, view);
+                let batch_loci = diagnostics(doc.text().slice(..), end, batch_loci);
+                let appended = end..doc.text().len_chars();
+                doc.splice_diagnostics(batch_loci, &[appended], &DiagnosticProvider::Compilation);
+                println!(
+                    "{held} loci held, a batch {}: {:?}",
+                    if with_loci {
+                        "with 1000 loci"
+                    } else {
+                        "without loci"
+                    },
+                    start.elapsed()
+                );
+            }
+        }
+    }
+}

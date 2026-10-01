@@ -589,6 +589,64 @@ Finished at 14:03:12
         assert_eq!(found.len(), 3);
     }
 
+    /// Times finding loci, in release:
+    /// `cargo test --release -p helix-term --lib compilation::locus::tests::measure -- --ignored --nocapture`
+    /// `HELIX_MEASURE_INDEX` names a further directory to list for bare names.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure() {
+        let dir = project();
+        let main = dir.path().join("src/main/java/demo/App.java");
+        // Real lines of cargo, gcc and Gradle output, with loci and without.
+        let sample = format!(
+            "   Compiling demo v0.1.0 (/tmp/demo)
+error[E0425]: cannot find value `c` in this scope
+ --> src/lib.rs:3:9
+  |
+3 |     a + c
+  |         ^ not found in this scope
+main.cpp:4:24: error: conversion from ‘int’ to non-scalar type ‘std::vector<int>’ requested
+    4 |   std::vector<int> v = 3;
+{}:4: error: incompatible types: String cannot be converted to int
+    org.opentest4j.AssertionFailedError at AppTest.java:6
+test tests::it_works ... ok
+",
+            main.display()
+        );
+        let lines = sample.lines().count();
+        let text = sample.repeat(1_000_000 / lines);
+        let mut finder = Finder::new(Resolver::new(
+            dir.path().to_path_buf(),
+            FilePickerConfig::default(),
+        ));
+        let start = Instant::now();
+        let loci = finder.find(&text);
+        let elapsed = start.elapsed();
+        let lines = text.lines().count();
+        println!(
+            "{lines} lines, {} loci: {elapsed:?}, {:.0} lines/s",
+            loci.len(),
+            lines as f64 / elapsed.as_secs_f64()
+        );
+        let plain = "test tests::it_works ... ok\n".repeat(1_000_000);
+        let start = Instant::now();
+        finder.find(&plain);
+        println!("1000000 lines without digits: {:?}", start.elapsed());
+
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let extra = std::env::var_os("HELIX_MEASURE_INDEX").map(PathBuf::from);
+        for dir in std::iter::once(repo.to_path_buf()).chain(extra) {
+            let mut resolver = Resolver::new(dir.clone(), FilePickerConfig::default());
+            let start = Instant::now();
+            let files: usize = resolver.names().values().map(Vec::len).sum();
+            println!(
+                "index of {}: {files} files in {:?}",
+                dir.display(),
+                start.elapsed()
+            );
+        }
+    }
+
     #[test]
     fn locus_diagnostics_carry_their_target() {
         let path = Path::new("/home/me/demo/src/lib.rs");

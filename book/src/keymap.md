@@ -225,7 +225,7 @@ Jumps to various locations.
 | <code>&lt;n&gt;&#124;</code>  | Go to column number `<n>`      | `goto_column`              |
 | <code>&#124;</code>     | Go to the start of line        | `goto_column`              |
 | `e`   | Go to the end of the file                        | `goto_last_line`           |
-| `f`   | Go to files/URLs in selections                   | `goto_file`                |
+| `f`   | Go to files/URLs in selections, at a `:line:column` after them | `goto_file`  |
 | `h`   | Go to the start of the line                      | `goto_line_start`          |
 | `l`   | Go to the end of the line                        | `goto_line_end`            |
 | `s`   | Go to first non-whitespace character of the line | `goto_first_nonwhitespace` |
@@ -376,6 +376,8 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 | `[s`     | Go to previous misspelling                   | `goto_prev_spelling`    |
 | `]S`     | Go to last misspelling in document           | `goto_last_spelling`    |
 | `[S`     | Go to first misspelling in document          | `goto_first_spelling`   |
+| `]q`     | Go to next [compilation](./compilation.md) locus | `goto_next_locus`   |
+| `[q`     | Go to previous [compilation](./compilation.md) locus | `goto_prev_locus` |
 | `]f`     | Go to next function (**TS**)                 | `goto_next_function`    |
 | `[f`     | Go to previous function (**TS**)             | `goto_prev_function`    |
 | `]t`     | Go to next type definition (**TS**)          | `goto_next_class`       |
