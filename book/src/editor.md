@@ -353,9 +353,17 @@ Every column but the size can be edited, with any editing command:
 
 `:w` applies all edits, or none when one of them has a problem, which then shows as a diagnostic
 on its line. Edits that delete entries, create missing directories or discard changes are only
-applied by `:w!`. Deleting a whole line deletes its entry too; lines cannot be added or joined.
-After a write the buffer is listed anew, and undo does not go back past it. `:reload` lists it anew
-too, dropping its edits, and an unedited dired buffer follows changes made to its files.
+applied by `:w!`. Deleting a whole line deletes its entry too. After a write the buffer is listed
+anew, and undo does not go back past it. `:reload` lists it anew too, dropping its edits, and an
+unedited dired buffer follows changes made to its files.
+
+Pasting a line yanked from a dired buffer copies its entry like `cp -rp` does, directories with
+everything in them, keeping the mode and modified time; edit the pasted line to name the copy or
+change its other columns. The copy goes into the directory of the entry on the line above, or into
+that entry when it is a directory listed with its contents, whatever the guides say. A line cut and
+pasted once in the same write moves its entry instead. Other new lines cannot be added and lines
+cannot be joined. When the lines of several entries read exactly like a pasted line, it copies the
+one cut in the same write or yanked last, or any of them when they are files holding the same.
 
 The git column holds the staged and the unstaged letter of an entry, like `git status --short`;
 for a directory those of everything in it. Each letter is edited on its own, and the next listing

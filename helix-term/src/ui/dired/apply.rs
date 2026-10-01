@@ -2,7 +2,7 @@
 //!
 //! Every path of a plan is as it was listed. Moves are done one at a time, each once its target
 //! is free, and the paths of what is still to do follow every directory that moved; entries that
-//! swap places go through a temporary name.
+//! swap places go through a temporary name. Copies are made after the moves.
 
 use std::{
     collections::BTreeMap,
@@ -31,10 +31,20 @@ pub struct Applied {
 impl Applied {
     /// Where the listed `path` is now.
     pub fn path(&self, path: &Path) -> PathBuf {
+        self.follow(path, true)
+    }
+
+    /// Where a new entry planned at `path` goes now: into the directories that moved, but not
+    /// after an entry that moved away from there.
+    fn target(&self, path: &Path) -> PathBuf {
+        self.follow(path, false)
+    }
+
+    fn follow(&self, path: &Path, itself: bool) -> PathBuf {
         self.moved
             .iter()
             .fold(path.to_path_buf(), |path, (from, to)| {
-                remapped(&path, from, to, true).unwrap_or(path)
+                remapped(&path, from, to, itself).unwrap_or(path)
             })
     }
 }
@@ -43,6 +53,7 @@ impl Applied {
 pub fn apply(editor: &mut Editor, plan: &Plan) -> (Applied, Result<()>) {
     let mut applied = Applied::default();
     let result = moves(editor, plan.moves.clone(), &mut applied)
+        .and_then(|()| copies(editor, &plan.copies, &mut applied))
         .and_then(|()| deletions(editor, &plan.deletions, &mut applied))
         .and_then(|()| changes(&plan.changes, &mut applied))
         .and_then(|()| git(plan, &mut applied));
@@ -156,6 +167,20 @@ fn temporary(path: &Path) -> PathBuf {
         .expect("some name is free")
 }
 
+fn copies(editor: &mut Editor, copies: &[Move], applied: &mut Applied) -> Result<()> {
+    // A copy into another copy waits for it.
+    let mut copies: Vec<_> = copies.iter().collect();
+    copies.sort_by(|a, b| a.to.cmp(&b.to));
+    for Move { from, to } in copies {
+        let (from, to) = (applied.path(from), applied.target(to));
+        editor
+            .copy_path(&from, &to)
+            .with_context(|| format!("Cannot copy {} to {}", shown(&from), shown(&to)))?;
+        applied.done += 1;
+    }
+    Ok(())
+}
+
 fn deletions(editor: &mut Editor, deletions: &[PathBuf], applied: &mut Applied) -> Result<()> {
     for path in deletions {
         let path = applied.path(path);
@@ -177,7 +202,11 @@ fn changes(changes: &[Change], applied: &mut Applied) -> Result<()> {
     let mut changes: Vec<_> = changes.iter().collect();
     changes.sort_by_key(|change| order(change));
     for change in changes {
-        let path = applied.path(&change.path);
+        let path = if change.pasted {
+            applied.target(&change.path)
+        } else {
+            applied.path(&change.path)
+        };
         set(&path, &change.metadata).with_context(|| format!("Cannot change {}", shown(&path)))?;
         applied.done += 1;
     }

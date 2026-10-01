@@ -1615,6 +1615,9 @@ pub struct Editor {
     pub tree: Tree,
     pub next_document_id: DocumentId,
     pub documents: BTreeMap<DocumentId, Document>,
+    /// The listings of the dired buffers closed last, newest first, whose lines can still be
+    /// pasted into other dired buffers.
+    pub closed_listings: Vec<Box<crate::dired::Listing>>,
 
     // We Flatten<> to resolve the inner DocumentSavedEventFuture. For that we need a stream of streams, hence the Once<>.
     // https://stackoverflow.com/a/66875668
@@ -1772,6 +1775,7 @@ impl Editor {
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),
             documents: BTreeMap::new(),
+            closed_listings: Vec::new(),
             saves: HashMap::new(),
             save_queue: SelectAll::new(),
             write_count: 0,
@@ -2614,7 +2618,12 @@ impl Editor {
             }
         }
 
-        let doc = self.documents.remove(&doc_id).unwrap();
+        let mut doc = self.documents.remove(&doc_id).unwrap();
+        if let Some(listing) = doc.dired.take() {
+            const CLOSED_LISTINGS: usize = 4;
+            self.closed_listings.insert(0, listing);
+            self.closed_listings.truncate(CLOSED_LISTINGS);
+        }
 
         // If the document we removed was visible in all views, we will have no more views. We don't
         // want to close the editor just for a simple buffer close, so we need to create a new view

@@ -532,6 +532,7 @@ mod tests {
             repo: Some("/repo".into()),
             entries,
             text: helix_core::Rope::new(),
+            yanked: None,
         }
     }
 

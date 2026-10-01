@@ -10,6 +10,7 @@ mod colors;
 mod format;
 mod git;
 mod listing;
+mod paste;
 mod plan;
 
 use std::{
@@ -27,7 +28,7 @@ use helix_core::{
 use helix_loader::workspace_trust::TrustQuery;
 use helix_view::{
     current,
-    dired::{Listing, Source},
+    dired::{Listing, Source, Yanked},
     doc, doc_mut,
     editor::Action,
     graphics::Style,
@@ -305,12 +306,13 @@ fn show(editor: &mut Editor, listing: Listing, select: Option<PathBuf>) {
 
 /// Replaces the text of a dired buffer with a new listing, keeping the cursors where they were
 /// as far as the text allows, and starts its history afresh so undo cannot go back across it.
-fn relist(editor: &mut Editor, doc_id: DocumentId, view_id: ViewId, listing: Listing) {
+fn relist(editor: &mut Editor, doc_id: DocumentId, view_id: ViewId, mut listing: Listing) {
     let view = view_mut!(editor, view_id);
     let doc = doc_mut!(editor, &doc_id);
     let transaction = helix_core::diff::compare_ropes(doc.text(), &listing.text);
     doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
+    listing.yanked = doc.dired.take().and_then(|listed| listed.yanked);
     doc.dired = Some(Box::new(listing));
     publish(doc, &[]);
     editor.reset_history(doc_id);
@@ -327,18 +329,23 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
     let Some(listing) = doc.dired.as_deref().cloned() else {
         bail!("{} is no dired buffer", doc.display_name());
     };
-    let changes = doc
-        .history
-        .get_mut()
+    let history = doc.history.get_mut();
+    let transactions = history.transactions_since(0);
+    let changes = history
         .changes_since(0)
         .map(|transaction| transaction.changes().clone())
         .unwrap_or_else(|| ChangeSet::new(doc.text().slice(..)));
+    let open = editor.documents().filter_map(|doc| doc.dired.as_deref());
+    let listings =
+        paste::Origins::new(open.chain(editor.closed_listings.iter().map(AsRef::as_ref)));
+    let pasted = paste::pasted(&listing.text, &transactions, &listings);
     let trusted = listing_options(editor, listing.source.root()).trust_git;
     let doc = doc_mut!(editor, &doc_id);
     let (plan, problems) = plan::plan(
         &listing,
         doc.text().slice(..),
         &changes,
+        &pasted,
         &Clock::system(),
         trusted,
     );
@@ -373,6 +380,45 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
         changes => format!("Applied {changes} changes"),
     });
     Ok(())
+}
+
+/// Notes which entries of the dired buffer `doc_id` a command there yanked, when it wrote a
+/// register holding their lines, so that their pasted lines copy them and not others alike.
+pub fn yanked(editor: &mut Editor, doc_id: DocumentId) {
+    let (write, Some(register)) = editor.registers.written() else {
+        return;
+    };
+    let Some(listing) = editor.document(doc_id).and_then(|doc| doc.dired.as_deref()) else {
+        return;
+    };
+    let values = editor
+        .registers
+        .read(register, editor)
+        .into_iter()
+        .flatten();
+    let lines: HashSet<String> = values
+        .flat_map(|value| {
+            let lines = value.split_inclusive('\n');
+            lines
+                .filter_map(|line| line.strip_suffix('\n'))
+                .map(|line| line.trim_end_matches('\r').to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if lines.is_empty() {
+        return;
+    }
+    let paths: HashSet<PathBuf> = (0..listing.entries.len())
+        .filter(|&index| lines.contains(paste::listed_line(listing, index).as_ref()))
+        .map(|index| listing.entries[index].path.clone())
+        .collect();
+    // Other writes, like that of a change to a name, leave what was yanked to be pasted.
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(listing) = doc_mut!(editor, &doc_id).dired.as_deref_mut() {
+        listing.yanked = Some(Yanked { write, paths });
+    }
 }
 
 /// What `source` lists once the moves of a write are done: the same, with a tree's expanded
@@ -489,7 +535,8 @@ mod tests {
             let sub = PathBuf::from(format!("tree/dir-{d:02}"));
             fs::create_dir_all(root.join(&sub)).unwrap();
             for i in 0..200 {
-                fs::write(root.join(&sub).join(format!("file-{i:03}.rs")), "x").unwrap();
+                let name = format!("file-{d:02}-{i:03}.rs");
+                fs::write(root.join(&sub).join(name), "x").unwrap();
             }
             expanded.insert(sub);
         }
@@ -562,20 +609,68 @@ mod tests {
                 &listing.text,
                 std::iter::once((end, end, Some(".bak".into()))),
             );
-            for (how, transaction) in [
-                ("one name", one),
-                ("each name", renamed),
-                ("the whole text", rewritten),
+            // Lines pasted at the end, as `yp` does, then renamed; with `guides`, a line
+            // yanked with its guides edited.
+            let paste = |lines: Range<usize>, guides: bool| {
+                let start = listing.text.line_to_char(lines.start);
+                let end = listing.text.line_to_char(lines.end);
+                let mut yanked = listing.text.slice(start..end).to_string();
+                if guides {
+                    yanked = yanked.replacen("── ", "─ ", 1);
+                }
+                let end = listing.text.len_chars();
+                let pasted = Transaction::change(
+                    &listing.text,
+                    std::iter::once((end, end, Some(yanked.into()))),
+                );
+                let mut text = listing.text.clone();
+                pasted.apply(&mut text);
+                let ends: Vec<_> = (listing.entries.len()..text.len_lines() - 1)
+                    .map(|line| text.line_to_char(line + 1) - 1)
+                    .collect();
+                let renamed = Transaction::change(
+                    &text,
+                    ends.into_iter().map(|end| (end, end, Some(".bak".into()))),
+                );
+                vec![pasted, renamed]
+            };
+            for (how, transactions) in [
+                ("rename one name", vec![one]),
+                ("rename each name", vec![renamed]),
+                ("rename the whole text", vec![rewritten]),
+                ("copy one line", paste(5000..5001, false)),
+                ("copy 1000 lines", paste(5000..6000, false)),
+                (
+                    "copy one line yanked with other guides",
+                    paste(5000..5001, true),
+                ),
             ] {
                 let mut planned = None;
-                time(&format!("{name}: plan renaming {how}"), &mut || {
+                time(&format!("{name}: plan to {how}"), &mut || {
                     let mut text = listing.text.clone();
-                    transaction.apply(&mut text);
-                    let changes = transaction.changes();
-                    planned = Some(plan::plan(&listing, text.slice(..), changes, &clock, true));
+                    let mut changes = ChangeSet::new(text.slice(..));
+                    for transaction in &transactions {
+                        transaction.apply(&mut text);
+                        changes = changes.compose(transaction.changes().clone());
+                    }
+                    let origins = paste::Origins::new(std::iter::once(&listing));
+                    let pasted = paste::pasted(&listing.text, &transactions, &origins);
+                    planned = Some(plan::plan(
+                        &listing,
+                        text.slice(..),
+                        &changes,
+                        &pasted,
+                        &clock,
+                        true,
+                    ));
                 });
                 let (plan, problems) = planned.unwrap();
-                println!("  {} moves, {} problems", plan.moves.len(), problems.len());
+                println!(
+                    "  {} moves, {} copies, {} problems",
+                    plan.moves.len(),
+                    plan.copies.len(),
+                    problems.len()
+                );
             }
         }
     }

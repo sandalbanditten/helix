@@ -5,7 +5,7 @@
 
 use helix_core::Rope;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -54,6 +54,17 @@ pub struct Listing {
     /// The text the entries were shown as, one line each, which a write compares the edited
     /// text with.
     pub text: Rope,
+    /// The entries whose lines were yanked from this listing last.
+    pub yanked: Option<Yanked>,
+}
+
+/// Lines yanked from a listing, which pasted copy their entries.
+#[derive(Debug, Clone, Default)]
+pub struct Yanked {
+    /// The number of the register write that yanked them, newer ones higher.
+    pub write: u64,
+    /// The paths of their entries, as listed.
+    pub paths: HashSet<PathBuf>,
 }
 
 impl Listing {

@@ -110,6 +110,7 @@ pub fn read(source: &Source, options: &Options) -> Listing {
         repo,
         entries,
         text: Rope::new(),
+        yanked: None,
     }
 }
 

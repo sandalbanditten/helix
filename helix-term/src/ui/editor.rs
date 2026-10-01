@@ -6,7 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
-        dired::Dired,
+        dired::{self, Dired},
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
         statusline,
@@ -1619,6 +1619,10 @@ impl Component for EditorView {
                 }
 
                 let mode = cx.editor.mode();
+                // A dired buffer notes what its commands yank.
+                let dired = Some(helix_view::doc!(cx.editor))
+                    .filter(|doc| doc.dired.is_some())
+                    .map(|doc| (doc.id(), cx.editor.registers.written().0));
 
                 if !self.on_next_key(OnKeyCallbackKind::PseudoPending, &mut cx, key) {
                     match mode {
@@ -1673,6 +1677,12 @@ impl Component for EditorView {
                             }
                         }
                         mode => self.command_mode(mode, &mut cx, key),
+                    }
+                }
+
+                if let Some((doc_id, written)) = dired {
+                    if cx.editor.registers.written().0 != written {
+                        dired::yanked(cx.editor, doc_id);
                     }
                 }
 

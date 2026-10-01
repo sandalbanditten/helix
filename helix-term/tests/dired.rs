@@ -340,6 +340,130 @@ mod test {
         .await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pasted_lines_copy_their_entries() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "dir/inside.txt"])?;
+        fs::write(workspace.path("a.txt"), "a")?;
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        helix_stdx::fs::set_modified(&workspace.path("a.txt"), time)?;
+        let modified = |path: &str| {
+            fs::metadata(workspace.path(path))
+                .unwrap()
+                .modified()
+                .unwrap()
+        };
+        let mut app = workspace.app("dir/inside.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired .<ret>"), None),
+                // A pasted line copies, keeping the time; the copy is named on the line.
+                (
+                    Some("/a\\.txt<ret>xypsa\\.txt<ret>cb.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert_eq!(fs::read_to_string(workspace.path("b.txt")).unwrap(), "a");
+                        assert_eq!(modified("b.txt"), time);
+                        assert!(workspace.path("a.txt").exists());
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                // Directories are copied with everything in them.
+                (
+                    Some("ggxypsdir<ret>cdir2<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert!(workspace.path("dir2/inside.txt").exists());
+                        assert!(workspace.path("dir/inside.txt").exists());
+                    }),
+                ),
+                // A line yanked in another dired buffer copies into this one's directory, even
+                // once that buffer is closed.
+                (Some(":dired dir<ret>"), None),
+                (Some("/inside<ret>xy:bc<ret>:dired .<ret>"), None),
+                (
+                    Some("ggp:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert!(workspace.path("inside.txt").exists());
+                        assert!(workspace.path("dir/inside.txt").exists());
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pasted_lines_copy_the_entry_yanked_of_those_alike() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["x/a.txt", "y/a.txt"])?;
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        for (path, contents) in [("x/a.txt", "x"), ("y/a.txt", "y")] {
+            fs::write(workspace.path(path), contents)?;
+            helix_stdx::fs::set_modified(&workspace.path(path), time)?;
+        }
+        let mut app = workspace.app("x/a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired x<ret>"), None),
+                // Yanked in `x`, whose buffer is closed then, and pasted next to the `a.txt` of
+                // `y`, which reads the same.
+                (Some("xy:bc<ret>:dired y<ret>"), None),
+                (
+                    Some("pxsa\\.txt<ret><A-c>b.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        let copy = fs::read_to_string(workspace.path("y/b.txt")).unwrap();
+                        assert_eq!(copy, "x");
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cut_lines_pasted_into_a_directory_move() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["b.txt", "dir/inside.txt"])?;
+        fs::write(workspace.path("b.txt"), "b")?;
+        let mut app = workspace.app("dir/inside.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("<space>e"), None),
+                (
+                    Some("E"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        assert_eq!(text.lines().count(), 4, "{text}");
+                    }),
+                ),
+                // Below `inside.txt`, the line goes into `dir`, whatever its guides say.
+                (
+                    Some("/b\\.txt<ret>xd/inside<ret>p:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert!(!workspace.path("b.txt").exists());
+                        let moved = fs::read_to_string(workspace.path("dir/b.txt")).unwrap();
+                        assert_eq!(moved, "b");
+                        let text = dired_text(app);
+                        let nested =
+                            |line: &str| line.contains("    ├── ") && line.ends_with("b.txt");
+                        assert!(text.lines().any(nested), "{text}");
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
     /// Times writing many renames at once, from the end of one step to the end of the next, of
     /// which an empty step shows what waiting for the editor to be idle costs. Run it with
     /// `cargo integration-test -- dired::test::measure_writes --ignored --nocapture`.
@@ -369,12 +493,23 @@ mod test {
                         assert_eq!(status(app), format!("Applied {FILES} changes"));
                     }),
                 ),
+                // Every line pasted below the others, the copies named back.
+                (Some("%ygep"), Some(&|_| lap("paste"))),
+                (Some("s\\.md<ret>c.txt<esc>"), Some(&|_| lap("edit"))),
+                (
+                    Some(":w<ret>"),
+                    Some(&|app| {
+                        lap(&format!("write {FILES} copies"));
+                        assert_eq!(status(app), format!("Applied {FILES} changes"));
+                    }),
+                ),
                 (Some(":qa!<ret>"), None),
             ],
             true,
         )
         .await?;
         assert!(workspace.path("file-1999.md").exists());
+        assert!(workspace.path("file-1999.txt").exists());
         Ok(())
     }
 }
