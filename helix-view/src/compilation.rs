@@ -7,6 +7,8 @@ use std::{path::PathBuf, time::Instant};
 
 use helix_stdx::process::ProcessGroup;
 
+use crate::ViewId;
+
 /// Which command a run is, so that running it again knows what to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -33,6 +35,10 @@ pub struct Compilation {
     pub started: Instant,
     /// The running command, stopped when dropped; `None` once it ended.
     pub process: Option<ProcessGroup>,
+    /// The split the command was run from, which loci open in.
+    pub origin: Option<ViewId>,
+    /// Where the locus visited last starts, which `]q` and `[q` go on from.
+    pub visited: Option<usize>,
 }
 
 impl Compilation {

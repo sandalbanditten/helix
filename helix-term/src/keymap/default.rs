@@ -111,6 +111,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "[" => { "Left bracket"
             "d" => goto_prev_diag,
             "D" => goto_first_diag,
+            "q" => goto_prev_locus,
             "s" => goto_prev_spelling,
             "S" => goto_first_spelling,
             "g" => goto_prev_change,
@@ -128,6 +129,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "]" => { "Right bracket"
             "d" => goto_next_diag,
             "D" => goto_last_diag,
+            "q" => goto_next_locus,
             "s" => goto_next_spelling,
             "S" => goto_last_spelling,
             "g" => goto_next_change,

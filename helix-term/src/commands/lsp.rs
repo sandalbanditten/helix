@@ -1139,6 +1139,13 @@ pub fn goto_declaration(cx: &mut Context) {
 }
 
 pub fn goto_definition(cx: &mut Context) {
+    // In the compilation buffer, the locus of the line is the definition.
+    if doc!(cx.editor).compilation.is_some() {
+        if !ui::compilation::open_on_cursor_line(cx.editor) {
+            cx.editor.set_error("No locus on this line");
+        }
+        return;
+    }
     goto_single_impl(
         cx,
         LanguageServerFeature::GotoDefinition,

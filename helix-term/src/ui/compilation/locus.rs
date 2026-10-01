@@ -141,6 +141,17 @@ pub fn target_data(path: &Path, position: Position) -> serde_json::Value {
     json!({ "path": path, "line": position.row, "column": position.col })
 }
 
+/// The file and position a locus diagnostic names.
+pub fn target(data: &serde_json::Value) -> Option<(PathBuf, Position)> {
+    let path = data.get("path")?.as_str()?;
+    let row = data.get("line")?.as_u64()?;
+    let col = data.get("column")?.as_u64()?;
+    Some((
+        PathBuf::from(path),
+        Position::new(row.try_into().ok()?, col.try_into().ok()?),
+    ))
+}
+
 /// Finds the files that the loci of a run name, from the directory it ran in.
 #[derive(Debug)]
 pub struct Resolver {
@@ -576,6 +587,17 @@ Finished at 14:03:12
             ("a.ts(1,5)", Severity::Error, 1, 5)
         );
         assert_eq!(found.len(), 3);
+    }
+
+    #[test]
+    fn locus_diagnostics_carry_their_target() {
+        let path = Path::new("/home/me/demo/src/lib.rs");
+        let data = target_data(path, Position::new(2, 8));
+        assert_eq!(
+            target(&data),
+            Some((path.to_path_buf(), Position::new(2, 8)))
+        );
+        assert_eq!(target(&json!({ "line": 2 })), None);
     }
 
     #[test]

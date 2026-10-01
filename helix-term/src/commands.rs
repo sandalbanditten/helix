@@ -456,6 +456,8 @@ impl MappableCommand {
         goto_last_diag, "Goto last diagnostic",
         goto_next_diag, "Goto next diagnostic",
         goto_prev_diag, "Goto previous diagnostic",
+        goto_next_locus, "Goto next locus",
+        goto_prev_locus, "Goto previous locus",
         goto_next_spelling, "Goto next misspelling",
         goto_prev_spelling, "Goto previous misspelling",
         goto_first_spelling, "Goto first misspelling",
@@ -1400,13 +1402,21 @@ fn resolve_document_link_request(
 /// Prefers LSP document links when the cursor/selection overlaps a link range,
 /// falling back to the built-in path/URL detection otherwise.
 fn goto_file_impl(cx: &mut Context, action: Action) {
+    // A locus of the compilation buffer opens beside it.
+    if ui::compilation::open_on_cursor_line(cx.editor) {
+        return;
+    }
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().clone();
     let selections = doc.selection(view.id).ranges().to_vec();
-    let rel_path = doc
-        .relative_path()
-        .map(|path| path.parent().unwrap().to_path_buf())
-        .unwrap_or_default();
+    // Paths in compilation output are relative to where the command ran.
+    let rel_path = match &doc.compilation {
+        Some(compilation) => compilation.dir.clone(),
+        None => doc
+            .relative_path()
+            .map(|path| path.parent().unwrap().to_path_buf())
+            .unwrap_or_default(),
+    };
     let text = text.slice(..);
 
     let mut lsp_targets = Vec::new();
@@ -4216,6 +4226,18 @@ fn goto_next_diag(cx: &mut Context) {
 
 fn goto_prev_diag(cx: &mut Context) {
     goto_diagnostic(cx, Direction::Backward, Document::shows_diagnostic);
+}
+
+fn goto_next_locus(cx: &mut Context) {
+    if let Err(err) = ui::compilation::visit(cx.editor, Direction::Forward) {
+        cx.editor.set_error(err.to_string());
+    }
+}
+
+fn goto_prev_locus(cx: &mut Context) {
+    if let Err(err) = ui::compilation::visit(cx.editor, Direction::Backward) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 fn goto_next_spelling(cx: &mut Context) {

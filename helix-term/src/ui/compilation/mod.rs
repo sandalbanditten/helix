@@ -14,13 +14,14 @@ use anyhow::bail;
 use helix_core::{
     command_line::Token,
     diagnostic::{DiagnosticProvider, Severity},
+    movement::Direction,
     Diagnostic, Rope, RopeSlice, Selection, Transaction,
 };
 use helix_view::{
     compilation::{Compilation, Kind},
-    doc, doc_mut,
+    current_ref, doc, doc_mut,
     editor::Action,
-    expansion, view_mut, Document, DocumentId, Editor, ViewId,
+    expansion, view, view_mut, Document, DocumentId, Editor, ViewId,
 };
 use jiff::Zoned;
 
@@ -124,6 +125,10 @@ fn buffer(editor: &Editor) -> Option<DocumentId> {
 
 /// Runs `run` in the compilation buffer, shown over the whole editor, stopping the run it showed.
 pub fn start(editor: &mut Editor, run: Run) {
+    // Loci open in the split the command is run from, or in that of the run before when it is
+    // run from the compilation buffer.
+    let focused = editor.tree.focus;
+    let from_buffer = doc!(editor).compilation.is_some();
     let doc_id = show(editor);
     let shell = editor.config().shell.clone();
     let header = output::header(&run.command, &run.dir, &Zoned::now());
@@ -134,9 +139,10 @@ pub fn start(editor: &mut Editor, run: Run) {
 
     let doc = doc_mut!(editor, &doc_id);
     // Stop the old run first, so that the new one doesn't wait for its locks.
-    let id = match doc.compilation.take() {
-        Some(old) => old.run + 1,
-        None => 0,
+    let (id, origin) = match doc.compilation.take() {
+        Some(old) if from_buffer => (old.run + 1, old.origin),
+        Some(old) => (old.run + 1, Some(focused)),
+        None => (0, Some(focused)),
     };
     let spawned = run::spawn(&shell, &run.command, &run.dir, finder, doc_id, id);
     let (process, text) = match spawned {
@@ -154,6 +160,8 @@ pub fn start(editor: &mut Editor, run: Run) {
         run: id,
         started: Instant::now(),
         process,
+        origin,
+        visited: None,
     }));
     replace(editor, doc_id, &text);
 }
@@ -334,6 +342,125 @@ fn finish(editor: &mut Editor, doc_id: DocumentId, end: End) {
         editor.set_error(status);
     } else {
         editor.set_status(status);
+    }
+}
+
+/// The loci of the compilation buffer, in order.
+fn loci(doc: &Document) -> impl DoubleEndedIterator<Item = &Diagnostic> {
+    doc.diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.provider == DiagnosticProvider::Compilation)
+}
+
+/// Opens the locus on the line of the cursor, if the focused buffer is the compilation buffer:
+/// the locus under the cursor, else the first on the line. Tells whether there is one.
+pub fn open_on_cursor_line(editor: &mut Editor) -> bool {
+    let (view, doc) = current_ref!(editor);
+    if doc.compilation.is_none() {
+        return false;
+    }
+    let text = doc.text().slice(..);
+    let cursor = doc.selection(view.id).primary().cursor(text);
+    let line = text.char_to_line(cursor);
+    let on_line: Vec<_> = loci(doc).filter(|locus| locus.line == line).collect();
+    let locus = on_line
+        .iter()
+        .find(|locus| locus.range.start <= cursor && cursor < locus.range.end)
+        .or(on_line.first());
+    let Some(start) = locus.map(|locus| locus.range.start) else {
+        return false;
+    };
+    let doc_id = doc.id();
+    open(editor, doc_id, start);
+    true
+}
+
+/// Visits the next or previous locus of the compilation buffer: after the cursor when the buffer
+/// has the focus, else after the locus visited last. Its cursors move to it, and it opens.
+pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
+    let Some(doc_id) = buffer(editor) else {
+        bail!("No compilation buffer");
+    };
+    let doc = doc!(editor, &doc_id);
+    let focused = view!(editor);
+    let from = if focused.doc == doc_id {
+        Some(
+            doc.selection(focused.id)
+                .primary()
+                .cursor(doc.text().slice(..)),
+        )
+    } else {
+        doc.compilation
+            .as_ref()
+            .and_then(|compilation| compilation.visited)
+    };
+    let range = {
+        let mut loci = loci(doc);
+        let locus = match direction {
+            Direction::Forward => {
+                loci.find(|locus| from.is_none_or(|from| locus.range.start > from))
+            }
+            Direction::Backward => loci
+                .rev()
+                .find(|locus| from.is_none_or(|from| locus.range.start < from)),
+        };
+        locus.map(|locus| locus.range)
+    };
+    let Some(range) = range else {
+        match direction {
+            Direction::Forward => bail!("No next locus"),
+            Direction::Backward => bail!("No previous locus"),
+        }
+    };
+
+    let scrolloff = editor.config().scrolloff;
+    let views: Vec<ViewId> = editor
+        .tree
+        .views()
+        .filter(|(view, _)| view.doc == doc_id)
+        .map(|(view, _)| view.id)
+        .collect();
+    for view_id in views {
+        let view = view_mut!(editor, view_id);
+        let doc = doc_mut!(editor, &doc_id);
+        doc.set_selection(view_id, Selection::single(range.start, range.end));
+        view.ensure_cursor_in_view(doc, scrolloff);
+    }
+    open(editor, doc_id, range.start);
+    Ok(())
+}
+
+/// Opens the locus starting at `start` in the compilation buffer `doc_id`. When the buffer has
+/// the focus, the file opens beside it: in the split the command was run from, else in another,
+/// else in a new one. Otherwise it opens in the focused split.
+fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
+    let doc = doc_mut!(editor, &doc_id);
+    let target = loci(doc)
+        .find(|locus| locus.range.start == start)
+        .and_then(|locus| locus::target(locus.data.as_ref()?));
+    let (Some((path, position)), Some(compilation)) = (target, doc.compilation.as_mut()) else {
+        return;
+    };
+    compilation.visited = Some(start);
+    let origin = compilation.origin;
+
+    let focused = editor.tree.focus;
+    let mut action = Action::Replace;
+    if view!(editor).doc == doc_id {
+        let beside = origin
+            .filter(|&origin| origin != focused && editor.tree.contains(origin))
+            .or_else(|| {
+                let mut views = editor.tree.views().map(|(view, _)| view.id);
+                views.find(|&view| view != focused)
+            });
+        match beside {
+            Some(view) => editor.focus(view),
+            None => action = Action::VerticalSplit,
+        }
+    }
+    match editor.open(&path, action) {
+        Ok(_) => crate::commands::goto_position(editor, position),
+        Err(err) => editor.set_error(format!("Open file failed: {err}")),
     }
 }
 
