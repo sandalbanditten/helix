@@ -69,9 +69,12 @@ where
     current: usize,
     /// Kind of cursor (hidden or others)
     cursor_kind: CursorKind,
+    /// The cursor position and kind set by the last draw call, `None` when the terminal may
+    /// have been reset since
+    last_cursor: Option<(Option<(u16, u16)>, CursorKind)>,
     /// Viewport
     viewport: Viewport,
-    /// Set to request a full clear. The erase is deferred to the next `flush` so it is emitted
+    /// Set to request a full clear. The erase is deferred to the next draw call so it is emitted
     /// inside the same synchronized-output frame as the repaint to avoid painting blank frames
     force_clear: bool,
 }
@@ -113,20 +116,24 @@ where
             ],
             current: 0,
             cursor_kind: CursorKind::Block,
+            last_cursor: None,
             viewport: options.viewport,
             force_clear: false,
         })
     }
 
     pub fn claim(&mut self) -> io::Result<()> {
+        self.last_cursor = None;
         self.backend.claim()
     }
 
     pub fn reconfigure(&mut self, config: Config) -> io::Result<()> {
+        self.last_cursor = None;
         self.backend.reconfigure(config)
     }
 
     pub fn restore(&mut self) -> io::Result<()> {
+        self.last_cursor = None;
         self.backend.restore()
     }
 
@@ -150,19 +157,6 @@ where
         &mut self.backend
     }
 
-    /// Obtains a difference between the previous and the current buffer and passes it to the
-    /// current backend for drawing.
-    pub fn flush(&mut self) -> io::Result<()> {
-        if self.force_clear {
-            self.backend.clear()?;
-            self.force_clear = false;
-        }
-        let previous_buffer = &self.buffers[1 - self.current];
-        let current_buffer = &self.buffers[self.current];
-        let updates = previous_buffer.diff(current_buffer);
-        self.backend.draw(updates.into_iter())
-    }
-
     /// Updates the Terminal so that internal buffers match the requested size. Requested size will
     /// be saved so the size can remain consistent when rendering.
     pub fn resize(&mut self, area: Rect) -> io::Result<()> {
@@ -182,7 +176,8 @@ where
     }
 
     /// Synchronizes terminal size, calls the rendering closure, flushes the current internal state
-    /// and prepares for the next draw call.
+    /// and prepares for the next draw call. Writes nothing if neither the cells nor the cursor
+    /// changed.
     pub fn draw(
         &mut self,
         cursor_position: Option<(u16, u16)>,
@@ -199,30 +194,53 @@ where
         // // Terminal. Thus, we're taking the important data out of the Frame and dropping it.
         // let cursor_position = frame.cursor_position;
 
-        // One synchronized frame for the whole draw
-        self.backend.start_sync()?;
+        let previous_buffer = &self.buffers[1 - self.current];
+        let current_buffer = &self.buffers[self.current];
+        let updates = previous_buffer.diff(current_buffer);
+        let cursor = Some((cursor_position, cursor_kind));
 
-        // Draw to stdout
-        self.flush()?;
+        // tmux repaints the whole pane for every synchronized frame, even one that changes no
+        // cells, which flickers the cursor where tmux's output isn't synchronized. So only cell
+        // updates get a synchronized frame and an unchanged frame isn't written at all.
+        if self.force_clear || !updates.is_empty() {
+            // One synchronized frame for the whole draw
+            self.backend.start_sync()?;
 
+            // Draw to stdout
+            if self.force_clear {
+                self.backend.clear()?;
+                self.force_clear = false;
+            }
+            self.backend.draw(updates.into_iter())?;
+            self.draw_cursor(cursor_position, cursor_kind)?;
+
+            self.backend.end_sync()?;
+            self.backend.flush()?;
+        } else if self.last_cursor != cursor {
+            self.draw_cursor(cursor_position, cursor_kind)?;
+            self.backend.flush()?;
+        }
+        self.last_cursor = cursor;
+
+        // Swap buffers
+        self.buffers[1 - self.current].reset();
+        self.current = 1 - self.current;
+        Ok(())
+    }
+
+    fn draw_cursor(
+        &mut self,
+        cursor_position: Option<(u16, u16)>,
+        cursor_kind: CursorKind,
+    ) -> io::Result<()> {
         if let Some((x, y)) = cursor_position {
             self.set_cursor(x, y)?;
         }
 
         match cursor_kind {
-            CursorKind::Hidden => self.hide_cursor()?,
-            kind => self.show_cursor(kind)?,
+            CursorKind::Hidden => self.hide_cursor(),
+            kind => self.show_cursor(kind),
         }
-
-        self.backend.end_sync()?;
-
-        // Swap buffers
-        self.buffers[1 - self.current].reset();
-        self.current = 1 - self.current;
-
-        // Flush
-        self.backend.flush()?;
-        Ok(())
     }
 
     #[inline]
@@ -248,10 +266,11 @@ where
 
     /// Clear the terminal and force a full redraw on the next draw call.
     ///
-    /// The physical erase is deferred to the next `flush` so it shares a
+    /// The physical erase is deferred to the next draw call so it shares a
     /// synchronized frame with the repaint.
     pub fn clear(&mut self) -> io::Result<()> {
         self.force_clear = true;
+        self.last_cursor = None;
         // Reset the back buffer to make sure the next update will redraw everything.
         self.buffers[1 - self.current].reset();
         Ok(())
@@ -260,5 +279,165 @@ where
     /// Queries the real size of the backend.
     pub fn size(&self) -> Rect {
         self.backend.size().unwrap_or(DEFAULT_TERMINAL_SIZE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::Cell;
+    use helix_view::graphics::Style;
+
+    /// Records the calls that write to the terminal.
+    #[derive(Debug, Default)]
+    struct RecordingBackend {
+        calls: Vec<String>,
+    }
+
+    impl Backend for RecordingBackend {
+        fn claim(&mut self) -> io::Result<()> {
+            self.calls.push("claim".into());
+            Ok(())
+        }
+
+        fn reconfigure(&mut self, _config: Config) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn restore(&mut self) -> io::Result<()> {
+            self.calls.push("restore".into());
+            Ok(())
+        }
+
+        fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.calls.push(format!("draw({} cells)", content.count()));
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> io::Result<()> {
+            self.calls.push("hide_cursor".into());
+            Ok(())
+        }
+
+        fn show_cursor(&mut self, kind: CursorKind) -> io::Result<()> {
+            self.calls.push(format!("show_cursor({kind:?})"));
+            Ok(())
+        }
+
+        fn set_cursor(&mut self, x: u16, y: u16) -> io::Result<()> {
+            self.calls.push(format!("set_cursor({x}, {y})"));
+            Ok(())
+        }
+
+        fn clear(&mut self) -> io::Result<()> {
+            self.calls.push("clear".into());
+            Ok(())
+        }
+
+        fn start_sync(&mut self) -> io::Result<()> {
+            self.calls.push("start_sync".into());
+            Ok(())
+        }
+
+        fn end_sync(&mut self) -> io::Result<()> {
+            self.calls.push("end_sync".into());
+            Ok(())
+        }
+
+        fn size(&self) -> io::Result<Rect> {
+            Ok(Rect::new(0, 0, 10, 2))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.calls.push("flush".into());
+            Ok(())
+        }
+
+        fn supports_true_color(&self) -> bool {
+            false
+        }
+
+        fn get_theme_mode(&self) -> Option<helix_view::theme::Mode> {
+            None
+        }
+
+        fn set_background_color(
+            &mut self,
+            _color: Option<helix_view::theme::Color>,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Renders `text` like a frame of the editor, draws it and returns the calls made.
+    fn draw(
+        terminal: &mut Terminal<RecordingBackend>,
+        text: &str,
+        cursor_position: (u16, u16),
+    ) -> Vec<String> {
+        terminal
+            .current_buffer_mut()
+            .set_string(0, 0, text, Style::default());
+        terminal
+            .draw(Some(cursor_position), CursorKind::Bar)
+            .unwrap();
+        std::mem::take(&mut terminal.backend_mut().calls)
+    }
+
+    #[test]
+    fn unchanged_frames_write_nothing() {
+        let mut terminal = Terminal::new(RecordingBackend::default()).unwrap();
+        draw(&mut terminal, "abc", (3, 0));
+        assert!(draw(&mut terminal, "abc", (3, 0)).is_empty());
+        assert!(draw(&mut terminal, "abc", (3, 0)).is_empty());
+    }
+
+    #[test]
+    fn moving_only_the_cursor_writes_no_synchronized_frame() {
+        let mut terminal = Terminal::new(RecordingBackend::default()).unwrap();
+        draw(&mut terminal, "abc", (3, 0));
+        assert_eq!(
+            draw(&mut terminal, "abc", (1, 0)),
+            ["set_cursor(1, 0)", "show_cursor(Bar)", "flush"]
+        );
+    }
+
+    #[test]
+    fn changed_cells_are_drawn_in_a_synchronized_frame() {
+        let mut terminal = Terminal::new(RecordingBackend::default()).unwrap();
+        draw(&mut terminal, "abc", (3, 0));
+        assert_eq!(
+            draw(&mut terminal, "abd", (3, 0)),
+            [
+                "start_sync",
+                "draw(1 cells)",
+                "set_cursor(3, 0)",
+                "show_cursor(Bar)",
+                "end_sync",
+                "flush"
+            ]
+        );
+    }
+
+    #[test]
+    fn clearing_draws_the_next_frame_in_full() {
+        let mut terminal = Terminal::new(RecordingBackend::default()).unwrap();
+        draw(&mut terminal, "abc", (3, 0));
+        terminal.clear().unwrap();
+        assert_eq!(
+            draw(&mut terminal, "abc", (3, 0)),
+            [
+                "start_sync",
+                "clear",
+                "draw(3 cells)",
+                "set_cursor(3, 0)",
+                "show_cursor(Bar)",
+                "end_sync",
+                "flush"
+            ]
+        );
     }
 }
