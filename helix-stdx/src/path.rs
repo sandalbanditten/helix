@@ -311,7 +311,9 @@ pub fn find_path_positions(src: RopeSlice<'_>) -> impl Iterator<Item = PathPosit
     // The end of the last position found, as the numbers in it read like file names too.
     let mut found_end = 0;
     find_paths(src, true).filter_map(move |mut path| {
-        if path.start < found_end {
+        // Every word reads as a file name, but few have a position right after them.
+        let next = (path.end < src.len_bytes()).then(|| src.byte(path.end));
+        if path.start < found_end || !matches!(next, Some(b':' | b'(')) {
             return None;
         }
         // The path regex finds a URL whole, or its scheme apart from the path after it. Only
