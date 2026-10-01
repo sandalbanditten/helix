@@ -35,10 +35,14 @@ impl Watcher {
             paths: HashSet::new(),
         }
         .spawn();
+        // A full channel is waited for with a timer of the runtime, which notify's thread has
+        // to enter first: a burst of changes, like many renames, fills it.
+        let runtime = tokio::runtime::Handle::current();
         let inner = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else {
                 return;
             };
+            let _runtime = runtime.enter();
             // Listing a directory opens it; only a finished write is a change.
             if let EventKind::Access(kind) = event.kind {
                 if kind != AccessKind::Close(AccessMode::Write) {
