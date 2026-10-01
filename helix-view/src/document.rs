@@ -1725,13 +1725,21 @@ impl Document {
             };
             Some((&mut diagnostic.range.end, assoc))
         }));
+        // The text before the first change keeps its lines, so the diagnostics there keep theirs,
+        // like the loci a compilation buffer holds above the output appended to it.
+        let first_change = changes
+            .changes_iter()
+            .next()
+            .map_or(usize::MAX, |(from, ..)| from);
         self.diagnostics.retain_mut(|diagnostic| {
             if diagnostic.zero_width {
                 diagnostic.range.end = diagnostic.range.start
             } else if diagnostic.range.start >= diagnostic.range.end {
                 return false;
             }
-            diagnostic.line = self.text.char_to_line(diagnostic.range.start);
+            if diagnostic.range.start >= first_change {
+                diagnostic.line = self.text.char_to_line(diagnostic.range.start);
+            }
             true
         });
 
@@ -2788,6 +2796,41 @@ mod test {
             source: None,
             data: None,
         }
+    }
+
+    #[test]
+    fn edits_renumber_the_lines_of_the_diagnostics_after_them() {
+        let mut doc = Document::from(
+            Rope::from("one\ntwo\nthree\n"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view = ViewId::default();
+        doc.ensure_view_init(view);
+        let mut three = diagnostic(8, 13, DiagnosticProvider::Spelling);
+        three.line = 2;
+        doc.replace_diagnostics(
+            [diagnostic(0, 3, DiagnosticProvider::Spelling), three],
+            &[],
+            &DiagnosticProvider::Spelling,
+        );
+        let lines = |doc: &Document| -> Vec<_> {
+            doc.diagnostics()
+                .iter()
+                .map(|diag| (diag.range.start, diag.line))
+                .collect()
+        };
+        let mut edit = |from, to, text: &str| {
+            let change = (from, to, Some(text.into()));
+            let transaction = Transaction::change(doc.text(), std::iter::once(change));
+            doc.apply(&transaction, view);
+            lines(&doc)
+        };
+        // A line inserted between them, and the first word broken in two lines, which keeps
+        // where the last one starts but not its line.
+        assert_eq!(edit(4, 4, "new\n"), [(0, 0), (12, 3)]);
+        assert_eq!(edit(0, 3, "o\nn"), [(2, 1), (12, 4)]);
     }
 
     #[test]
