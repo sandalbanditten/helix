@@ -8,8 +8,9 @@ pub struct Tree {
     root: ViewId,
     // (container, index inside the container)
     pub focus: ViewId,
-    // fullscreen: bool,
     area: Rect,
+    /// The view covering the whole area while it has the focus, hiding the others.
+    zoomed: Option<ViewId>,
 
     nodes: SlotMap<ViewId, Node>,
 
@@ -96,8 +97,8 @@ impl Tree {
         Self {
             root,
             focus: root,
-            // fullscreen: false,
             area,
+            zoomed: None,
             nodes,
             stack: Vec::new(),
         }
@@ -344,12 +345,32 @@ impl Tree {
     }
 
     pub fn resize(&mut self, area: Rect) -> bool {
-        if self.area != area {
+        // A zoom ends once its view loses the focus.
+        if self.area != area || self.zoomed != self.zoomed() {
             self.area = area;
             self.recalculate();
             return true;
         }
         false
+    }
+
+    /// Lets `view` cover the whole area while it has the focus, or ends the zoom with `None`.
+    pub fn set_zoom(&mut self, view: Option<ViewId>) {
+        self.zoomed = view;
+        self.recalculate();
+    }
+
+    /// The view covering the whole area, if one does.
+    pub fn zoomed(&self) -> Option<ViewId> {
+        self.zoomed
+            .filter(|&view| view == self.focus && self.try_get(view).is_some())
+    }
+
+    /// The views shown: only the zoomed one while there is one, else every view.
+    pub fn visible_views(&self) -> impl Iterator<Item = (&View, bool)> {
+        let zoomed = self.zoomed();
+        self.views()
+            .filter(move |(view, _)| zoomed.is_none_or(|zoomed| zoomed == view.id))
     }
 
     pub fn recalculate(&mut self) {
@@ -438,6 +459,13 @@ impl Tree {
                     }
                 }
             }
+        }
+
+        // The other views keep their areas for when the zoom ends.
+        self.zoomed = self.zoomed();
+        if let Some(view) = self.zoomed {
+            let area = self.area;
+            self.get_mut(view).area = area;
         }
     }
 
@@ -964,5 +992,56 @@ mod test {
                 .map(|(view, _)| view.area.width)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Two views side by side in a tree of `area`: the left one and the focused right one.
+    fn two_views(area: Rect) -> (Tree, ViewId, ViewId) {
+        let mut tree = Tree::new(area);
+        let left = tree.insert(View::new(DocumentId::default(), GutterConfig::default()));
+        let right = tree.split(
+            View::new(DocumentId::default(), GutterConfig::default()),
+            Layout::Vertical,
+        );
+        (tree, left, right)
+    }
+
+    fn visible(tree: &Tree) -> Vec<ViewId> {
+        tree.visible_views().map(|(view, _)| view.id).collect()
+    }
+
+    #[test]
+    fn a_zoomed_view_covers_the_area_while_it_has_the_focus() {
+        let area = Rect::new(0, 0, 80, 24);
+        let (mut tree, left, right) = two_views(area);
+        let (left_area, right_area) = (tree.get(left).area, tree.get(right).area);
+
+        tree.set_zoom(Some(right));
+        assert_eq!(tree.zoomed(), Some(right));
+        assert_eq!(tree.get(right).area, area);
+        assert_eq!(tree.get(left).area, left_area);
+        assert_eq!(visible(&tree), [right]);
+
+        // Moving the focus ends the zoom, and the next resize lays the views out again.
+        tree.focus = left;
+        assert_eq!(tree.zoomed(), None);
+        assert_eq!(visible(&tree).len(), 2);
+        assert!(tree.resize(area));
+        assert_eq!(tree.get(right).area, right_area);
+        assert!(!tree.resize(area));
+
+        // Coming back does not zoom again.
+        tree.focus = right;
+        assert_eq!(tree.zoomed(), None);
+    }
+
+    #[test]
+    fn removing_the_zoomed_view_ends_the_zoom() {
+        let area = Rect::new(0, 0, 80, 24);
+        let (mut tree, left, right) = two_views(area);
+        tree.set_zoom(Some(right));
+        tree.remove(right);
+        assert_eq!(tree.zoomed(), None);
+        assert_eq!(tree.get(left).area, area);
+        assert_eq!(visible(&tree), [left]);
     }
 }

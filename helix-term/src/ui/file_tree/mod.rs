@@ -277,6 +277,11 @@ impl FileTree {
         if !self.is_presented() {
             return None;
         }
+        // A zoomed view covers the panel too.
+        if editor.tree.zoomed().is_some() {
+            self.focused = false;
+            return None;
+        }
         if !self
             .workspace
             .as_ref()
