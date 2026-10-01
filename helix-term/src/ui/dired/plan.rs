@@ -14,9 +14,12 @@ use std::{
 };
 
 use helix_core::{Assoc, ChangeSet, Operation, Rope, RopeSlice};
-use helix_view::dired::{Entry, Kind, Listing, Source};
+use helix_view::dired::{Entry, GitStatus, Kind, Listing, Source};
 
-use super::format::{self, Clock};
+use super::{
+    format::{self, Clock},
+    git,
+};
 
 /// What a write does to the files, in the order it does it.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -25,11 +28,19 @@ pub struct Plan {
     /// Paths whose entries go, with everything in them.
     pub deletions: Vec<PathBuf>,
     pub changes: Vec<Change>,
+    /// The working tree of the repository the git edits are for.
+    pub repo: Option<PathBuf>,
+    pub git: Vec<(git::Action, PathBuf)>,
+    pub ignores: Vec<git::IgnoreEdit>,
 }
 
 impl Plan {
     pub fn len(&self) -> usize {
-        self.moves.len() + self.deletions.len() + self.changes.len()
+        self.moves.len()
+            + self.deletions.len()
+            + self.changes.len()
+            + self.git.len()
+            + self.ignores.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -75,20 +86,25 @@ pub struct Problem {
 
 /// The plan for the edits of `text` since it was `listing.text`, which `changes` turned it into,
 /// and the problems found. The plan is only to be carried out without problems, or with only
-/// forced ones under `:w!`.
+/// forced ones under `:w!`. Only a `trusted` workspace runs git.
 pub fn plan(
     listing: &Listing,
     text: RopeSlice,
     changes: &ChangeSet,
     clock: &Clock,
+    trusted: bool,
 ) -> (Plan, Vec<Problem>) {
     let mut planner = Planner {
         listing,
         text,
         clock,
+        trusted,
         root: listing.source.root(),
         tree: matches!(listing.source, Source::Tree { .. }),
-        plan: Plan::default(),
+        plan: Plan {
+            repo: listing.repo.clone(),
+            ..Plan::default()
+        },
         problems: Vec::new(),
         move_ranges: Vec::new(),
         touched: Vec::new(),
@@ -248,6 +264,7 @@ struct Planner<'a> {
     listing: &'a Listing,
     text: RopeSlice<'a>,
     clock: &'a Clock,
+    trusted: bool,
     root: &'a Path,
     tree: bool,
     plan: Plan,
@@ -335,16 +352,26 @@ impl Planner<'_> {
                 None => self.problem(chars(new.date.clone()), "Unreadable date", false),
             }
         }
-        if listed.git.as_ref().map(listed_field) != new.git.as_ref().map(field) {
-            let range = new.git.clone().map(chars).unwrap_or(start..start);
-            self.problem(range, "The git status cannot be edited yet", false);
-        }
+        let git_edited = match (entry.git, new.git.clone()) {
+            (Some(status), Some(range))
+                if listed.git.as_ref().map(listed_field) != Some(field(&range)) =>
+            {
+                self.git(entry, &path, status, field(&range), chars(range));
+                true
+            }
+            _ => false,
+        };
 
         let name = format::unquote(field(&new.name));
         if name.trim().is_empty() {
             self.delete(index, chars(new.name.clone()));
         } else if field(&new.name) != listed_field(&listed.name) {
-            self.rename(entry, &path, &name, chars(new.name.clone()));
+            if git_edited {
+                let message = "Rename and edit the git status in separate writes";
+                self.problem(chars(new.name.clone()), message, false);
+            } else {
+                self.rename(entry, &path, &name, chars(new.name.clone()));
+            }
         }
         if entry.kind == Kind::Link
             && listed.target.as_ref().map(listed_field) != new.target.as_ref().map(field)
@@ -419,6 +446,46 @@ impl Planner<'_> {
                     gid: gid.flatten(),
                 },
             ),
+        }
+    }
+
+    /// Plans the git edit turning the `status` of the entry at `path` into `text`.
+    fn git(
+        &mut self,
+        entry: &Entry,
+        path: &Path,
+        status: GitStatus,
+        text: &str,
+        range: Range<usize>,
+    ) {
+        let new: Vec<char> = text.chars().collect();
+        let [index, worktree] = new[..] else {
+            return self.problem(range, "Unreadable git status", false);
+        };
+        let Some(repo) = self.listing.repo.clone() else {
+            return;
+        };
+        let is_dir = entry.kind == Kind::Directory;
+        match git::edit(status, (index, worktree)) {
+            Err(message) => self.problem(range, message, false),
+            Ok(None) => {}
+            Ok(Some(git::Edit::Git(_))) if !self.trusted => {
+                let message = "Git edits need a trusted workspace (use :workspace-trust)";
+                self.problem(range, message, false);
+            }
+            Ok(Some(git::Edit::Git(action))) => {
+                if action.discards() {
+                    let name = format::quote(&format::name(entry));
+                    let message = format!("Discards the changes of {name} (use :w! to apply)");
+                    self.problem(range, message, true);
+                }
+                self.plan.git.push((action, path.to_path_buf()));
+            }
+            Ok(Some(git::Edit::Ignore)) => self.plan.ignores.push(git::ignore(&repo, path, is_dir)),
+            Ok(Some(git::Edit::Unignore)) => match git::unignore(&repo, path, is_dir) {
+                Ok(edit) => self.plan.ignores.push(edit),
+                Err(message) => self.problem(range, message, false),
+            },
         }
     }
 
@@ -707,6 +774,7 @@ mod tests {
             text.slice(..),
             transaction.changes(),
             &Clock::system(),
+            true,
         )
     }
 

@@ -8,6 +8,7 @@
 mod apply;
 mod colors;
 mod format;
+mod git;
 mod listing;
 mod plan;
 
@@ -118,7 +119,7 @@ fn you() -> You {
 }
 
 /// How listings of `root` are read.
-fn options(editor: &Editor, root: &Path) -> listing::Options {
+fn listing_options(editor: &Editor, root: &Path) -> listing::Options {
     let config = editor.config();
     listing::Options {
         sort: config.file_tree.sort,
@@ -134,7 +135,7 @@ fn options(editor: &Editor, root: &Path) -> listing::Options {
 /// Lists `source` in the background and shows it over the whole editor, with the cursor on the
 /// entry at `select` (relative to the listing's root) if there is one.
 pub fn open(editor: &Editor, source: Source, select: Option<PathBuf>) {
-    let options = options(editor, source.root());
+    let options = listing_options(editor, source.root());
     in_background(
         move || read(&source, &options),
         move |editor, listing| show(editor, listing, select),
@@ -246,7 +247,15 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
         .changes_since(0)
         .map(|transaction| transaction.changes().clone())
         .unwrap_or_else(|| ChangeSet::new(doc.text().slice(..)));
-    let (plan, problems) = plan::plan(&listing, doc.text().slice(..), &changes, &Clock::system());
+    let trusted = listing_options(editor, listing.source.root()).trust_git;
+    let doc = doc_mut!(editor, &doc_id);
+    let (plan, problems) = plan::plan(
+        &listing,
+        doc.text().slice(..),
+        &changes,
+        &Clock::system(),
+        trusted,
+    );
     publish(doc, &problems);
     let blocking: Vec<_> = problems
         .iter()
@@ -263,7 +272,7 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
 
     let (applied, result) = apply::apply(editor, &plan);
     let source = moved_source(&listing.source, &applied);
-    let listing = read(&source, &options(editor, source.root()));
+    let listing = read(&source, &listing_options(editor, source.root()));
     relist(editor, doc_id, view_id, listing);
     result.map_err(|err| {
         anyhow!(
@@ -306,7 +315,7 @@ pub fn reload(editor: &mut Editor, doc_id: DocumentId) {
     else {
         return;
     };
-    let listing = read(&source, &options(editor, source.root()));
+    let listing = read(&source, &listing_options(editor, source.root()));
     let view_id = editor.get_synced_view_id(doc_id);
     relist(editor, doc_id, view_id, listing);
 }

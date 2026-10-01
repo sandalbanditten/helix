@@ -5,6 +5,7 @@
 //! swap places go through a temporary name.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -12,7 +13,10 @@ use std::{
 use anyhow::{anyhow, Context as _, Result};
 use helix_view::Editor;
 
-use super::plan::{Change, Metadata, Move, Plan};
+use super::{
+    git,
+    plan::{Change, Metadata, Move, Plan},
+};
 use crate::ui::file_tree::ops;
 
 /// What a write got done.
@@ -40,8 +44,28 @@ pub fn apply(editor: &mut Editor, plan: &Plan) -> (Applied, Result<()>) {
     let mut applied = Applied::default();
     let result = moves(editor, plan.moves.clone(), &mut applied)
         .and_then(|()| deletions(editor, &plan.deletions, &mut applied))
-        .and_then(|()| changes(&plan.changes, &mut applied));
+        .and_then(|()| changes(&plan.changes, &mut applied))
+        .and_then(|()| git(plan, &mut applied));
     (applied, result)
+}
+
+/// Runs git once for each kind of git edit, then edits the ignore files.
+fn git(plan: &Plan, applied: &mut Applied) -> Result<()> {
+    if let Some(repo) = &plan.repo {
+        let mut actions: BTreeMap<git::Action, Vec<PathBuf>> = BTreeMap::new();
+        for (action, path) in &plan.git {
+            actions.entry(*action).or_default().push(applied.path(path));
+        }
+        for (action, paths) in actions {
+            git::run(repo, action, &paths)?;
+            applied.done += paths.len();
+        }
+    }
+    for edit in &plan.ignores {
+        git::apply(edit).with_context(|| format!("Cannot edit {}", shown(&edit.file)))?;
+        applied.done += 1;
+    }
+    Ok(())
 }
 
 fn moves(editor: &mut Editor, mut pending: Vec<Move>, applied: &mut Applied) -> Result<()> {
