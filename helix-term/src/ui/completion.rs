@@ -564,7 +564,8 @@ impl Component for Completion {
                 return;
             }
 
-            Rect::new(0, y, area.width, avail_height.min(15))
+            let editor_area = cx.editor.tree.area();
+            Rect::new(editor_area.x, y, editor_area.width, avail_height.min(15))
         };
 
         // clear area

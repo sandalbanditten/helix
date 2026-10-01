@@ -135,6 +135,31 @@ mod test {
             )
             .await
         }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn completion_documentation_below_spans_the_editor() -> anyhow::Result<()> {
+            let workspace = Workspace::new(&["a.txt"])?;
+            let mut app = workspace.app("a.txt")?;
+            // At the right edge there is no room for the documentation beside the menu.
+            let complete = format!("i{}./<C-x>", " ".repeat(90));
+            test_key_sequences(
+                &mut app,
+                vec![
+                    (Some("<space>E"), None),
+                    (Some(&complete), None),
+                    (
+                        Some("<C-n>"),
+                        Some(&|app| {
+                            let editor_x = app.editor.tree.area().x as usize;
+                            assert!(editor_x > 0, "the file tree isn't shown");
+                            assert_eq!(column_of(app, "type:"), Some(editor_x + 1));
+                        }),
+                    ),
+                ],
+                false,
+            )
+            .await
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
