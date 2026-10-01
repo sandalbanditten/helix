@@ -3276,6 +3276,8 @@ fn buffer_picker(cx: &mut Context) {
     struct BufferMeta<'a> {
         id: DocumentId,
         path: Option<Cow<'a, Path>>,
+        /// What a buffer without a path is called, like `[scratch]`.
+        name: String,
         is_modified: bool,
         is_current: bool,
         focused_at: std::time::Instant,
@@ -3287,6 +3289,7 @@ fn buffer_picker(cx: &mut Context) {
             .path()
             .map(ToOwned::to_owned)
             .map(helix_stdx::path::get_relative_path),
+        name: doc.display_name().into_owned(),
         is_modified: doc.is_modified(),
         is_current: doc.id() == current,
         focused_at: doc.focused_at,
@@ -3314,9 +3317,13 @@ fn buffer_picker(cx: &mut Context) {
             }
             flags.into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
+        PickerColumn::new(
+            "path",
+            |meta: &BufferMeta, config: &PathStyleConfig| match meta.path.as_deref() {
+                Some(path) => config.stylize(Some(path), None),
+                None => meta.name.as_str().into(),
+            },
+        ),
     ];
 
     let initial_cursor = if cx

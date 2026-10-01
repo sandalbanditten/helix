@@ -27,14 +27,14 @@ use helix_core::{
 };
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
-    document::{Mode, SCRATCH_BUFFER_NAME},
+    document::Mode,
     editor::{CompleteAction, CursorShapeConfig},
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
     Document, Editor, Theme, View,
 };
-use std::{mem::take, num::NonZeroUsize, ops, path::PathBuf, rc::Rc};
+use std::{mem::take, num::NonZeroUsize, ops, rc::Rc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
@@ -715,7 +715,6 @@ impl EditorView {
 
     /// Render bufferline at the top
     pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface) {
-        let scratch = PathBuf::from(SCRATCH_BUFFER_NAME); // default filename to use for scratch buffer
         surface.clear_with(
             viewport,
             editor
@@ -738,13 +737,11 @@ impl EditorView {
         let current_doc = view!(editor).doc;
 
         for doc in editor.documents() {
+            // A buffer without a path goes by its name, like `[scratch]`.
             let fname = doc
                 .path()
-                .unwrap_or(&scratch)
-                .file_name()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default();
+                .and_then(|path| path.file_name())
+                .map_or_else(|| doc.display_name(), |name| name.to_string_lossy());
 
             let style = if current_doc == doc.id() {
                 bufferline_active
