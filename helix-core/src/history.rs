@@ -134,6 +134,22 @@ impl History {
         down_txns.chain(up_txns).reduce(|acc, tx| tx.compose(acc))
     }
 
+    /// The transactions leading from `revision` to the current revision, in the order they
+    /// apply: the steps [`changes_since`](Self::changes_since) composes.
+    pub fn transactions_since(&self, revision: usize) -> Vec<Transaction> {
+        let lca = self.lowest_common_ancestor(revision, self.current);
+        let up = self.path_up(revision, lca);
+        let down = self.path_up(self.current, lca);
+        up.iter()
+            .map(|&n| self.revisions[n].inversion.clone())
+            .chain(
+                down.iter()
+                    .rev()
+                    .map(|&n| self.revisions[n].transaction.clone()),
+            )
+            .collect()
+    }
+
     /// Undo the last edit.
     pub fn undo(&mut self) -> Option<&Transaction> {
         if self.at_root() {
@@ -388,6 +404,41 @@ impl std::str::FromStr for UndoKind {
 mod test {
     use super::*;
     use crate::Selection;
+
+    #[test]
+    fn transactions_since_lead_across_branches() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from("a"),
+            selection: Selection::point(0),
+        };
+        let commit = |history: &mut History, state: &mut State, text: &str| {
+            let end = state.doc.len_chars();
+            let transaction =
+                Transaction::change(&state.doc, [(end, end, Some(text.into()))].into_iter());
+            history.commit_revision(&transaction, state);
+            transaction.apply(&mut state.doc);
+        };
+        commit(&mut history, &mut state, "b");
+        commit(&mut history, &mut state, "c");
+        // Undo `c` and branch off with `d`.
+        let undo = history.undo().unwrap().clone();
+        undo.apply(&mut state.doc);
+        commit(&mut history, &mut state, "d");
+        assert_eq!(state.doc, "abd");
+
+        // From `abc`, revision 2: back to `ab`, then to `abd`, one step after another.
+        let mut doc = Rope::from("abc");
+        let transactions = history.transactions_since(2);
+        assert_eq!(transactions.len(), 2);
+        for transaction in &transactions {
+            transaction.apply(&mut doc);
+        }
+        assert_eq!(doc, "abd");
+        assert!(history
+            .transactions_since(history.current_revision())
+            .is_empty());
+    }
 
     #[test]
     fn test_undo_redo() {
