@@ -43,6 +43,16 @@ pub fn move_path(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 fn copy_and_remove(from: &Path, to: &Path) -> io::Result<()> {
+    copy_path(from, to)?;
+    remove(from)
+}
+
+/// Copies `from` to `to` like `cp -rp`: directories with everything in them, symlinks as
+/// symlinks, keeping permissions and modified times.
+///
+/// Refuses to overwrite: it fails with [`io::ErrorKind::AlreadyExists`] if `to` exists. When
+/// copying fails, the partial copy is removed.
+pub fn copy_path(from: &Path, to: &Path) -> io::Result<()> {
     if fs::symlink_metadata(to).is_ok() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -54,7 +64,7 @@ fn copy_and_remove(from: &Path, to: &Path) -> io::Result<()> {
         let _ = remove(to);
         return Err(err);
     }
-    remove(from)
+    Ok(())
 }
 
 /// Copies `from` to `to`, descending into directories. Symlinks are recreated, not followed.
@@ -62,7 +72,7 @@ fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(from)?;
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
-        copy_symlink(from, to)
+        copy_symlink(from, to)?;
     } else if file_type.is_dir() {
         fs::create_dir(to)?;
         for entry in fs::read_dir(from)? {
@@ -70,10 +80,28 @@ fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
             copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
         }
         // Applied last so that a read-only directory can still be filled.
-        fs::set_permissions(to, metadata.permissions())
+        fs::set_permissions(to, metadata.permissions())?;
     } else {
-        fs::copy(from, to).map(drop)
+        fs::copy(from, to)?;
     }
+    // Last, as filling a directory changes its time.
+    keep_modified(to, &metadata)
+}
+
+#[cfg(unix)]
+fn keep_modified(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    set_modified(path, metadata.modified()?)
+}
+
+#[cfg(not(unix))]
+fn keep_modified(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.is_file() {
+        fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_modified(metadata.modified()?)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -107,6 +135,32 @@ mod tests {
     fn write(path: PathBuf, contents: &str) -> PathBuf {
         fs::write(&path, contents).unwrap();
         path
+    }
+
+    #[test]
+    fn copies_keep_modified_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from");
+        fs::create_dir(&from).unwrap();
+        let file = write(from.join("file.txt"), "file");
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+
+        let to = dir.path().join("to");
+        copy_path(&from, &to).unwrap();
+        let copied = fs::metadata(to.join("file.txt")).unwrap();
+        assert_eq!(copied.modified().unwrap(), time);
+        assert_eq!(fs::read_to_string(to.join("file.txt")).unwrap(), "file");
+        assert!(from.join("file.txt").exists());
+        assert_eq!(
+            copy_path(&from, &to).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
     }
 
     #[test]
