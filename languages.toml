@@ -355,6 +355,8 @@ block-comment-tokens = [
 language-servers = [ "rust-analyzer" ]
 indent = { tab-width = 4, unit = "    " }
 persistent-diagnostic-sources = ["rustc", "clippy"]
+compile-command = "cargo build"
+test-command = "cargo test"
 
 [language.auto-pairs]
 '(' = ')'
@@ -705,6 +707,8 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "clangd" ]
 indent = { tab-width = 2, unit = "  " }
+compile-command = "make"
+test-command = "make test"
 
 [language.debugger]
 name = "lldb-dap"
@@ -743,6 +747,8 @@ block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "clangd" ]
 indent = { tab-width = 2, unit = "  " }
 formatter = { command = "clang-format" }
+compile-command = "make"
+test-command = "make test"
 
 [language.debugger]
 name = "lldb-dap"
@@ -897,6 +903,8 @@ language-servers = [ "gopls", "golangci-lint-lsp" ]
 # TODO: gopls needs utf-8 offsets?
 code-actions-on-save = ["source.organizeImports"]
 indent = { tab-width = 4, unit = "\t" }
+compile-command = "go build ./..."
+test-command = "go test ./..."
 
 [language.debugger]
 name = "go"
@@ -1512,6 +1520,8 @@ language-servers = [ "jdtls" ]
 indent = { tab-width = 2, unit = "  " }
 comment-tokens = ["//"]
 block-comment-tokens = { start = "/*", end = "*/" }
+compile-command = "gradle build"
+test-command = "gradle test"
 
 [[grammar]]
 name = "java"
@@ -1741,6 +1751,8 @@ comment-token = "--"
 block-comment-tokens = { start = "{-", end = "-}" }
 language-servers = [ "haskell-language-server" ]
 indent = { tab-width = 2, unit = "  " }
+compile-command = "cabal build"
+test-command = "cabal test"
 
 [[grammar]]
 name = "haskell"
@@ -1801,6 +1813,8 @@ comment-tokens = ["//", "///", "//!"]
 language-servers = [ "zls" ]
 indent = { tab-width = 4, unit = "    " }
 formatter = { command = "zig" , args = ["fmt", "--stdin"] }
+compile-command = "zig build"
+test-command = "zig build test"
 
 [language.debugger]
 name = "lldb-dap"
@@ -2184,6 +2198,8 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 2, unit = "  " }
 language-servers = [ "metals" ]
+compile-command = "sbt compile"
+test-command = "sbt test"
 
 [[grammar]]
 name = "scala"
@@ -2416,6 +2432,8 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 4, unit = "    " }
 language-servers = [ "kotlin-language-server" ]
+compile-command = "gradle build"
+test-command = "gradle test"
 
 [[grammar]]
 name = "kotlin"
@@ -3956,6 +3974,7 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = ["tinymist"]
 indent = { tab-width = 2, unit = "  " }
+compile-command = "typst compile %{file_path_absolute}"
 
 [language.auto-pairs]
 '(' = ')'

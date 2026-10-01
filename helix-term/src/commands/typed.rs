@@ -201,6 +201,55 @@ fn dired(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
     Ok(())
 }
 
+fn compile(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    compile_impl(cx, event, helix_view::compilation::Kind::Compile, false)
+}
+
+fn force_compile(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    compile_impl(cx, event, helix_view::compilation::Kind::Compile, true)
+}
+
+fn compile_test(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    compile_impl(cx, event, helix_view::compilation::Kind::Test, false)
+}
+
+fn force_compile_test(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    compile_impl(cx, event, helix_view::compilation::Kind::Test, true)
+}
+
+/// Runs the configured command of `kind` in the compilation buffer.
+fn compile_impl(
+    cx: &mut compositor::Context,
+    event: PromptEvent,
+    kind: helix_view::compilation::Kind,
+    force: bool,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let command = ui::compilation::configured(cx.editor, kind)?;
+    if !force {
+        let forced = ui::compilation::forced(kind, &command);
+        ui::compilation::ensure_saved(cx.editor, &forced)?;
+    }
+    let run = ui::compilation::run_for(cx.editor, kind, command);
+    ui::compilation::start(cx.editor, run);
+    Ok(())
+}
+
 fn compile_any(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     compile_any_impl(cx, args, event, false)
 }
@@ -3261,6 +3310,50 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::positional(&[completers::directory]),
         signature: Signature {
             positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "compile",
+        aliases: &[],
+        doc: "Run the compile command of the language in the compilation buffer.",
+        fun: compile,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "compile!",
+        aliases: &[],
+        doc: "Run the compile command of the language, even with unsaved buffers.",
+        fun: force_compile,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "compile-test",
+        aliases: &[],
+        doc: "Run the test command of the language in the compilation buffer.",
+        fun: compile_test,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "compile-test!",
+        aliases: &[],
+        doc: "Run the test command of the language, even with unsaved buffers.",
+        fun: force_compile_test,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },

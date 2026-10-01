@@ -62,6 +62,13 @@ pub struct LanguageConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formatter: Option<FormatterConfiguration>,
 
+    /// The shell command `:compile` runs in the compilation buffer, like `cargo build`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compile_command: Option<String>,
+    /// The shell command `:compile-test` runs in the compilation buffer, like `cargo test`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_command: Option<String>,
+
     /// If set, overrides `editor.path-completion`.
     pub path_completion: Option<bool>,
     /// If set, overrides `editor.word-completion`.
@@ -777,6 +784,35 @@ fn default_timeout() -> u64 {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn compile_commands_of_the_default_config() {
+        let config = crate::config::default_lang_config();
+        let language = |name: &str| {
+            config
+                .language
+                .iter()
+                .find(|language| language.language_id == name)
+                .unwrap()
+        };
+        let commands = |name: &str| {
+            let language = language(name);
+            (
+                language.compile_command.as_deref(),
+                language.test_command.as_deref(),
+            )
+        };
+        assert_eq!(commands("rust"), (Some("cargo build"), Some("cargo test")));
+        assert_eq!(
+            commands("kotlin"),
+            (Some("gradle build"), Some("gradle test"))
+        );
+        assert_eq!(
+            commands("typst"),
+            (Some("typst compile %{file_path_absolute}"), None)
+        );
+        assert_eq!(commands("python"), (None, None));
+    }
 
     #[test]
     fn spelling_config_merged() {

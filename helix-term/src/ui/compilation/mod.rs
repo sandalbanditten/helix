@@ -10,12 +10,12 @@ mod run;
 use std::{path::PathBuf, time::Instant};
 
 use anyhow::bail;
-use helix_core::{Rope, RopeSlice, Selection, Transaction};
+use helix_core::{command_line::Token, Rope, RopeSlice, Selection, Transaction};
 use helix_view::{
     compilation::{Compilation, Kind},
     doc, doc_mut,
     editor::Action,
-    view_mut, Document, DocumentId, Editor, ViewId,
+    expansion, view_mut, Document, DocumentId, Editor, ViewId,
 };
 use jiff::Zoned;
 
@@ -32,8 +32,8 @@ pub struct Run {
     pub language: Option<String>,
 }
 
-/// A run of `command` for the focused buffer: in its workspace, or where the compilation buffer
-/// ran when it is the focused one.
+/// A run of `command` for the focused buffer: in the root of its language, or where the
+/// compilation buffer ran when it is the focused one.
 pub fn run_for(editor: &Editor, kind: Kind, command: String) -> Run {
     let doc = doc!(editor);
     if let Some(compilation) = &doc.compilation {
@@ -47,9 +47,63 @@ pub fn run_for(editor: &Editor, kind: Kind, command: String) -> Run {
     Run {
         kind,
         command,
-        dir: doc.workspace_root().to_path_buf(),
+        dir: language_root(editor, doc),
         language: doc.language_name().map(ToOwned::to_owned),
     }
+}
+
+/// The directory a build for `doc` runs in, the one its language server gets: the top-most one in
+/// its workspace with one of its language's root markers, like `Cargo.toml`, else the workspace.
+/// That is the workspace of Helix's working directory when `doc` lies in it, else `doc`'s own.
+fn language_root(editor: &Editor, doc: &Document) -> PathBuf {
+    let (cwd_workspace, _) = helix_loader::find_workspace();
+    let workspace = match doc.path() {
+        Some(path) if path.starts_with(&cwd_workspace) => cwd_workspace,
+        _ => doc.workspace_root().to_path_buf(),
+    };
+    let root = doc.language_config().and_then(|config| {
+        let dir = doc.path()?.parent()?.to_str()?;
+        let config_roots = &editor.config().workspace_lsp_roots;
+        let root_dirs = config
+            .workspace_lsp_roots
+            .as_deref()
+            .unwrap_or(config_roots);
+        helix_lsp::find_lsp_workspace(dir, &config.roots, root_dirs, &workspace, false)
+    });
+    root.unwrap_or(workspace)
+}
+
+/// The configured command of `kind` for the focused buffer, with its expansions done: its
+/// language's, or that of the compilation buffer's language when it is the focused one. There it
+/// is the command it ran, when that was of `kind`.
+pub fn configured(editor: &Editor, kind: Kind) -> anyhow::Result<String> {
+    let doc = doc!(editor);
+    let language = match &doc.compilation {
+        Some(compilation) if compilation.kind == kind => return Ok(compilation.command.clone()),
+        Some(compilation) => compilation.language.clone(),
+        None => doc.language_name().map(ToOwned::to_owned),
+    };
+    let key = match kind {
+        Kind::Compile => "compile-command",
+        Kind::Test => "test-command",
+        Kind::Any => bail!("Commands given by hand are not configured"),
+    };
+    let Some(language) = language else {
+        bail!("No {key} without a language");
+    };
+    let loader = editor.syn_loader.load();
+    let command = loader
+        .language_for_name(language.clone())
+        .map(|lang| loader.language(lang).config())
+        .and_then(|config| match kind {
+            Kind::Compile => config.compile_command.clone(),
+            Kind::Test => config.test_command.clone(),
+            Kind::Any => None,
+        });
+    let Some(command) = command else {
+        bail!("No {key} for {language}");
+    };
+    Ok(expansion::expand(editor, Token::expand(command.as_str()))?.into_owned())
 }
 
 /// The compilation buffer, if there is one.
