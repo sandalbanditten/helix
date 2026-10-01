@@ -115,8 +115,11 @@ impl<'a> DecorationManager<'a> {
                     Ordering::Less => {
                         *hook_char_idx = decoration.skip_concealed_anchor(grapheme.char_idx)
                     }
+                    // once per grapheme, so returning the same char idx asks for the next grapheme
+                    // at it, like the one after virtual text
                     Ordering::Equal => {
-                        *hook_char_idx = decoration.decorate_grapheme(renderer, grapheme)
+                        *hook_char_idx = decoration.decorate_grapheme(renderer, grapheme);
+                        break;
                     }
                     Ordering::Greater => break,
                 }
@@ -148,6 +151,9 @@ impl<'a> DecorationManager<'a> {
 pub struct Cursor<'a> {
     pub cache: &'a CursorCache,
     pub primary_cursor: usize,
+    /// Whether the cursor goes in front of virtual text at its position, like an inlay hint,
+    /// rather than on the grapheme after it. Typing in insert mode lands in front of it.
+    pub before_virtual_text: bool,
 }
 impl Decoration for Cursor<'_> {
     fn reset_pos(&mut self, pos: usize) -> usize {
@@ -163,6 +169,9 @@ impl Decoration for Cursor<'_> {
         renderer: &mut TextRenderer,
         grapheme: &FormattedGrapheme,
     ) -> usize {
+        if grapheme.is_virtual() && !self.before_virtual_text {
+            return self.primary_cursor;
+        }
         if renderer.column_in_bounds(grapheme.visual_pos.col, grapheme.width())
             && renderer.offset.row <= grapheme.visual_pos.row
         {

@@ -219,6 +219,7 @@ impl EditorView {
             decorations.add_decoration(text_decorations::Cursor {
                 cache: &editor.cursor_cache,
                 primary_cursor: view.render_selection(doc).primary().cursor(text),
+                before_virtual_text: editor.mode() == Mode::Insert,
             });
         }
         // inline diagnostics are laid out for the real cursor by the text annotations
