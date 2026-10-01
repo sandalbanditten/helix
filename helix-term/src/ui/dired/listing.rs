@@ -111,6 +111,7 @@ pub fn read(source: &Source, options: &Options) -> Listing {
         entries,
         text: Rope::new(),
         yanked: None,
+        writing: false,
     }
 }
 

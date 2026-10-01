@@ -296,6 +296,7 @@ mod tests {
                 .collect(),
             text: Rope::from(text),
             yanked: None,
+            writing: false,
         }
     }
 

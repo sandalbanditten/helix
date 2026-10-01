@@ -40,8 +40,11 @@ use self::{
     format::Clock,
 };
 use crate::{
-    job,
-    ui::{file_tree::watch::Watcher, EditorView},
+    job::{self, Jobs},
+    ui::{
+        file_tree::{ops, watch::Watcher},
+        EditorView,
+    },
 };
 
 /// What dired keeps beside its buffers: the colors of the environment and who the editor runs
@@ -312,16 +315,34 @@ fn relist(editor: &mut Editor, doc_id: DocumentId, view_id: ViewId, mut listing:
     let transaction = helix_core::diff::compare_ropes(doc.text(), &listing.text);
     doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
-    listing.yanked = doc.dired.take().and_then(|listed| listed.yanked);
+    if let Some(listed) = doc.dired.take() {
+        listing.yanked = listed.yanked;
+        listing.writing = listed.writing;
+    }
     doc.dired = Some(Box::new(listing));
     publish(doc, &[]);
     editor.reset_history(doc_id);
 }
 
+/// When a dired write makes the copies its pasted lines ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Copying {
+    /// Off the main thread, finishing the write once they are made.
+    InBackground,
+    /// Before the write returns, as when the buffer closes or the editor quits right after.
+    Blocking,
+}
+
 /// Applies the edits of the dired buffer `doc_id` to the files: all of them, or none if they
 /// have problems, which become diagnostics. Only `force` (`:w!`) applies what deletes or creates.
-/// The buffer is listed anew after.
-pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Result<()> {
+/// The buffer is listed anew after, unless it was edited while the write was still `copying`.
+pub fn write(
+    editor: &mut Editor,
+    jobs: &Jobs,
+    doc_id: DocumentId,
+    force: bool,
+    copying: Copying,
+) -> anyhow::Result<()> {
     let view_id = editor.get_synced_view_id(doc_id);
     let view = view_mut!(editor, view_id);
     let doc = doc_mut!(editor, &doc_id);
@@ -329,6 +350,9 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
     let Some(listing) = doc.dired.as_deref().cloned() else {
         bail!("{} is no dired buffer", doc.display_name());
     };
+    if listing.writing {
+        bail!("A write is still copying");
+    }
     let history = doc.history.get_mut();
     let transactions = history.transactions_since(0);
     let changes = history
@@ -363,10 +387,67 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
         problems => bail!("{} problems, nothing applied", problems.len()),
     }
 
-    let (applied, result) = apply::apply(editor, &plan);
-    let source = moved_source(&listing.source, &applied);
-    let listing = read(&source, &listing_options(editor, source.root()));
-    relist(editor, doc_id, view_id, listing);
+    let version = doc.version();
+    let source = listing.source;
+    if plan.copies.is_empty() || copying == Copying::Blocking {
+        let (applied, result) = apply::apply(editor, &plan);
+        return finish(editor, doc_id, version, &source, &plan, &applied, result);
+    }
+    let mut applied = apply::Applied::default();
+    if let Err(err) = apply::before_copies(editor, &plan, &mut applied) {
+        return finish(editor, doc_id, version, &source, &plan, &applied, Err(err));
+    }
+    let copies = apply::copies(&plan, &applied);
+    editor.set_status(match copies.len() {
+        1 => "Copying 1 entry...".to_owned(),
+        copies => format!("Copying {copies} entries..."),
+    });
+    if let Some(listing) = doc_mut!(editor, &doc_id).dired.as_deref_mut() {
+        listing.writing = true;
+    }
+    let job = ops::copy_in_background(editor, copies.clone(), move |editor, copied, result| {
+        let mut applied = applied;
+        applied.done += copied;
+        let result = result
+            .map_err(|err| {
+                let (from, to) = &copies[copied];
+                apply::copy_failed(from, to, err)
+            })
+            .and_then(|()| apply::after_copies(editor, &plan, &mut applied));
+        if let Some(listing) = editor
+            .document_mut(doc_id)
+            .and_then(|doc| doc.dired.as_deref_mut())
+        {
+            listing.writing = false;
+        }
+        if let Err(err) = finish(editor, doc_id, version, &source, &plan, &applied, result) {
+            editor.set_error(err.to_string());
+        }
+    });
+    jobs.add(job);
+    Ok(())
+}
+
+/// Ends a write of the dired buffer `doc_id` that got `applied` done: lists the buffer anew,
+/// unless it was edited since the write began at `version`, and tells what was applied.
+fn finish(
+    editor: &mut Editor,
+    doc_id: DocumentId,
+    version: i32,
+    source: &Source,
+    plan: &plan::Plan,
+    applied: &apply::Applied,
+    result: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let edited = editor
+        .document(doc_id)
+        .is_some_and(|doc| doc.version() != version);
+    if !edited && editor.document(doc_id).is_some() {
+        let source = moved_source(source, applied);
+        let listing = read(&source, &listing_options(editor, source.root()));
+        let view_id = editor.get_synced_view_id(doc_id);
+        relist(editor, doc_id, view_id, listing);
+    }
     result.map_err(|err| {
         anyhow!(
             "Applied {} of {} changes: {err:#}",
@@ -374,11 +455,16 @@ pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Re
             plan.len()
         )
     })?;
-    editor.set_status(match plan.len() {
+    let status = match plan.len() {
         _ if plan.is_empty() => "No changes".to_owned(),
         1 => "Applied 1 change".to_owned(),
         changes => format!("Applied {changes} changes"),
-    });
+    };
+    if edited {
+        editor.set_status(format!("{status}; :reload lists the edited buffer anew"));
+    } else {
+        editor.set_status(status);
+    }
     Ok(())
 }
 

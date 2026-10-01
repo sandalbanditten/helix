@@ -472,7 +472,7 @@ impl FileTree {
         }
 
         self.copying.insert(to.clone());
-        editor.set_status(format!("Copying '{from_shown}' to '{to_shown}'…"));
+        editor.set_status(format!("Copying '{from_shown}' to '{to_shown}'..."));
         let (generation, cursor) = (workspace.generation, workspace.cursor);
         let copies = vec![(clip.path, to.clone())];
         let job = ops::copy_in_background(editor, copies, move |editor, _, result| {

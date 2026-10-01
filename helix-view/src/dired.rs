@@ -56,6 +56,8 @@ pub struct Listing {
     pub text: Rope,
     /// The entries whose lines were yanked from this listing last.
     pub yanked: Option<Yanked>,
+    /// Whether a write of the buffer is still making its copies.
+    pub writing: bool,
 }
 
 /// Lines yanked from a listing, which pasted copy their entries.

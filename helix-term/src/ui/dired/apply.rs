@@ -2,11 +2,12 @@
 //!
 //! Every path of a plan is as it was listed. Moves are done one at a time, each once its target
 //! is free, and the paths of what is still to do follow every directory that moved; entries that
-//! swap places go through a temporary name. Copies are made after the moves.
+//! swap places go through a temporary name. Copies are made after the moves, and can be made off
+//! the main thread between [`before_copies`] and [`after_copies`].
 
 use std::{
     collections::BTreeMap,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -52,12 +53,47 @@ impl Applied {
 /// Carries out `plan`, stopping at the first failure, which is returned with what was done.
 pub fn apply(editor: &mut Editor, plan: &Plan) -> (Applied, Result<()>) {
     let mut applied = Applied::default();
-    let result = moves(editor, plan.moves.clone(), &mut applied)
-        .and_then(|()| copies(editor, &plan.copies, &mut applied))
-        .and_then(|()| deletions(editor, &plan.deletions, &mut applied))
-        .and_then(|()| changes(&plan.changes, &mut applied))
-        .and_then(|()| git(plan, &mut applied));
+    let result = before_copies(editor, plan, &mut applied)
+        .and_then(|()| {
+            for (from, to) in copies(plan, &applied) {
+                editor
+                    .copy_path(&from, &to)
+                    .map_err(|err| copy_failed(&from, &to, err))?;
+                applied.done += 1;
+            }
+            Ok(())
+        })
+        .and_then(|()| after_copies(editor, plan, &mut applied));
     (applied, result)
+}
+
+/// Carries out the steps of `plan` that come before its copies: the moves.
+pub fn before_copies(editor: &mut Editor, plan: &Plan, applied: &mut Applied) -> Result<()> {
+    moves(editor, plan.moves.clone(), applied)
+}
+
+/// The copies of `plan` to make once `applied` is done, each from and to where its paths are
+/// then, in order: a copy into another copy waits for it.
+pub fn copies(plan: &Plan, applied: &Applied) -> Vec<(PathBuf, PathBuf)> {
+    let mut copies: Vec<_> = plan.copies.iter().collect();
+    copies.sort_by(|a, b| a.to.cmp(&b.to));
+    copies
+        .into_iter()
+        .map(|Move { from, to }| (applied.path(from), applied.target(to)))
+        .collect()
+}
+
+/// The failure to copy `from` to `to`.
+pub fn copy_failed(from: &Path, to: &Path, err: io::Error) -> anyhow::Error {
+    anyhow::Error::new(err).context(format!("Cannot copy {} to {}", shown(from), shown(to)))
+}
+
+/// Carries out the steps of `plan` that come after its copies: the deletions, which may be of
+/// what was copied, the changes, which may be to the copies, and the git edits.
+pub fn after_copies(editor: &mut Editor, plan: &Plan, applied: &mut Applied) -> Result<()> {
+    deletions(editor, &plan.deletions, applied)
+        .and_then(|()| changes(&plan.changes, applied))
+        .and_then(|()| git(plan, applied))
 }
 
 /// Runs git once for each kind of git edit, then edits the ignore files.
@@ -166,20 +202,6 @@ fn temporary(path: &Path) -> PathBuf {
         .map(|i| path.with_file_name(format!(".{name}.dired-{i}")))
         .find(|candidate| fs::symlink_metadata(candidate).is_err())
         .expect("some name is free")
-}
-
-fn copies(editor: &mut Editor, copies: &[Move], applied: &mut Applied) -> Result<()> {
-    // A copy into another copy waits for it.
-    let mut copies: Vec<_> = copies.iter().collect();
-    copies.sort_by(|a, b| a.to.cmp(&b.to));
-    for Move { from, to } in copies {
-        let (from, to) = (applied.path(from), applied.target(to));
-        editor
-            .copy_path(&from, &to)
-            .with_context(|| format!("Cannot copy {} to {}", shown(&from), shown(&to)))?;
-        applied.done += 1;
-    }
-    Ok(())
 }
 
 fn deletions(editor: &mut Editor, deletions: &[PathBuf], applied: &mut Applied) -> Result<()> {

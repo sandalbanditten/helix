@@ -534,6 +534,7 @@ mod tests {
             entries,
             text: helix_core::Rope::new(),
             yanked: None,
+            writing: false,
         }
     }
 

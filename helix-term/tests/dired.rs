@@ -464,6 +464,101 @@ mod test {
         .await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copies_are_made_in_the_background() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "dir/inside.txt"])?;
+        fs::write(workspace.path("a.txt"), "a")?;
+        let mut app = workspace.app("dir/inside.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired .<ret>"), None),
+                // Once the copy is made, the buffer is listed anew.
+                (
+                    Some("/a\\.txt<ret>xypsa\\.txt<ret>cb.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert_eq!(fs::read_to_string(workspace.path("b.txt")).unwrap(), "a");
+                        assert!(dired_text(app).contains("b.txt"));
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                // Keys come before the copy is done: the second write is refused, and the
+                // buffer edited meanwhile keeps its text.
+                (
+                    Some("/b\\.txt<ret>xypsb\\.txt<ret>cc.txt<esc>:w<ret>:w<ret>ggO<esc>"),
+                    Some(&|app| {
+                        assert_eq!(
+                            status(app),
+                            "Applied 1 change; :reload lists the edited buffer anew"
+                        );
+                        assert_eq!(fs::read_to_string(workspace.path("c.txt")).unwrap(), "a");
+                        assert!(doc!(app.editor).is_modified());
+                        assert!(dired_text(app).starts_with('\n'));
+                    }),
+                ),
+                (
+                    Some(":reload<ret>"),
+                    Some(&|app| {
+                        assert!(dired_text(app).contains("c.txt"));
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_copies_keep_the_editor_open() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = Workspace::new(&["open.txt", "secret.txt"])?;
+        let secret = workspace.path("secret.txt");
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o000))?;
+        if fs::read(&secret).is_ok() {
+            // Running with CAP_DAC_OVERRIDE (e.g. as root): nothing can fail to copy.
+            return Ok(());
+        }
+        let mut app = workspace.app("open.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired .<ret>"), None),
+                (
+                    Some("/secret<ret>xypssecret<ret>ccopy<esc>:w<ret>"),
+                    Some(&|app| {
+                        let status = status(app);
+                        assert!(
+                            status.starts_with("Applied 0 of 1 changes: Cannot copy"),
+                            "{status}"
+                        );
+                        assert!(!workspace.path("copy.txt").exists());
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                // Writing and quitting copies first, so the failure keeps the editor open.
+                (
+                    Some("/secret<ret>xypssecret<ret>ccopy<esc>:wq<ret>"),
+                    Some(&|app| {
+                        let status = status(app);
+                        assert!(
+                            status.ends_with("Applied 0 of 1 changes: Cannot copy secret.txt to copy.txt: Permission denied (os error 13)"),
+                            "{status}"
+                        );
+                        assert!(!workspace.path("copy.txt").exists());
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
     /// Times writing many renames at once, from the end of one step to the end of the next, of
     /// which an empty step shows what waiting for the editor to be idle costs. Run it with
     /// `cargo integration-test -- dired::test::measure_writes --ignored --nocapture`.

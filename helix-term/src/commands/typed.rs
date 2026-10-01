@@ -81,6 +81,7 @@ fn exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
                 force: false,
                 auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
                 code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+                closing: true,
             },
         )?;
     }
@@ -101,6 +102,7 @@ fn force_exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
                 force: true,
                 auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
                 code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+                closing: true,
             },
         )?;
     }
@@ -418,7 +420,12 @@ fn write_impl(
         if path.is_some() {
             bail!("A dired buffer cannot be written to a file");
         }
-        return ui::dired::write(cx.editor, doc_id, options.force);
+        let copying = if options.closing {
+            ui::dired::Copying::Blocking
+        } else {
+            ui::dired::Copying::InBackground
+        };
+        return ui::dired::write(cx.editor, cx.jobs, doc_id, options.force, copying);
     }
 
     if doc.trim_trailing_whitespace() {
@@ -560,6 +567,9 @@ pub struct WriteOptions {
     pub force: bool,
     pub auto_format: bool,
     pub code_actions: bool,
+    /// Whether the buffer closes or the editor quits right after, so that a dired buffer makes
+    /// its copies before the write returns.
+    pub closing: bool,
 }
 
 fn write(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
@@ -574,6 +584,7 @@ fn write(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
             force: false,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: false,
         },
     )
 }
@@ -590,6 +601,7 @@ fn force_write(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> 
             force: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: false,
         },
     )
 }
@@ -610,6 +622,7 @@ fn write_buffer_close(
             force: false,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     )?;
 
@@ -633,6 +646,7 @@ fn force_write_buffer_close(
             force: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     )?;
 
@@ -822,6 +836,7 @@ fn write_quit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
             force: false,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     )?;
     cx.block_try_flush_writes()?;
@@ -844,6 +859,7 @@ fn force_write_quit(
             force: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     )?;
     cx.block_try_flush_writes()?;
@@ -889,6 +905,8 @@ pub struct WriteAllOptions {
     pub write_scratch: bool,
     pub auto_format: bool,
     pub code_actions: bool,
+    /// Whether the editor quits right after, see [`WriteOptions::closing`].
+    pub closing: bool,
 }
 
 pub fn write_all_impl(
@@ -1002,8 +1020,13 @@ pub fn write_all_impl(
     }
 
     let mut failed = Vec::new();
+    let copying = if options.closing {
+        ui::dired::Copying::Blocking
+    } else {
+        ui::dired::Copying::InBackground
+    };
     for doc_id in dired {
-        if let Err(err) = ui::dired::write(cx.editor, doc_id, options.force) {
+        if let Err(err) = ui::dired::write(cx.editor, cx.jobs, doc_id, options.force, copying) {
             failed.push(format!(
                 "{}: {err}",
                 doc!(cx.editor, &doc_id).display_name()
@@ -1033,6 +1056,7 @@ fn write_all(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> an
             write_scratch: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: false,
         },
     )
 }
@@ -1053,6 +1077,7 @@ fn force_write_all(
             write_scratch: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: false,
         },
     )
 }
@@ -1072,6 +1097,7 @@ fn write_all_quit(
             write_scratch: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     )?;
     quit_all_impl(cx, false)
@@ -1092,6 +1118,7 @@ fn force_write_all_quit(
             write_scratch: true,
             auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
             code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+            closing: true,
         },
     );
     quit_all_impl(cx, true)
@@ -1756,6 +1783,7 @@ fn update(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyho
                 force: false,
                 auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
                 code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
+                closing: false,
             },
         )
     } else {
