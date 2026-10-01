@@ -364,6 +364,10 @@ that entry when it is a directory listed with its contents, whatever the guides 
 pasted once in the same write moves its entry instead. Other new lines cannot be added and lines
 cannot be joined. When the lines of several entries read exactly like a pasted line, it copies the
 one cut in the same write or yanked last, or any of them when they are files holding the same.
+`:w` makes the copies in the background: the buffer keeps its text until they are done and the
+rest of the write is applied, then it is listed anew, unless it was edited meanwhile (`:reload`
+lists it anew then). Writes that close the buffer or quit, like `:wq`, `:x` and `:wbc`, make the
+copies first, so that a failed copy keeps the editor open.
 
 The git column holds the staged and the unstaged letter of an entry, like `git status --short`;
 for a directory those of everything in it. Each letter is edited on its own, and the next listing

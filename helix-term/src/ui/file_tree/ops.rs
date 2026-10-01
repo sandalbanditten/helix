@@ -188,4 +188,24 @@ mod tests {
         assert_eq!(free("Makefile", false, &["Makefile"]), "Makefile-1");
         assert_eq!(free("my.dir", true, &["my.dir"]), "my.dir-1");
     }
+
+    /// Times naming a copy next to its entry and a thousand copies made before, as pasting does.
+    /// Run it with `cargo test --release -p helix-term --lib measure_free_names -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_free_names() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("file.rs"), "").unwrap();
+        for n in 1..=1000 {
+            fs::write(dir.path().join(format!("file-{n}.rs")), "").unwrap();
+        }
+        let start = std::time::Instant::now();
+        let name = free_name("file.rs".as_ref(), false, |candidate| {
+            fs::symlink_metadata(dir.path().join(candidate)).is_ok()
+        });
+        let elapsed = start.elapsed();
+        assert_eq!(name, "file-1001.rs");
+        eprintln!("a free name after 1000 taken ones: {elapsed:?}");
+    }
 }

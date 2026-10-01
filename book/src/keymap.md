@@ -521,6 +521,9 @@ there.
 | `a`                  | New file, in a row of its directory (with a trailing `/` a directory) |
 | `A`                  | New directory, in a row of its directory |
 | `d`                  | Delete for good, after asking |
+| `y`                  | Copy, putting its path relative to the root in the clipboard |
+| `x`                  | Cut, putting its path relative to the root in the clipboard |
+| `p`                  | Paste, in a row of its directory |
 | `e`                  | Edit directory in [dired](./editor.md#editordired-section) |
 | `E`                  | Edit tree in [dired](./editor.md#editordired-section) |
 | `/`                  | Search for a file |
@@ -534,6 +537,11 @@ The search, typed in the command line, moves the cursor to the first file after 
 of the tree, whose path matches like in the [file picker](./pickers.md) as you type, and highlights
 every matching file in view; `Enter` keeps the cursor there and `Escape` goes back. New files are created in the directory under the cursor, or in the one holding the file under
 it, and open in a buffer. Renaming and moving keep open buffers on their files.
+
+Pasting goes in the same directory as a new file. Its row holds a free name to edit: the entry's
+own, or one like `file-1.rs` when that is taken, and `Enter` pastes. A copied entry is copied like
+`cp -rp` does, directories with everything in them, in the background, and can be pasted again; a
+cut one is moved, once.
 
 ## Prompt
 
