@@ -29,6 +29,8 @@ pub struct Registers {
     inner: HashMap<char, Vec<String>>,
     clipboard_provider: Box<dyn DynAccess<ClipboardProvider>>,
     pub last_search_register: char,
+    /// How many times values were written, and the register written last.
+    written: (u64, Option<char>),
 }
 
 impl Registers {
@@ -37,7 +39,14 @@ impl Registers {
             inner: Default::default(),
             clipboard_provider,
             last_search_register: '/',
+            written: (0, None),
         }
+    }
+
+    /// How many times values were written with [`Registers::write`], and the register written
+    /// last, to tell whether and where a command wrote any.
+    pub fn written(&self) -> (u64, Option<char>) {
+        self.written
     }
 
     pub fn read<'a>(&'a self, name: char, editor: &'a Editor) -> Option<RegisterValues<'a>> {
@@ -92,11 +101,13 @@ impl Registers {
                 )?;
                 values.reverse();
                 self.inner.insert(name, values);
+                self.written = (self.written.0 + 1, Some(name));
                 Ok(())
             }
             _ => {
                 values.reverse();
                 self.inner.insert(name, values);
+                self.written = (self.written.0 + 1, Some(name));
                 Ok(())
             }
         }
