@@ -1,0 +1,278 @@
+//! The compilation buffer: the output of a command like `cargo build`, shown over the whole
+//! editor as it arrives.
+//!
+//! It is a pathless [`Document`] carrying the [`Compilation`] it shows. The command runs in a
+//! process group of its own, read off the main thread; dropping the document stops it.
+
+mod output;
+mod run;
+
+use std::{path::PathBuf, time::Instant};
+
+use anyhow::bail;
+use helix_core::{Rope, RopeSlice, Selection, Transaction};
+use helix_view::{
+    compilation::{Compilation, Kind},
+    doc, doc_mut,
+    editor::Action,
+    view_mut, Document, DocumentId, Editor, ViewId,
+};
+use jiff::Zoned;
+
+use self::output::End;
+
+/// A command to run in the compilation buffer.
+#[derive(Debug, Clone)]
+pub struct Run {
+    pub kind: Kind,
+    pub command: String,
+    /// The directory it runs in.
+    pub dir: PathBuf,
+    /// The language it was run for.
+    pub language: Option<String>,
+}
+
+/// A run of `command` for the focused buffer: in its workspace, or where the compilation buffer
+/// ran when it is the focused one.
+pub fn run_for(editor: &Editor, kind: Kind, command: String) -> Run {
+    let doc = doc!(editor);
+    if let Some(compilation) = &doc.compilation {
+        return Run {
+            kind,
+            command,
+            dir: compilation.dir.clone(),
+            language: compilation.language.clone(),
+        };
+    }
+    Run {
+        kind,
+        command,
+        dir: doc.workspace_root().to_path_buf(),
+        language: doc.language_name().map(ToOwned::to_owned),
+    }
+}
+
+/// The compilation buffer, if there is one.
+fn buffer(editor: &Editor) -> Option<DocumentId> {
+    editor
+        .documents()
+        .find(|doc| doc.compilation.is_some())
+        .map(Document::id)
+}
+
+/// Runs `run` in the compilation buffer, shown over the whole editor, stopping the run it showed.
+pub fn start(editor: &mut Editor, run: Run) {
+    let doc_id = show(editor);
+    let shell = editor.config().shell.clone();
+    let header = output::header(&run.command, &run.dir, &Zoned::now());
+
+    let doc = doc_mut!(editor, &doc_id);
+    // Stop the old run first, so that the new one doesn't wait for its locks.
+    let id = match doc.compilation.take() {
+        Some(old) => old.run + 1,
+        None => 0,
+    };
+    let spawned = run::spawn(&shell, &run.command, &run.dir, doc_id, id);
+    let (process, text) = match spawned {
+        Ok(process) => (Some(process), header),
+        Err(err) => {
+            editor.set_error(format!("Failed to run '{}': {err}", run.command));
+            (None, format!("{header}Failed to run: {err}\n"))
+        }
+    };
+    doc_mut!(editor, &doc_id).compilation = Some(Box::new(Compilation {
+        kind: run.kind,
+        command: run.command,
+        dir: run.dir,
+        language: run.language,
+        run: id,
+        started: Instant::now(),
+        process,
+    }));
+    replace(editor, doc_id, &text);
+}
+
+/// Shows the compilation buffer over the whole editor, made if there is none, and returns it.
+fn show(editor: &mut Editor) -> DocumentId {
+    let doc_id = match buffer(editor) {
+        Some(doc_id) => {
+            let view = editor
+                .tree
+                .views()
+                .find(|(view, _)| view.doc == doc_id)
+                .map(|(view, _)| view.id);
+            match view {
+                Some(view) => editor.focus(view),
+                None => editor.switch(doc_id, Action::VerticalSplit),
+            }
+            doc_id
+        }
+        None => {
+            let mut doc = Document::from(
+                Rope::new(),
+                None,
+                editor.config.clone(),
+                editor.syn_loader.clone(),
+            );
+            doc.set_spelling_language_override(Some(Vec::new()));
+            doc.detect_spelling();
+            editor.new_file_from_document(Action::VerticalSplit, doc)
+        }
+    };
+    let focus = editor.tree.focus;
+    editor.tree.set_zoom(Some(focus));
+    doc_id
+}
+
+/// Replaces the text of the compilation buffer with `text`, the cursors at its start.
+fn replace(editor: &mut Editor, doc_id: DocumentId, text: &str) {
+    let doc = doc!(editor, &doc_id);
+    let end = doc.text().len_chars();
+    let transaction = Transaction::change(doc.text(), [(0, end, Some(text.into()))].into_iter());
+    apply(editor, doc_id, &transaction);
+    let doc = doc_mut!(editor, &doc_id);
+    let views: Vec<ViewId> = doc.selections().keys().copied().collect();
+    for view in views {
+        doc.set_selection(view, Selection::point(0));
+    }
+}
+
+/// Applies `transaction` to the compilation buffer as output, which undo doesn't go back across.
+fn apply(editor: &mut Editor, doc_id: DocumentId, transaction: &Transaction) {
+    let view_id = editor.get_synced_view_id(doc_id);
+    let view = view_mut!(editor, view_id);
+    let doc = doc_mut!(editor, &doc_id);
+    doc.apply(transaction, view.id);
+    doc.append_changes_to_history(view);
+    editor.reset_history(doc_id);
+}
+
+/// The line `ge` goes to: the last one, unless it is the empty one after a final line break.
+fn last_line(text: RopeSlice) -> usize {
+    if text.line(text.len_lines() - 1).len_chars() == 0 {
+        text.len_lines().saturating_sub(2)
+    } else {
+        text.len_lines() - 1
+    }
+}
+
+/// Appends `output` of run `run` to the compilation buffer `doc_id`, unless it shows another run
+/// by now. The cursors on the last line stay on it.
+fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output) {
+    let Some(doc) = editor.document(doc_id) else {
+        return;
+    };
+    let Some(compilation) = doc.compilation.as_ref().filter(|shown| shown.run == run) else {
+        return;
+    };
+    let mut text = output.text;
+    if let Some(end) = output.end {
+        text.push_str(&output::footer(
+            end,
+            &Zoned::now(),
+            compilation.started.elapsed(),
+        ));
+    }
+
+    let followers: Vec<ViewId> = {
+        let text = doc.text().slice(..);
+        let last = last_line(text);
+        editor
+            .tree
+            .views()
+            .filter(|(view, _)| view.doc == doc_id)
+            .filter(|(view, _)| {
+                text.char_to_line(doc.selection(view.id).primary().cursor(text)) >= last
+            })
+            .map(|(view, _)| view.id)
+            .collect()
+    };
+    let end = doc.text().len_chars();
+    let transaction = Transaction::change(doc.text(), [(end, end, Some(text.into()))].into_iter());
+    apply(editor, doc_id, &transaction);
+
+    let scrolloff = editor.config().scrolloff;
+    for view_id in followers {
+        let view = view_mut!(editor, view_id);
+        let doc = doc_mut!(editor, &doc_id);
+        let text = doc.text().slice(..);
+        let pos = text.line_to_char(last_line(text));
+        doc.set_selection(view_id, Selection::point(pos));
+        view.ensure_cursor_in_view(doc, scrolloff);
+    }
+
+    if let Some(end) = output.end {
+        finish(editor, doc_id, end);
+    }
+}
+
+/// Ends the run of the compilation buffer, telling how it ended.
+fn finish(editor: &mut Editor, doc_id: DocumentId, end: End) {
+    if let Some(compilation) = doc_mut!(editor, &doc_id).compilation.as_mut() {
+        compilation.process = None;
+    }
+    if end.failed() {
+        editor.set_error(end.status());
+    } else {
+        editor.set_status(end.status());
+    }
+}
+
+/// Stops the running compilation, keeping its output.
+pub fn kill(editor: &mut Editor) -> anyhow::Result<()> {
+    let process = editor
+        .documents()
+        .find_map(|doc| doc.compilation.as_ref()?.process.as_ref());
+    match process {
+        Some(process) => Ok(process.kill()?),
+        None => bail!("No compilation is running"),
+    }
+}
+
+/// Runs the command of the compilation buffer `doc_id` again, refusing while file buffers are
+/// unsaved.
+pub fn rerun(editor: &mut Editor, doc_id: DocumentId) -> anyhow::Result<()> {
+    let Some(compilation) = editor
+        .document(doc_id)
+        .and_then(|doc| doc.compilation.as_deref())
+    else {
+        bail!("Not the compilation buffer");
+    };
+    let run = Run {
+        kind: compilation.kind,
+        command: compilation.command.clone(),
+        dir: compilation.dir.clone(),
+        language: compilation.language.clone(),
+    };
+    ensure_saved(editor, &forced(run.kind, &run.command))?;
+    start(editor, run);
+    Ok(())
+}
+
+/// The command that runs a compilation of `kind` despite unsaved buffers.
+pub fn forced(kind: Kind, command: &str) -> String {
+    match kind {
+        Kind::Compile => ":compile!".to_owned(),
+        Kind::Test => ":compile-test!".to_owned(),
+        Kind::Any => format!(":compile-any! {command}"),
+    }
+}
+
+/// Refuses to compile while file buffers have unsaved changes, which the build would miss;
+/// `forced` names the command that compiles anyway.
+pub fn ensure_saved(editor: &Editor, forced: &str) -> anyhow::Result<()> {
+    let unsaved: Vec<_> = editor
+        .documents()
+        .filter(|doc| doc.path().is_some() && doc.is_modified())
+        .map(|doc| doc.display_name())
+        .collect();
+    if unsaved.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "{} unsaved buffer{}: {:?}; {forced} runs anyway",
+        unsaved.len(),
+        if unsaved.len() == 1 { "" } else { "s" },
+        unsaved,
+    )
+}

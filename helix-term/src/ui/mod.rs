@@ -1,3 +1,4 @@
+pub(crate) mod compilation;
 mod completion;
 pub(crate) mod dired;
 mod document;

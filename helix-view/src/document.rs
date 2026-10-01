@@ -235,6 +235,9 @@ pub struct Document {
     /// The listing this document shows, if it is a dired buffer.
     pub dired: Option<Box<crate::dired::Listing>>,
 
+    /// The run this document shows, if it is the compilation buffer.
+    pub compilation: Option<Box<crate::compilation::Compilation>>,
+
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -789,6 +792,7 @@ impl Document {
             focused_at: std::time::Instant::now(),
             readonly: false,
             dired: None,
+            compilation: None,
             jump_labels: HashMap::new(),
             conceal_cache: RefCell::default(),
             document_highlights: HashMap::new(),
@@ -1984,8 +1988,12 @@ impl Document {
         self.id
     }
 
-    /// If there are unsaved modifications.
+    /// If there are unsaved modifications. A compilation buffer has none: it is output, closed and
+    /// quit without asking.
     pub fn is_modified(&self) -> bool {
+        if self.compilation.is_some() {
+            return false;
+        }
         let history = self.history.take();
         let current_revision = history.current_revision();
         self.history.set(history);
@@ -2297,6 +2305,9 @@ impl Document {
     pub fn display_name(&self) -> Cow<'_, str> {
         if let Some(listing) = &self.dired {
             return listing.display_name().into();
+        }
+        if let Some(compilation) = &self.compilation {
+            return compilation.display_name().into();
         }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())

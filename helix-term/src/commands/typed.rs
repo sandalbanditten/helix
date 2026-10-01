@@ -201,6 +201,50 @@ fn dired(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow
     Ok(())
 }
 
+fn compile_any(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    compile_any_impl(cx, args, event, false)
+}
+
+fn force_compile_any(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    compile_any_impl(cx, args, event, true)
+}
+
+fn compile_any_impl(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+    force: bool,
+) -> anyhow::Result<()> {
+    use helix_view::compilation::Kind;
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    let command = args.join(" ");
+    if !force {
+        let forced = ui::compilation::forced(Kind::Any, &command);
+        ui::compilation::ensure_saved(cx.editor, &forced)?;
+    }
+    let run = ui::compilation::run_for(cx.editor, Kind::Any, command);
+    ui::compilation::start(cx.editor, run);
+    Ok(())
+}
+
+fn compile_kill(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    ui::compilation::kill(cx.editor)
+}
+
 fn buffer_close_by_ids_impl(
     cx: &mut compositor::Context,
     doc_ids: &[DocumentId],
@@ -423,6 +467,9 @@ fn write_impl(
             ui::dired::Copying::InBackground
         };
         return ui::dired::write(cx.editor, cx.jobs, doc_id, options.force, copying);
+    }
+    if doc.compilation.is_some() {
+        bail!("A compilation buffer cannot be written");
     }
 
     if doc.trim_trailing_whitespace() {
@@ -1677,6 +1724,11 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
         ui::dired::reload(cx.editor, doc_id);
         return Ok(());
     }
+    // The compilation buffer runs its command again.
+    if doc.compilation.is_some() {
+        let doc_id = doc.id();
+        return ui::compilation::rerun(cx.editor, doc_id);
+    }
     doc.reload(view, &cx.editor.diff_providers, trust_full)
         .map(|_| {
             view.ensure_cursor_in_view(doc, scrolloff);
@@ -1716,6 +1768,10 @@ fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
     for (doc_id, view_ids) in docs_view_ids {
         if doc!(cx.editor, &doc_id).dired.is_some() {
             ui::dired::reload(cx.editor, doc_id);
+            continue;
+        }
+        // Reloading everything doesn't build again.
+        if doc!(cx.editor, &doc_id).compilation.is_some() {
             continue;
         }
         let doc = doc_mut!(cx.editor, &doc_id);
@@ -3205,6 +3261,33 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::positional(&[completers::directory]),
         signature: Signature {
             positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "compile-any",
+        aliases: &[],
+        doc: "Run a command in the compilation buffer.",
+        fun: compile_any,
+        completer: SHELL_COMPLETER,
+        signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "compile-any!",
+        aliases: &[],
+        doc: "Run a command in the compilation buffer, even with unsaved buffers.",
+        fun: force_compile_any,
+        completer: SHELL_COMPLETER,
+        signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "compile-kill",
+        aliases: &[],
+        doc: "Stop the compilation.",
+        fun: compile_kill,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },
