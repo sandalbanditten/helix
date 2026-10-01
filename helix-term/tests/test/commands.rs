@@ -202,6 +202,49 @@ async fn test_goto_file_impl() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_goto_file_position() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join("lib.rs"), "one\ntwo\nthree three\n")?;
+    // A file named like a path with a line opens as it is.
+    std::fs::write(dir.path().join("odd:2"), "odd\n")?;
+    let notes = dir.path().join("notes.txt");
+
+    /// The name of the focused file and the line and column of its cursor, from 1.
+    fn cursor(app: &Application) -> (String, usize, usize) {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let text = doc.text().slice(..);
+        let pos = helix_core::coords_at_pos(text, doc.selection(view.id).primary().cursor(text));
+        let name = doc.path().unwrap().file_name().unwrap().to_string_lossy();
+        (name.into_owned(), pos.row + 1, pos.col + 1)
+    }
+
+    for (text, keys, expected) in [
+        // The cursor on the path, or on its position.
+        ("lib.rs:3:7\n", "gf", ("lib.rs", 3, 7)),
+        ("see lib.rs:2 here\n", "4lgf", ("lib.rs", 2, 1)),
+        ("lib.rs:3:7\n", "glgf", ("lib.rs", 3, 7)),
+        ("lib.rs(2,3)\n", "gf", ("lib.rs", 2, 3)),
+        // A selection holding a path and a position.
+        ("lib.rs:3:2\n", "xgf", ("lib.rs", 3, 2)),
+        ("odd:2\n", "xgf", ("odd:2", 1, 1)),
+    ] {
+        std::fs::write(&notes, text)?;
+        test_key_sequence(
+            &mut AppBuilder::new().with_file(&notes, None).build()?,
+            Some(keys),
+            Some(&|app| {
+                let (name, line, column) = cursor(app);
+                assert_eq!((name.as_str(), line, column), expected, "{text:?} {keys}");
+            }),
+            false,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_multi_selection_paste() -> anyhow::Result<()> {
     test((
         indoc! {"\

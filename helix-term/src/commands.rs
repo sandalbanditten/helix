@@ -1495,37 +1495,87 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
         // we also allow paths that are next to the cursor (can be ambiguous but
         // rarely so in practice) so that gf on quoted/braced path works (not sure about this
         // but apparently that is how gf has worked historically in helix)
-        let path = find_paths(search_range, true)
-            .take_while(|range| search_start + range.start <= pos + 1)
-            .find(|range| pos <= search_start + range.end)
-            .map(|range| Cow::from(search_range.byte_slice(range)));
+        // A position after the path, like `src/lib.rs:7:5`, opens the file there.
+        let located = path::find_path_positions(search_range)
+            .take_while(|found| search_start + found.range.start <= pos + 1)
+            .find(|found| pos <= search_start + found.range.end)
+            .map(|found| {
+                let path = Cow::from(search_range.byte_slice(found.path.clone()));
+                (path, Some(path_position_coords(&found)))
+            });
+        let path = located.or_else(|| {
+            find_paths(search_range, true)
+                .take_while(|range| search_start + range.start <= pos + 1)
+                .find(|range| pos <= search_start + range.end)
+                .map(|range| (Cow::from(search_range.byte_slice(range)), None))
+        });
         log::debug!("goto_file auto-detected path: {path:?}");
-        let path = path.unwrap_or_else(|| selection.fragment(text));
-        vec![path.into_owned()]
+        let (path, position) = path.unwrap_or_else(|| (selection.fragment(text), None));
+        vec![(path.into_owned(), position)]
     } else {
         // Otherwise use each selection, trimmed.
         fallback_ranges
             .iter()
             .map(|range| range.fragment(text).trim().to_owned())
             .filter(|sel| !sel.is_empty())
+            .map(|sel| split_path_position(sel, &rel_path))
             .collect()
     };
 
-    for sel in paths {
-        if let Ok(url) = Url::parse(&sel) {
-            open_url(cx, url, action);
-            continue;
-        }
-
+    for (sel, position) in paths {
         let path = path::expand(&sel);
         let path = &rel_path.join(path);
+        // A file named like a URL, such as `notes:2`, opens as the file.
+        if !path.exists() {
+            if let Ok(url) = Url::parse(&sel) {
+                open_url(cx, url, action);
+                continue;
+            }
+        }
+
         if path.is_dir() {
             let picker = ui::file_picker(cx.editor, path.into());
             cx.push_layer(Box::new(overlaid(picker)));
         } else if let Err(e) = cx.editor.open(path, action) {
             cx.editor.set_error(format!("Open file failed: {:?}", e));
+        } else if let Some(position) = position {
+            goto_position(cx.editor, position);
         }
     }
+}
+
+/// The line and column of a path position, counting from 0.
+fn path_position_coords(found: &path::PathPosition) -> Position {
+    Position::new(
+        found.line.saturating_sub(1),
+        found.column.unwrap_or(1).saturating_sub(1),
+    )
+}
+
+/// Splits a selected `path:7:5` into the path and its position, unless a file (relative to
+/// `dir`) is named like that.
+fn split_path_position(sel: String, dir: &Path) -> (String, Option<Position>) {
+    if dir.join(path::expand(&sel)).exists() {
+        return (sel, None);
+    }
+    let whole = path::find_path_positions(RopeSlice::from(sel.as_str()))
+        .find(|found| found.range == (0..sel.len()));
+    match whole {
+        Some(found) => (
+            sel[found.path.clone()].to_owned(),
+            Some(path_position_coords(&found)),
+        ),
+        None => (sel, None),
+    }
+}
+
+/// Puts the cursor of the focused view at `position` and centers it, as after opening a file at
+/// a line and column.
+pub(crate) fn goto_position(editor: &mut Editor, position: Position) {
+    let (view, doc) = current!(editor);
+    let pos = Selection::point(pos_at_coords(doc.text().slice(..), position, true));
+    doc.set_selection(view.id, pos);
+    align_view(doc, view, Align::Center);
 }
 
 /// Opens the given url. If the URL points to a valid textual file it is open in helix.

@@ -290,6 +290,98 @@ pub fn find_paths(
     regex.find_iter(Input::new(src)).map(|mat| mat.range())
 }
 
+/// A path followed by a position in it, like `src/lib.rs:7:5` in a compiler message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathPosition {
+    /// The byte range of the path and its position.
+    pub range: Range<usize>,
+    /// The byte range of the path alone, without the `file://` of a file URL.
+    pub path: Range<usize>,
+    /// The line, as written: counting from 1.
+    pub line: usize,
+    /// The column, as written: counting from 1.
+    pub column: Option<usize>,
+}
+
+/// Returns an iterator of the paths in `src` that a position follows: `path:7`, `path:7:5`,
+/// `path(7)`, `path(7,5)` or GHC's `path:(7,5)-(9,1)`. Paths need not exist, so `12:30:45` reads
+/// as line 30 of `12`.
+pub fn find_path_positions(src: RopeSlice<'_>) -> impl Iterator<Item = PathPosition> + '_ {
+    const FILE_URL: &str = "file://";
+    // The end of the last position found, as the numbers in it read like file names too.
+    let mut found_end = 0;
+    find_paths(src, true).filter_map(move |mut path| {
+        if path.start < found_end {
+            return None;
+        }
+        // The path regex finds a URL whole, or its scheme apart from the path after it. Only
+        // file URLs name files.
+        let text = Cow::from(src.byte_slice(path.clone()));
+        let from = src.char_to_byte(src.byte_to_char(path.start.saturating_sub(FILE_URL.len())));
+        let before = Cow::from(src.byte_slice(from..path.start));
+        let mut start = path.start;
+        if text.starts_with(FILE_URL) {
+            path.start += FILE_URL.len();
+        } else if before.ends_with(FILE_URL) {
+            start -= FILE_URL.len();
+        } else if text.contains("://") || before.ends_with("://") {
+            return None;
+        }
+        let rest: String = src.byte_slice(path.end..).chars().take(48).collect();
+        let (line, column, len) = position_suffix(&rest)?;
+        found_end = path.end + len;
+        Some(PathPosition {
+            range: start..found_end,
+            path,
+            line,
+            column,
+        })
+    })
+}
+
+/// Reads the position that starts `rest`, if any: its line, its column and its length in bytes.
+fn position_suffix(rest: &str) -> Option<(usize, Option<usize>, usize)> {
+    /// The number `text` starts with, and the bytes it takes.
+    fn number(text: &str) -> Option<(usize, usize)> {
+        let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+        Some((text[..digits].parse().ok()?, digits))
+    }
+    /// The `(7)` or `(7,5)` that `text` starts with, and the bytes it takes.
+    fn parenthesized(text: &str) -> Option<(usize, Option<usize>, usize)> {
+        let (line, digits) = number(text.strip_prefix('(')?)?;
+        let mut end = 1 + digits;
+        let mut column = None;
+        if let Some((col, digits)) = text[end..].strip_prefix(',').and_then(number) {
+            column = Some(col);
+            end += 1 + digits;
+        }
+        text[end..]
+            .starts_with(')')
+            .then_some((line, column, end + 1))
+    }
+
+    if let Some(range) = rest
+        .strip_prefix(':')
+        .filter(|range| range.starts_with('('))
+    {
+        let (line, column, len) = parenthesized(range)?;
+        let end_len = range[len..]
+            .strip_prefix('-')
+            .and_then(parenthesized)
+            .map_or(0, |(.., len)| 1 + len);
+        return Some((line, column, 1 + len + end_len));
+    }
+    if rest.starts_with('(') {
+        return parenthesized(rest);
+    }
+    let (line, digits) = number(rest.strip_prefix(':')?)?;
+    let end = 1 + digits;
+    match rest[end..].strip_prefix(':').and_then(number) {
+        Some((column, digits)) => Some((line, Some(column), end + 1 + digits)),
+        None => Some((line, None, end)),
+    }
+}
+
 /// Performs substitution of `~` and environment variables, see [`env::expand`](crate::env::expand) and [`expand_tilde`]
 pub fn expand<T: AsRef<Path> + ?Sized>(path: &T) -> Cow<'_, Path> {
     let path = path.as_ref();
@@ -452,5 +544,106 @@ mod tests {
             assert_match!(regex, "$FOO");
             assert_match!(regex, "${BAR}");
         }
+    }
+
+    /// The paths and positions found in `line`, as `(path, line, column)`.
+    fn positions(line: &str) -> Vec<(&str, usize, Option<usize>)> {
+        path::find_path_positions(RopeSlice::from(line))
+            .map(|found| (&line[found.path], found.line, found.column))
+            .collect()
+    }
+
+    /// Lines that compilers, test runners and stack traces print, as they print them.
+    #[test]
+    fn path_positions_in_compiler_messages() {
+        for (line, expected) in [
+            // cargo
+            (" --> src/lib.rs:3:9", vec![("src/lib.rs", 3, Some(9))]),
+            (
+                "thread 'tests::it_fails' (1258450) panicked at src/lib.rs:10:9:",
+                vec![("src/lib.rs", 10, Some(9))],
+            ),
+            // GHC, also with a span
+            (
+                "src/Main.hs:6:19: error: [GHC-88464] Variable not in scope: foo",
+                vec![("src/Main.hs", 6, Some(19))],
+            ),
+            (
+                "src/Main.hs:(12,5)-(14,10): error:",
+                vec![("src/Main.hs", 12, Some(5))],
+            ),
+            // gcc and clang
+            (
+                "main.cpp:4:24: error: conversion from ‘int’ to non-scalar type ‘std::vector<int>’",
+                vec![("main.cpp", 4, Some(24))],
+            ),
+            (
+                "In file included from /usr/lib/gcc/x86_64-pc-linux-gnu/16/include/g++-v16/vector:68,",
+                vec![("/usr/lib/gcc/x86_64-pc-linux-gnu/16/include/g++-v16/vector", 68, None)],
+            ),
+            ("                 from main.cpp:1:", vec![("main.cpp", 1, None)]),
+            // javac through Gradle, and a failed Gradle test
+            (
+                "/home/me/gr/src/main/java/demo/App.java:4: error: incompatible types",
+                vec![("/home/me/gr/src/main/java/demo/App.java", 4, None)],
+            ),
+            (
+                "    org.opentest4j.AssertionFailedError at AppTest.java:6",
+                vec![("AppTest.java", 6, None)],
+            ),
+            (
+                "\tat demo.App.main(App.java:5)",
+                vec![("App.java", 5, None)],
+            ),
+            // Kotlin, Typst and tsc
+            (
+                "e: file:///home/me/kt/Main.kt:12:5 Unresolved reference: foo",
+                vec![("/home/me/kt/Main.kt", 12, Some(5))],
+            ),
+            ("  ┌─ main.typ:5:12", vec![("main.typ", 5, Some(12))]),
+            (
+                "a.ts(1,5): error TS2322: Type 'string' is not assignable to type 'number'.",
+                vec![("a.ts", 1, Some(5))],
+            ),
+            // Paths without a position, and other URLs.
+            (
+                "     Running unittests src/lib.rs (target/debug/build/demo/a66/out/demo-a66)",
+                vec![],
+            ),
+            ("   Compiling demo v0.1.0 (/home/me/demo)", vec![]),
+            ("see https://example.com:8080/docs", vec![]),
+            ("error: could not compile `demo` (lib)", vec![]),
+            // Paths need not exist.
+            ("Finished at 14:03:12", vec![("14", 3, Some(12))]),
+        ] {
+            assert_eq!(positions(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn path_position_ranges() {
+        let line = "at src/Main.hs:(12,5)-(14,10): error";
+        let found = path::find_path_positions(RopeSlice::from(line))
+            .next()
+            .unwrap();
+        assert_eq!(&line[found.range], "src/Main.hs:(12,5)-(14,10)");
+        let line = "e: file:///a/Main.kt:12:5 x";
+        let found = path::find_path_positions(RopeSlice::from(line))
+            .next()
+            .unwrap();
+        assert_eq!(&line[found.range], "file:///a/Main.kt:12:5");
+        assert_eq!(&line[found.path], "/a/Main.kt");
+        for line in [
+            "a.rs:",
+            "a.rs:x",
+            "a.rs(1",
+            "a.rs(1,)",
+            "a.rs:(1,2",
+            "a.rs:99999999999999999999999",
+        ] {
+            assert_eq!(positions(line), vec![], "{line}");
+        }
+        assert_eq!(positions("a.rs:7:"), vec![("a.rs", 7, None)]);
+        assert_eq!(positions("a.rs:(1,2)-"), vec![("a.rs", 1, Some(2))]);
     }
 }
