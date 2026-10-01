@@ -68,7 +68,7 @@ mod test {
         doc!(app.editor).path()
     }
 
-    /// Popups placed against the left edge of the editor stay beside the file tree.
+    /// Popups stay beside the file tree.
     mod popups {
         use super::*;
 
@@ -102,6 +102,31 @@ mod test {
                             let editor_x = app.editor.tree.area().x as usize;
                             assert!(editor_x > 0, "the file tree isn't shown");
                             // Two columns into the editor, inside the margin of the text.
+                            assert_eq!(column_of(app, "hello"), Some(editor_x + 3));
+                        }),
+                    ),
+                ],
+                false,
+            )
+            .await
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn popups_move_with_the_editor() -> anyhow::Result<()> {
+            let workspace = Workspace::new(&["a.txt"])?;
+            let mut app = workspace.app("a.txt")?;
+            test_key_sequences(
+                &mut app,
+                vec![
+                    (
+                        Some(":sh echo hello<ret>"),
+                        Some(&|app| assert_eq!(column_of(app, "hello"), Some(3))),
+                    ),
+                    (
+                        Some("<space>E"),
+                        Some(&|app| {
+                            let editor_x = app.editor.tree.area().x as usize;
+                            assert!(editor_x > 0, "the file tree isn't shown");
                             assert_eq!(column_of(app, "hello"), Some(editor_x + 3));
                         }),
                     ),

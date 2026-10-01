@@ -33,6 +33,9 @@ struct RenderInfo {
 pub struct Popup<T: Component> {
     contents: T,
     position: Option<Position>,
+    /// The top left corner of the editor area when `position` was last used, to move the position
+    /// along when showing or hiding the file tree or the bufferline moves the editor area
+    editor_origin: Option<Position>,
     area: Rect,
     position_bias: Open,
     scroll_half_pages: usize,
@@ -48,6 +51,7 @@ impl<T: Component> Popup<T> {
         Self {
             contents,
             position: None,
+            editor_origin: None,
             position_bias: Open::Below,
             area: Rect::new(0, 0, 0, 0),
             scroll_half_pages: 0,
@@ -141,6 +145,14 @@ impl<T: Component> Popup<T> {
     }
 
     fn render_info(&mut self, viewport: Rect, editor: &Editor) -> RenderInfo {
+        let editor_area = editor.tree.area();
+        let editor_origin = Position::new(editor_area.y as usize, editor_area.x as usize);
+        if let (Some(position), Some(origin)) = (&mut self.position, self.editor_origin) {
+            position.row = (position.row + editor_origin.row).saturating_sub(origin.row);
+            position.col = (position.col + editor_origin.col).saturating_sub(origin.col);
+        }
+        self.editor_origin = Some(editor_origin);
+
         let mut position = editor.cursor().0.unwrap_or_default();
         if let Some(old_position) = self
             .position
