@@ -203,7 +203,7 @@ impl<'a> InlineDiagnosticAccumulator<'a> {
             if diag.range.start != grapheme.char_idx {
                 break;
             }
-            if self.doc.shows_diagnostic(diag) {
+            if self.doc.shows_diagnostic_message(diag) {
                 self.stack.push((diag, anchor_col as u16));
             }
             self.idx += 1;

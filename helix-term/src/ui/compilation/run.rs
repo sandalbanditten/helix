@@ -12,15 +12,35 @@ use helix_stdx::process::{self, GroupStatus, ProcessGroup};
 use helix_view::DocumentId;
 use tokio::runtime::Handle;
 
-use super::output::{End, Lines};
+use super::{
+    locus::{Finder, Locus},
+    output::{End, Lines},
+};
 use crate::job;
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
 pub struct Output {
     pub text: String,
+    /// The chars of `text`.
+    pub chars: usize,
+    /// The loci in `text`, counting their chars from its start.
+    pub loci: Vec<Locus>,
     /// How the run ended, once it did; nothing is read after.
     pub end: Option<End>,
+}
+
+impl Output {
+    /// Adds the lines `text` with the `loci` in them.
+    fn push(&mut self, text: &str, loci: Vec<Locus>) {
+        let start = self.chars;
+        self.loci.extend(loci.into_iter().map(|mut locus| {
+            locus.start += start;
+            locus
+        }));
+        self.text.push_str(text);
+        self.chars += text.chars().count();
+    }
 }
 
 impl Output {
@@ -39,11 +59,13 @@ struct Pending {
 }
 
 /// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
-/// it writes to the compilation buffer `doc` as run `run`. The returned group stops it.
+/// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it.
+/// The returned group stops it.
 pub fn spawn(
     shell: &[String],
     command: &str,
     dir: &Path,
+    finder: Finder,
     doc: DocumentId,
     run: u64,
 ) -> io::Result<ProcessGroup> {
@@ -67,7 +89,7 @@ pub fn spawn(
     let handle = Handle::current();
     std::thread::Builder::new()
         .name("compilation".to_owned())
-        .spawn(move || read(reader, child, &status, &handle, doc, run))?;
+        .spawn(move || read(reader, child, finder, &status, &handle, doc, run))?;
     Ok(group)
 }
 
@@ -75,6 +97,7 @@ pub fn spawn(
 fn read(
     mut pipe: io::PipeReader,
     mut child: Child,
+    mut finder: Finder,
     status: &GroupStatus,
     handle: &Handle,
     doc: DocumentId,
@@ -95,12 +118,14 @@ fn read(
         };
         let text = lines.push(&buf[..read]);
         if !text.is_empty() {
+            let loci = finder.find(&text);
             hand_over(&pending, handle, doc, run, |output| {
-                output.text.push_str(&text)
+                output.push(&text, loci)
             });
         }
     }
     let rest = lines.finish();
+    let rest_loci = finder.find(&rest);
     let exit = child.wait();
     // Once waited for, its pid may be reused: the group must not be stopped any more.
     status.exited();
@@ -116,7 +141,7 @@ fn read(
         }
     };
     hand_over(&pending, handle, doc, run, |output| {
-        output.text.push_str(&rest);
+        output.push(&rest, rest_loci);
         output.end = Some(end);
     });
 }

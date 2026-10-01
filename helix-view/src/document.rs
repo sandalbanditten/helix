@@ -1314,6 +1314,12 @@ impl Document {
         self.spelling_messages || diagnostic.provider != DiagnosticProvider::Spelling
     }
 
+    /// Whether the message of `diagnostic` is shown inline and under the cursor. The loci of a
+    /// compilation buffer only underline, as their messages are its text already.
+    pub fn shows_diagnostic_message(&self, diagnostic: &Diagnostic) -> bool {
+        self.shows_diagnostic(diagnostic) && diagnostic.provider != DiagnosticProvider::Compilation
+    }
+
     /// The languages this document is spell checked against; empty when spell checking is off.
     pub fn spelling_languages(&self) -> &[SpellingLanguage] {
         &self.spelling_languages

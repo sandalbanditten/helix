@@ -856,7 +856,7 @@ impl EditorView {
         let diagnostics = doc.diagnostics().iter().filter(|diagnostic| {
             diagnostic.range.start <= cursor
                 && diagnostic.range.end >= cursor
-                && doc.shows_diagnostic(diagnostic)
+                && doc.shows_diagnostic_message(diagnostic)
         });
 
         let warning = theme.get("warning");

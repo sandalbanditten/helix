@@ -4,13 +4,18 @@
 //! It is a pathless [`Document`] carrying the [`Compilation`] it shows. The command runs in a
 //! process group of its own, read off the main thread; dropping the document stops it.
 
+mod locus;
 mod output;
 mod run;
 
 use std::{path::PathBuf, time::Instant};
 
 use anyhow::bail;
-use helix_core::{command_line::Token, Rope, RopeSlice, Selection, Transaction};
+use helix_core::{
+    command_line::Token,
+    diagnostic::{DiagnosticProvider, Severity},
+    Diagnostic, Rope, RopeSlice, Selection, Transaction,
+};
 use helix_view::{
     compilation::{Compilation, Kind},
     doc, doc_mut,
@@ -19,7 +24,10 @@ use helix_view::{
 };
 use jiff::Zoned;
 
-use self::output::End;
+use self::{
+    locus::{Finder, Locus, Resolver},
+    output::End,
+};
 
 /// A command to run in the compilation buffer.
 #[derive(Debug, Clone)]
@@ -119,6 +127,10 @@ pub fn start(editor: &mut Editor, run: Run) {
     let doc_id = show(editor);
     let shell = editor.config().shell.clone();
     let header = output::header(&run.command, &run.dir, &Zoned::now());
+    let finder = Finder::new(Resolver::new(
+        run.dir.clone(),
+        editor.config().file_picker.clone(),
+    ));
 
     let doc = doc_mut!(editor, &doc_id);
     // Stop the old run first, so that the new one doesn't wait for its locks.
@@ -126,7 +138,7 @@ pub fn start(editor: &mut Editor, run: Run) {
         Some(old) => old.run + 1,
         None => 0,
     };
-    let spawned = run::spawn(&shell, &run.command, &run.dir, doc_id, id);
+    let spawned = run::spawn(&shell, &run.command, &run.dir, finder, doc_id, id);
     let (process, text) = match spawned {
         Ok(process) => (Some(process), header),
         Err(err) => {
@@ -178,13 +190,15 @@ fn show(editor: &mut Editor) -> DocumentId {
     doc_id
 }
 
-/// Replaces the text of the compilation buffer with `text`, the cursors at its start.
+/// Replaces the text of the compilation buffer with `text`, without loci, the cursors at its
+/// start.
 fn replace(editor: &mut Editor, doc_id: DocumentId, text: &str) {
     let doc = doc!(editor, &doc_id);
     let end = doc.text().len_chars();
     let transaction = Transaction::change(doc.text(), [(0, end, Some(text.into()))].into_iter());
     apply(editor, doc_id, &transaction);
     let doc = doc_mut!(editor, &doc_id);
+    doc.replace_diagnostics([], &[], &DiagnosticProvider::Compilation);
     let views: Vec<ViewId> = doc.selections().keys().copied().collect();
     for view in views {
         doc.set_selection(view, Selection::point(0));
@@ -244,6 +258,10 @@ fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output
     let end = doc.text().len_chars();
     let transaction = Transaction::change(doc.text(), [(end, end, Some(text.into()))].into_iter());
     apply(editor, doc_id, &transaction);
+    let doc = doc_mut!(editor, &doc_id);
+    let diagnostics = diagnostics(doc.text().slice(..), end, output.loci);
+    let appended = end..doc.text().len_chars();
+    doc.splice_diagnostics(diagnostics, &[appended], &DiagnosticProvider::Compilation);
 
     let scrolloff = editor.config().scrolloff;
     for view_id in followers {
@@ -260,15 +278,62 @@ fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output
     }
 }
 
-/// Ends the run of the compilation buffer, telling how it ended.
+/// The diagnostics of `loci` in output appended at `start` to `text`.
+fn diagnostics(text: RopeSlice, start: usize, loci: Vec<Locus>) -> Vec<Diagnostic> {
+    let diagnostic = |locus: Locus| {
+        let from = start + locus.start;
+        Diagnostic {
+            range: helix_core::diagnostic::Range {
+                start: from,
+                end: from + locus.len,
+            },
+            ends_at_word: false,
+            starts_at_word: false,
+            zero_width: false,
+            line: text.char_to_line(from),
+            message: locus.message,
+            severity: Some(locus.severity),
+            code: None,
+            provider: DiagnosticProvider::Compilation,
+            tags: Vec::new(),
+            source: None,
+            data: Some(locus::target_data(&locus.path, locus.position)),
+        }
+    };
+    loci.into_iter().map(diagnostic).collect()
+}
+
+/// Ends the run of the compilation buffer, telling how it ended and what it found.
 fn finish(editor: &mut Editor, doc_id: DocumentId, end: End) {
-    if let Some(compilation) = doc_mut!(editor, &doc_id).compilation.as_mut() {
+    let doc = doc_mut!(editor, &doc_id);
+    if let Some(compilation) = doc.compilation.as_mut() {
         compilation.process = None;
     }
+    let count = |severity| {
+        doc.diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Some(severity))
+            .count()
+    };
+    let counts: Vec<_> = [
+        (count(Severity::Error), "error"),
+        (count(Severity::Warning), "warning"),
+    ]
+    .into_iter()
+    .filter(|&(count, _)| count > 0)
+    .map(|(count, what)| {
+        let plural = if count == 1 { "" } else { "s" };
+        format!("{count} {what}{plural}")
+    })
+    .collect();
+    let mut status = end.status();
+    if !counts.is_empty() {
+        status = format!("{status} ({})", counts.join(", "));
+    }
     if end.failed() {
-        editor.set_error(end.status());
+        editor.set_error(status);
     } else {
-        editor.set_status(end.status());
+        editor.set_status(status);
     }
 }
 

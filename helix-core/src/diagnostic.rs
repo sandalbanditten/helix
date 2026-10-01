@@ -70,6 +70,8 @@ pub enum DiagnosticProvider {
     Spelling,
     /// Problems with the edits of a dired buffer, found when writing it.
     Dired,
+    /// The file positions in the output of a compilation buffer, its loci.
+    Compilation,
 }
 
 impl DiagnosticProvider {

@@ -304,8 +304,8 @@ pub struct PathPosition {
 }
 
 /// Returns an iterator of the paths in `src` that a position follows: `path:7`, `path:7:5`,
-/// `path(7)`, `path(7,5)` or GHC's `path:(7,5)-(9,1)`. Paths need not exist, so `12:30:45` reads
-/// as line 30 of `12`.
+/// `path(7)`, `path(7,5)`, Maven's `path:[7,5]` or GHC's `path:(7,5)-(9,1)`. Paths need not exist,
+/// so `12:30:45` reads as line 30 of `12`.
 pub fn find_path_positions(src: RopeSlice<'_>) -> impl Iterator<Item = PathPosition> + '_ {
     const FILE_URL: &str = "file://";
     // The end of the last position found, as the numbers in it read like file names too.
@@ -346,9 +346,14 @@ fn position_suffix(rest: &str) -> Option<(usize, Option<usize>, usize)> {
         let digits = text.bytes().take_while(u8::is_ascii_digit).count();
         Some((text[..digits].parse().ok()?, digits))
     }
-    /// The `(7)` or `(7,5)` that `text` starts with, and the bytes it takes.
+    /// The `(7)` or `(7,5)` that `text` starts with, also in brackets, and the bytes it takes.
     fn parenthesized(text: &str) -> Option<(usize, Option<usize>, usize)> {
-        let (line, digits) = number(text.strip_prefix('(')?)?;
+        let close = match text.chars().next()? {
+            '(' => ')',
+            '[' => ']',
+            _ => return None,
+        };
+        let (line, digits) = number(&text[1..])?;
         let mut end = 1 + digits;
         let mut column = None;
         if let Some((col, digits)) = text[end..].strip_prefix(',').and_then(number) {
@@ -356,13 +361,13 @@ fn position_suffix(rest: &str) -> Option<(usize, Option<usize>, usize)> {
             end += 1 + digits;
         }
         text[end..]
-            .starts_with(')')
+            .starts_with(close)
             .then_some((line, column, end + 1))
     }
 
     if let Some(range) = rest
         .strip_prefix(':')
-        .filter(|range| range.starts_with('('))
+        .filter(|range| range.starts_with(['(', '[']))
     {
         let (line, column, len) = parenthesized(range)?;
         let end_len = range[len..]
@@ -601,6 +606,11 @@ mod tests {
                 vec![("/home/me/kt/Main.kt", 12, Some(5))],
             ),
             ("  ┌─ main.typ:5:12", vec![("main.typ", 5, Some(12))]),
+            // Maven
+            (
+                "[ERROR] /home/me/mv/src/main/java/demo/App.java:[4,13] cannot find symbol",
+                vec![("/home/me/mv/src/main/java/demo/App.java", 4, Some(13))],
+            ),
             (
                 "a.ts(1,5): error TS2322: Type 'string' is not assignable to type 'number'.",
                 vec![("a.ts", 1, Some(5))],
