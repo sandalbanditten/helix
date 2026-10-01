@@ -4,13 +4,14 @@
 use std::{
     cell::RefCell,
     collections::{BTreeSet, HashSet},
+    fs,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use helix_loader::workspace_trust::TrustQuery;
-use helix_stdx::path::{canonicalize, normalize};
+use helix_stdx::path::{canonicalize, get_relative_path, normalize};
 use helix_vcs::StatusOptions;
 use helix_view::{
     dired::Source,
@@ -22,7 +23,7 @@ use helix_view::{
 
 use super::{
     background::{in_background, ListRequest, Lister},
-    edit::{Edit, EditKind},
+    edit::{Clip, Edit, EditKind},
     fs::ListOptions,
     git::GitStatuses,
     keys::Action,
@@ -298,12 +299,14 @@ impl Workspace {
 
     /// The row the cursor is on: the input row while a new entry is named.
     pub(super) fn cursor_row(&self) -> Option<usize> {
-        match &self.edit {
-            Some(Edit {
-                kind: EditKind::Create { .. },
-                ..
-            }) => self.rows.input(),
-            _ => self.rows.index_of(self.cursor),
+        if self
+            .edit
+            .as_ref()
+            .is_some_and(|edit| edit.kind.input().is_some())
+        {
+            self.rows.input()
+        } else {
+            self.rows.index_of(self.cursor)
         }
     }
 
@@ -311,6 +314,15 @@ impl Workspace {
     pub(super) fn cursor_path(&self) -> Option<PathBuf> {
         let index = self.rows.index_of(self.cursor)?;
         Some(self.root.join(&self.rows[index].path))
+    }
+
+    /// The path of the cursor's entry relative to the root, unless it is the root.
+    pub(super) fn cursor_entry(&self) -> Option<&Path> {
+        let index = self
+            .rows
+            .index_of(self.cursor)
+            .filter(|&index| index != 0)?;
+        Some(&self.rows[index].path)
     }
 
     /// What dired lists for the cursor's entry, and the entry to put dired's cursor on
@@ -356,6 +368,7 @@ impl Workspace {
             EditKind::Create { directory, .. } => {
                 (self.rows.input()?, *directory || name.ends_with('/'))
             }
+            EditKind::Paste { directory, .. } => (self.rows.input()?, *directory),
             EditKind::Move { .. } | EditKind::Delete { .. } | EditKind::Search => return None,
         };
         Some(EditRow {
@@ -416,14 +429,7 @@ impl Workspace {
                 self.edit = Some(Edit::new(EditKind::Move { path, absolute }, line, editor));
             }
             Action::NewFile | Action::NewDirectory => {
-                // New entries go into the directory under the cursor, or the one holding it.
-                let dir_row = match kind {
-                    Kind::Directory => index,
-                    _ => row.parent.unwrap_or(0),
-                };
-                if dir_row != 0 && !self.tree.node(self.rows[dir_row].node).expanded {
-                    self.expand_row(dir_row);
-                }
+                let dir_row = self.input_dir_row(index);
                 let dir = self.rows[dir_row].node;
                 let kind = EditKind::Create {
                     dir,
@@ -441,6 +447,65 @@ impl Workspace {
             _ => self.navigate(action),
         }
         Focus::Keep
+    }
+
+    /// The row of the directory a new entry goes in from row `index`, expanded: the directory
+    /// under the cursor, or the one holding the entry under it.
+    fn input_dir_row(&mut self, index: usize) -> usize {
+        let row = &self.rows[index];
+        let dir_row = if self.tree.node(row.node).kind == Kind::Directory {
+            index
+        } else {
+            row.parent.unwrap_or(0)
+        };
+        if dir_row != 0 && !self.tree.node(self.rows[dir_row].node).expanded {
+            self.expand_row(dir_row);
+        }
+        dir_row
+    }
+
+    /// Starts naming where `clip` is pasted, in an input row of the directory a new entry would
+    /// go in. The name is free there, counting the paths being `copying` to: the entry's own
+    /// name, or one like `file-1.rs`.
+    pub(super) fn start_paste(
+        &mut self,
+        clip: Clip,
+        copying: &HashSet<PathBuf>,
+        editor: &mut Editor,
+    ) {
+        let Some(index) = self.rows.index_of(self.cursor) else {
+            return;
+        };
+        let Some(name) = clip.path.file_name() else {
+            return;
+        };
+        let Ok(metadata) = fs::symlink_metadata(&clip.path) else {
+            let path = get_relative_path(&clip.path);
+            editor.set_error(format!("'{}' no longer exists", path.display()));
+            return;
+        };
+        let dir_row = self.input_dir_row(index);
+        let dir_path = self.rows[dir_row].path.clone();
+        let dir = self.root.join(&dir_path);
+        let directory = metadata.is_dir();
+        // A cut entry pasted where it is keeps its name.
+        let name = if clip.cut && dir.join(name) == clip.path {
+            name.to_owned()
+        } else {
+            ops::free_name(name, directory, |candidate| {
+                let path = dir.join(candidate);
+                fs::symlink_metadata(&path).is_ok() || copying.contains(&path)
+            })
+        };
+        let kind = EditKind::Paste {
+            clip,
+            dir: self.rows[dir_row].node,
+            dir_path,
+            directory,
+        };
+        let name = name.to_string_lossy().into_owned();
+        self.edit = Some(Edit::new(kind, name, editor));
+        self.dirty = true;
     }
 
     /// Carries out a finished edit.
@@ -495,7 +560,8 @@ impl Workspace {
                 }
                 return Focus::Keep;
             }
-            EditKind::Search => return Focus::Keep,
+            // The file tree pastes, as it keeps what is pasted.
+            EditKind::Search | EditKind::Paste { .. } => return Focus::Keep,
         };
         match result {
             Ok((from, to)) => {
@@ -515,11 +581,17 @@ impl Workspace {
         if let Some(parent) = from.and_then(Path::parent) {
             self.tree.invalidate(parent);
         }
+        self.appeared(to, Purpose::Cursor);
+    }
+
+    /// Lists the directory of `to` (absolute) again after an entry appeared there, and reveals
+    /// the entry for `purpose`.
+    pub(super) fn appeared(&mut self, to: &Path, purpose: Purpose) {
         if let Ok(to) = to.strip_prefix(&self.root) {
             if let Some(parent) = to.parent() {
                 self.tree.invalidate(parent);
             }
-            self.reveal(to.to_path_buf(), Purpose::Cursor);
+            self.reveal(to.to_path_buf(), purpose);
         }
     }
 
@@ -732,14 +804,7 @@ impl Workspace {
     /// Where the input row for a new entry goes: after the directories for a file (when they
     /// come first), else first.
     pub(super) fn input_row(&self) -> Option<InputRow> {
-        let Some(Edit {
-            kind: EditKind::Create { dir, directory, .. },
-            ..
-        }) = &self.edit
-        else {
-            return None;
-        };
-        let dir = *dir;
+        let (dir, directory) = self.edit.as_ref()?.kind.input()?;
         if !self.tree.contains(dir) {
             return None;
         }

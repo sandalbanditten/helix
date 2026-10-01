@@ -28,6 +28,35 @@ pub enum EditKind {
     Delete { path: PathBuf, directory: bool },
     /// Searching for a file, moving the cursor to the matches while the line is typed.
     Search,
+    /// Pasting `clip` into `dir` (at `dir_path`) under the name typed in an input row; the clip
+    /// is a `directory` or not.
+    Paste {
+        clip: Clip,
+        dir: NodeId,
+        dir_path: PathBuf,
+        directory: bool,
+    },
+}
+
+impl EditKind {
+    /// The directory of the input row a new entry is named in, and whether the entry is a
+    /// directory.
+    pub fn input(&self) -> Option<(NodeId, bool)> {
+        match self {
+            Self::Create { dir, directory, .. } | Self::Paste { dir, directory, .. } => {
+                Some((*dir, *directory))
+            }
+            Self::Rename { .. } | Self::Move { .. } | Self::Delete { .. } | Self::Search => None,
+        }
+    }
+}
+
+/// An entry copied or cut, for pasting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clip {
+    pub path: PathBuf,
+    /// Whether pasting moves the entry rather than copying it.
+    pub cut: bool,
 }
 
 /// Where the line of an edit is drawn.
@@ -71,7 +100,7 @@ impl Edit {
             EditKind::Search => {
                 Prompt::new("file search:".into(), None, |_, _| Vec::new(), |_, _, _| {})
             }
-            EditKind::Rename { .. } | EditKind::Create { .. } => {
+            EditKind::Rename { .. } | EditKind::Create { .. } | EditKind::Paste { .. } => {
                 Prompt::new("".into(), None, |_, _| Vec::new(), |_, _, _| {})
             }
         };
@@ -83,7 +112,9 @@ impl Edit {
 
     pub fn placement(&self) -> Placement {
         match self.kind {
-            EditKind::Rename { .. } | EditKind::Create { .. } => Placement::Row,
+            EditKind::Rename { .. } | EditKind::Create { .. } | EditKind::Paste { .. } => {
+                Placement::Row
+            }
             EditKind::Move { .. } | EditKind::Delete { .. } | EditKind::Search => {
                 Placement::CommandLine
             }

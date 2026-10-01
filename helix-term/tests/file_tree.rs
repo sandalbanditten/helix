@@ -13,7 +13,7 @@ mod test {
     };
 
     use helix_term::application::Application;
-    use helix_view::doc;
+    use helix_view::{clipboard::ClipboardProvider, doc};
     use tempfile::TempDir;
 
     use self::helpers::{test_key_sequences, AppBuilder};
@@ -53,8 +53,14 @@ mod test {
             helix_stdx::path::canonicalize(self.dir.path().join(path))
         }
 
+        /// An application with `open` open, whose clipboard is not the system's.
         fn app(&self, open: &str) -> anyhow::Result<Application> {
-            AppBuilder::new().with_file(self.path(open), None).build()
+            let mut config = helpers::test_config();
+            config.editor.clipboard_provider = ClipboardProvider::None;
+            AppBuilder::new()
+                .with_config(config)
+                .with_file(self.path(open), None)
+                .build()
         }
     }
 
@@ -267,6 +273,197 @@ mod test {
                             focused_path(app),
                             Some(workspace.path("docs/beta.md").as_path())
                         );
+                    }),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    fn status(app: &Application) -> String {
+        app.editor
+            .get_status()
+            .map(|(message, _)| message.to_string())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copies_are_pasted_under_free_names() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/a.txt", "src/b.txt"])?;
+        let a = workspace.path("src/a.txt");
+        fs::write(&a, "a")?;
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        fs::File::options()
+            .write(true)
+            .open(&a)?
+            .set_modified(time)?;
+        let mut app = workspace.app("src/a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("<space>e"), None),
+                (
+                    Some("y"),
+                    Some(&|app| assert_eq!(status(app), "Copied 'src/a.txt'")),
+                ),
+                (
+                    Some("p<ret>"),
+                    Some(&|app| {
+                        let copy = workspace.path("src/a-1.txt");
+                        assert_eq!(fs::read_to_string(&copy).unwrap(), "a");
+                        assert_eq!(fs::metadata(&copy).unwrap().modified().unwrap(), time);
+                        assert_eq!(status(app), "'src/a.txt' pasted as 'src/a-1.txt'");
+                    }),
+                ),
+                // The cursor went to the copy, next to which the next one goes.
+                (
+                    Some("p<ret>"),
+                    Some(&|_| assert!(workspace.path("src/a-2.txt").is_file())),
+                ),
+                (
+                    Some("p<C-u>b.txt<ret>"),
+                    Some(&|app| {
+                        assert_eq!(fs::read_to_string(workspace.path("src/b.txt")).unwrap(), "");
+                        assert_eq!(status(app), "'src/b.txt' already exists");
+                    }),
+                ),
+                (
+                    Some("p<esc>"),
+                    Some(&|_| assert!(!workspace.path("src/a-3.txt").exists())),
+                ),
+                // The name typed is the name of the copy.
+                (
+                    Some("p<C-u>sub/c.txt<ret>"),
+                    Some(&|_| {
+                        let copy = workspace.path("src/sub/c.txt");
+                        assert_eq!(fs::read_to_string(copy).unwrap(), "a");
+                    }),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn directories_are_copied_whole_but_not_into_themselves() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["dir/x.txt", "dir/sub/y.txt", "other/"])?;
+        let mut app = workspace.app("dir/x.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                // Up from `x.txt` past `sub` to `dir`.
+                (Some("<space>e"), None),
+                (Some("kky"), None),
+                // Into `sub`, the directory under the cursor.
+                (
+                    Some("jp<ret>"),
+                    Some(&|app| {
+                        assert!(!workspace.path("dir/sub/dir").exists());
+                        assert_eq!(status(app), "'dir' cannot be pasted into itself");
+                    }),
+                ),
+                // Into `other`, the last row.
+                (
+                    Some("gep<ret>"),
+                    Some(&|_| {
+                        assert!(workspace.path("other/dir/x.txt").is_file());
+                        assert!(workspace.path("other/dir/sub/y.txt").is_file());
+                        assert!(workspace.path("dir/sub/y.txt").is_file());
+                    }),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cut_entries_are_moved_once() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "dir/"])?;
+        let mut app = workspace.app("a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("<space>e"), None),
+                (
+                    Some("x"),
+                    Some(&|app| assert_eq!(status(app), "Cut 'a.txt'")),
+                ),
+                // Into `dir`, the row above.
+                (
+                    Some("kp<ret>"),
+                    Some(&|app| {
+                        assert!(!workspace.path("a.txt").exists());
+                        let moved = workspace.path("dir/a.txt");
+                        assert!(moved.is_file());
+                        assert_eq!(focused_path(app), Some(moved.as_path()));
+                        assert_eq!(status(app), "'a.txt' moved to 'dir/a.txt'");
+                    }),
+                ),
+                (
+                    Some("p"),
+                    Some(&|app| assert_eq!(status(app), "Nothing to paste")),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removed_entries_cannot_be_pasted() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "b.txt"])?;
+        let mut app = workspace.app("b.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                // Up from `b.txt` to `a.txt`.
+                (Some("<space>e"), None),
+                (
+                    Some("ky"),
+                    Some(&|_| fs::remove_file(workspace.path("a.txt")).unwrap()),
+                ),
+                (
+                    Some("p"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "'a.txt' no longer exists");
+                        assert!(!workspace.path("a-1.txt").exists());
+                    }),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copying_puts_the_path_in_the_clipboard() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/a.txt"])?;
+        let clipboard = tempfile::NamedTempFile::new()?;
+        let file = clipboard.path().display().to_string();
+        let mut config = helpers::test_config();
+        // Helix pastes into the clipboard to set it and yanks from it to read it.
+        config.editor.clipboard_provider = serde_json::from_value(serde_json::json!({
+            "custom": {
+                "paste": { "command": "sh", "args": ["-c", format!("cat > '{file}'")] },
+                "yank": { "command": "cat", "args": [file] },
+            }
+        }))?;
+        let mut app = AppBuilder::new()
+            .with_config(config)
+            .with_file(workspace.path("src/a.txt"), None)
+            .build()?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("<space>e"), None),
+                (
+                    Some("y"),
+                    Some(&|_| {
+                        assert_eq!(fs::read_to_string(clipboard.path()).unwrap(), "src/a.txt");
                     }),
                 ),
             ],

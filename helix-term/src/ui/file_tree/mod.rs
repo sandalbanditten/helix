@@ -29,7 +29,10 @@ use std::{
 };
 
 use helix_core::Position;
-use helix_stdx::{path::get_relative_path, Url};
+use helix_stdx::{
+    path::{get_relative_path, normalize},
+    Url,
+};
 use helix_view::{
     editor::{FileTreeSide, LsColors as LsColorsSource},
     graphics::{CursorKind, Rect},
@@ -40,7 +43,7 @@ use tui::buffer::Buffer as Surface;
 
 use self::{
     background::{in_background, spawn_lister, ListRequest, Lister},
-    edit::{EditEvent, EditKind, Placement},
+    edit::{Clip, EditEvent, EditKind, Placement},
     git::GitStatuses,
     keys::{Action, Lookup},
     ls_colors::LsColors,
@@ -54,6 +57,7 @@ use self::{
 };
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
+    job,
     ui::EditorView,
 };
 
@@ -90,6 +94,10 @@ pub struct FileTree {
     area: Option<Rect>,
     /// A press on the rail and the drag following it.
     gesture: Option<Gesture>,
+    /// The entry `y` copied or `x` cut, for `p` to paste.
+    clip: Option<Clip>,
+    /// Where copies still being made go.
+    copying: HashSet<PathBuf>,
 }
 
 impl FileTree {
@@ -393,13 +401,106 @@ impl FileTree {
             EditEvent::Submit => {
                 if let Some(edit) = workspace.edit.take() {
                     workspace.dirty = true;
-                    if workspace.submit(edit, cx.editor) == Focus::Release {
+                    let line = edit.prompt.line();
+                    if let EditKind::Paste { clip, dir_path, .. } = edit.kind {
+                        if !line.trim().is_empty() {
+                            let to = normalize(workspace.root.join(dir_path).join(line));
+                            self.paste(clip, to, cx);
+                        }
+                    } else if workspace.submit(edit, cx.editor) == Focus::Release {
                         self.focused = false;
                     }
                 }
             }
         }
         self.update(cx.editor);
+    }
+
+    /// Keeps the cursor's entry for pasting, to move it if `cut`, and puts its path relative to
+    /// the root in the clipboard.
+    fn clip(&mut self, cut: bool, editor: &mut Editor) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let Some(path) = workspace.cursor_entry() else {
+            return;
+        };
+        let shown = path.to_string_lossy().into_owned();
+        self.clip = Some(Clip {
+            path: workspace.root.join(path),
+            cut,
+        });
+        let done = if cut { "Cut" } else { "Copied" };
+        match editor.registers.write('+', vec![shown.clone()]) {
+            Ok(()) => editor.set_status(format!("{done} '{shown}'")),
+            Err(err) => {
+                editor.set_error(format!("{done} '{shown}', but not to the clipboard: {err}"))
+            }
+        }
+    }
+
+    /// Pastes `clip` at `to`: moves it there if it was cut, else copies it in the background.
+    fn paste(&mut self, clip: Clip, to: PathBuf, cx: &mut Context) {
+        let editor = &mut *cx.editor;
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        if clip.cut && to == clip.path {
+            return;
+        }
+        let from_shown = get_relative_path(&clip.path).display().to_string();
+        let to_shown = get_relative_path(&to).display().to_string();
+        if std::fs::symlink_metadata(&to).is_ok() || self.copying.contains(&to) {
+            editor.set_error(format!("'{to_shown}' already exists"));
+            return;
+        }
+        if to.starts_with(&clip.path) {
+            editor.set_error(format!("'{from_shown}' cannot be pasted into itself"));
+            return;
+        }
+        if clip.cut {
+            match ops::rename(editor, &clip.path, to, false) {
+                Ok(to) => {
+                    let from = clip.path.strip_prefix(&workspace.root).ok();
+                    workspace.moved(from, &to);
+                    self.clip = None;
+                    editor.set_status(format!("'{from_shown}' moved to '{to_shown}'"));
+                }
+                Err(err) => editor.set_error(err.to_string()),
+            }
+            return;
+        }
+
+        self.copying.insert(to.clone());
+        editor.set_status(format!("Copying '{from_shown}' to '{to_shown}'…"));
+        let (generation, cursor) = (workspace.generation, workspace.cursor);
+        let copies = vec![(clip.path, to.clone())];
+        let job = ops::copy_in_background(editor, copies, move |editor, _, result| {
+            match result {
+                Ok(()) => editor.set_status(format!("'{from_shown}' pasted as '{to_shown}'")),
+                Err(err) => editor.set_error(format!(
+                    "Cannot paste '{from_shown}' as '{to_shown}': {err}"
+                )),
+            }
+            // The tree follows unless the editor is quitting meanwhile.
+            job::dispatch_blocking(move |editor, compositor| {
+                let Some(file_tree) = file_tree(compositor) else {
+                    return;
+                };
+                file_tree.copying.remove(&to);
+                if let Some(workspace) = file_tree.workspace_of(generation) {
+                    // The cursor only follows the copy if it stayed where it was pasted.
+                    let purpose = if workspace.cursor == cursor {
+                        Purpose::Cursor
+                    } else {
+                        Purpose::Show
+                    };
+                    workspace.appeared(&to, purpose);
+                }
+                file_tree.update(editor);
+            });
+        });
+        cx.jobs.add(job);
     }
 
     /// Brings the rows up to date after a change and keeps the cursor in view.
@@ -442,6 +543,17 @@ impl FileTree {
                     crate::ui::dired::open(editor, source, select);
                     self.focused = false;
                 }
+            }
+            Action::Copy | Action::Cut => self.clip(action == Action::Cut, editor),
+            Action::Paste => {
+                let Some(clip) = self.clip.clone() else {
+                    editor.set_error("Nothing to paste");
+                    return;
+                };
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.start_paste(clip, &self.copying, editor);
+                }
+                self.update(editor);
             }
             Action::Search => self.start_search(editor),
             Action::NextMatch => self.find_next(Direction::Forward, editor),
