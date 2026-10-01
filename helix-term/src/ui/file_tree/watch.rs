@@ -1,16 +1,20 @@
-//! Watching the directories the tree has listed, so that it follows changes made outside of it:
+//! Watching directories, so that the tree and dired buffers follow changes made outside of them:
 //! in another program, by `git`, or by a build.
 
-use std::{collections::HashSet, path::PathBuf, time::Duration};
+use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
 
 use helix_event::{send_blocking, AsyncHook};
+use helix_view::Editor;
 use notify::{
     event::{AccessKind, AccessMode},
     EventKind, RecommendedWatcher, RecursiveMode, Watcher as _,
 };
 use tokio::time::Instant;
 
-use crate::job;
+use crate::{compositor::Compositor, job};
+
+/// What handles a batch of changed paths, on the main thread.
+type Handler = Arc<dyn Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync>;
 
 /// How long changes are collected before the tree handles them, so that a burst of them, like
 /// `git checkout` rewriting many files, is handled at once.
@@ -22,10 +26,12 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    /// A watcher handing the paths that changed to the tree of the workspace `generation`.
-    pub fn new(generation: u64) -> notify::Result<Self> {
+    /// A watcher handing the paths that changed to `handle`.
+    pub fn new(
+        handle: impl Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync + 'static,
+    ) -> notify::Result<Self> {
         let changes = Changes {
-            generation,
+            handle: Arc::new(handle),
             paths: HashSet::new(),
         }
         .spawn();
@@ -65,9 +71,9 @@ impl Watcher {
     }
 }
 
-/// Collects changed paths and hands them to the tree in batches.
+/// Collects changed paths and hands them over in batches.
 struct Changes {
-    generation: u64,
+    handle: Handler,
     paths: HashSet<PathBuf>,
 }
 
@@ -81,11 +87,7 @@ impl AsyncHook for Changes {
     }
 
     fn finish_debounce(&mut self) {
-        let (generation, paths) = (self.generation, std::mem::take(&mut self.paths));
-        job::dispatch_blocking(move |editor, compositor| {
-            if let Some(file_tree) = super::file_tree(compositor) {
-                file_tree.changed(generation, paths, editor);
-            }
-        });
+        let (handle, paths) = (self.handle.clone(), std::mem::take(&mut self.paths));
+        job::dispatch_blocking(move |editor, compositor| handle(paths, editor, compositor));
     }
 }

@@ -14,6 +14,7 @@ mod plan;
 
 use std::{
     cell::OnceCell,
+    collections::HashSet,
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -37,17 +38,89 @@ use self::{
     colors::{EzaColors, Palette, You},
     format::Clock,
 };
-use crate::job;
+use crate::{
+    job,
+    ui::{file_tree::watch::Watcher, EditorView},
+};
 
 /// What dired keeps beside its buffers: the colors of the environment and who the editor runs
-/// as, both looked up once.
+/// as, both looked up once, and what watches the listed directories.
 #[derive(Default)]
 pub struct Dired {
     eza: OnceCell<Option<EzaColors>>,
     you: OnceCell<You>,
+    watcher: Option<Watcher>,
+    /// The listings the watched directories are those of, by their buffer and address.
+    watched: Vec<(DocumentId, usize)>,
 }
 
 impl Dired {
+    /// Watches the directories the dired buffers list, when they changed since the last call.
+    pub fn follow(&mut self, editor: &Editor) {
+        let listings: Vec<_> = editor
+            .documents()
+            .filter_map(|doc| {
+                let listing: *const Listing = doc.dired.as_deref()?;
+                Some((doc.id(), listing as usize))
+            })
+            .collect();
+        if listings == self.watched {
+            return;
+        }
+        self.watched = listings;
+        let dirs: HashSet<PathBuf> = editor
+            .documents()
+            .filter_map(|doc| doc.dired.as_deref())
+            .flat_map(watched_dirs)
+            .collect();
+        if self.watcher.is_none() {
+            self.watcher = Watcher::new(|paths, editor, compositor| {
+                if let Some(editor_view) = compositor.find::<EditorView>() {
+                    editor_view.dired.changed(&paths, editor);
+                }
+            })
+            .inspect_err(|err| log::warn!("dired cannot watch for changes: {err}"))
+            .ok();
+        }
+        if let Some(watcher) = &mut self.watcher {
+            watcher.watch(dirs);
+        }
+    }
+
+    /// Lists the unedited dired buffers anew that list something of `paths`. A buffer edited
+    /// meanwhile keeps its text; `:reload` lists it anew.
+    fn changed(&mut self, paths: &HashSet<PathBuf>, editor: &mut Editor) {
+        let affected: Vec<_> = editor
+            .documents()
+            .filter(|doc| !doc.is_modified())
+            .filter_map(|doc| {
+                let listing = doc.dired.as_deref()?;
+                let dirs: HashSet<PathBuf> = watched_dirs(listing).collect();
+                paths
+                    .iter()
+                    .any(|path| {
+                        dirs.contains(path) || path.parent().is_some_and(|dir| dirs.contains(dir))
+                    })
+                    .then(|| (doc.id(), doc.version(), listing.source.clone()))
+            })
+            .collect();
+        for (doc_id, version, source) in affected {
+            let options = listing_options(editor, source.root());
+            in_background(
+                move || read(&source, &options),
+                move |editor, listing| {
+                    let unchanged = editor
+                        .document(doc_id)
+                        .is_some_and(|doc| doc.version() == version && !doc.is_modified());
+                    if unchanged {
+                        let view = editor.get_synced_view_id(doc_id);
+                        relist(editor, doc_id, view, listing);
+                    }
+                },
+            );
+        }
+    }
+
     /// The styled char ranges of the lines `lines` of `doc`, in order, if it is a dired buffer.
     pub fn spans(
         &self,
@@ -116,6 +189,19 @@ fn you() -> You {
 #[cfg(not(unix))]
 fn you() -> You {
     You::default()
+}
+
+/// The directories whose changes can change `listing`: the listed ones and the repository's
+/// `.git`, which changes with the git status.
+fn watched_dirs(listing: &Listing) -> impl Iterator<Item = PathBuf> + '_ {
+    let root = listing.source.root();
+    let expanded = match &listing.source {
+        Source::Directory(_) => None,
+        Source::Tree { expanded, .. } => Some(expanded.iter().map(|dir| root.join(dir))),
+    };
+    std::iter::once(root.to_path_buf())
+        .chain(expanded.into_iter().flatten())
+        .chain(listing.repo.as_ref().map(|repo| repo.join(".git")))
 }
 
 /// How listings of `root` are read.

@@ -19,7 +19,7 @@ mod rows;
 mod search;
 mod tree;
 mod viewport;
-mod watch;
+pub(crate) mod watch;
 mod workspace;
 
 use std::{
@@ -175,9 +175,14 @@ impl FileTree {
         for path in paths {
             workspace.reveal(path, Purpose::Show);
         }
-        workspace.watcher = Watcher::new(workspace.generation)
-            .inspect_err(|err| log::warn!("file tree cannot watch for changes: {err}"))
-            .ok();
+        let generation = workspace.generation;
+        workspace.watcher = Watcher::new(move |paths, editor, compositor| {
+            if let Some(file_tree) = file_tree(compositor) {
+                file_tree.changed(generation, paths, editor);
+            }
+        })
+        .inspect_err(|err| log::warn!("file tree cannot watch for changes: {err}"))
+        .ok();
         let lister = self.lister(editor);
         workspace.update(&lister, &config.file_tree);
         workspace.refresh_git(editor);

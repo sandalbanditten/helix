@@ -1758,6 +1758,7 @@ impl Component for EditorView {
             _ => false,
         };
 
+        self.dired.follow(cx.editor);
         // A split covers the editor only while it shows its dired buffer.
         if let Some(zoomed) = cx.editor.tree.zoomed() {
             let doc = cx.editor.tree.get(zoomed).doc;
