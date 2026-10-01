@@ -18,7 +18,7 @@ pub use diff::{DiffHandle, Hunk};
 
 mod status;
 
-pub use status::{FileChange, StatusOptions};
+pub use status::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
 
 /// Contains all active diff providers. Diff providers are compiled in via features. Currently
 /// only `git` is supported.
@@ -97,6 +97,21 @@ impl DiffProviderRegistry {
             })
             .ok_or_else(|| anyhow!("no diff provider returns success"))
     }
+
+    /// The status of everything below the directory `dir` like `eza --git` sees it: each change
+    /// on its side and renames as a deletion and an addition. Also tells which of the absolute
+    /// `paths` the index tracks. Runs on the calling thread.
+    pub fn status_by_side(
+        &self,
+        dir: &Path,
+        trust_full: bool,
+        paths: &[PathBuf],
+    ) -> Result<DirStatus> {
+        self.providers
+            .iter()
+            .find_map(|provider| provider.status_by_side(dir, trust_full, paths).ok())
+            .ok_or_else(|| anyhow!("no diff provider returns success"))
+    }
 }
 
 impl Default for DiffProviderRegistry {
@@ -154,6 +169,14 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::for_each_status_entry(cwd, trust_full, options, f),
+            Self::None => bail!("No diff support compiled in"),
+        }
+    }
+
+    fn status_by_side(&self, dir: &Path, trust_full: bool, paths: &[PathBuf]) -> Result<DirStatus> {
+        match self {
+            #[cfg(feature = "git")]
+            Self::Git => git::status_by_side(dir, trust_full, paths),
             Self::None => bail!("No diff support compiled in"),
         }
     }

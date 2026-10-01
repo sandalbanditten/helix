@@ -219,3 +219,103 @@ fn status_reports_staged_entries_on_request() {
         ]
     );
 }
+
+/// The changes of `status_by_side` as sorted `(side, change, relative path)` triples.
+fn side_changes(status: &crate::DirStatus) -> Vec<(char, char, String)> {
+    use crate::{Change, Side};
+
+    let mut changes: Vec<_> = status
+        .changes
+        .iter()
+        .map(|change| {
+            let side = match change.side {
+                Side::Index => 'i',
+                Side::Worktree => 'w',
+            };
+            let kind = match change.change {
+                Change::New => 'N',
+                Change::Modified => 'M',
+                Change::Deleted => 'D',
+                Change::TypeChange => 'T',
+                Change::Conflict => 'U',
+            };
+            let path = change.path.strip_prefix(&status.workdir).unwrap();
+            (side, kind, path.to_string_lossy().into_owned())
+        })
+        .collect();
+    changes.sort();
+    changes
+}
+
+#[test]
+fn status_by_side_tells_staged_from_unstaged() {
+    let temp_git = empty_git_repo();
+    let repo = &gix::path::realpath(temp_git.path()).unwrap();
+    std::fs::create_dir(repo.join("src")).unwrap();
+    for file in [
+        "both.txt",
+        "staged.txt",
+        "unstaged.txt",
+        "renamed.txt",
+        "src/lib.rs",
+    ] {
+        std::fs::write(repo.join(file), "one").unwrap();
+    }
+    std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
+    create_commit(repo, true);
+
+    std::fs::write(repo.join("both.txt"), "two").unwrap();
+    std::fs::write(repo.join("staged.txt"), "two").unwrap();
+    exec_git_cmd("add both.txt staged.txt", repo);
+    std::fs::write(repo.join("both.txt"), "three").unwrap();
+    std::fs::write(repo.join("unstaged.txt"), "two").unwrap();
+    exec_git_cmd("mv renamed.txt moved.txt", repo);
+    std::fs::write(repo.join("new.txt"), "").unwrap();
+    std::fs::write(repo.join("build.log"), "").unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "two").unwrap();
+
+    let paths = ["src", "staged.txt", "new.txt", "build.log"].map(|path| repo.join(path));
+    let status = git::status_by_side(repo, true, &paths).unwrap();
+    assert_eq!(&status.workdir, repo);
+    let change = |side, kind, path: &str| (side, kind, path.to_string());
+    assert_eq!(
+        side_changes(&status),
+        [
+            change('i', 'D', "renamed.txt"),
+            change('i', 'M', "both.txt"),
+            change('i', 'M', "staged.txt"),
+            change('i', 'N', "moved.txt"),
+            change('w', 'M', "both.txt"),
+            change('w', 'M', "src/lib.rs"),
+            change('w', 'M', "unstaged.txt"),
+            change('w', 'N', "new.txt"),
+        ]
+    );
+    assert_eq!(status.tracked, [true, true, false, false]);
+
+    // Limited to a directory, and to nothing but it even with a name that is a glob.
+    let status = git::status_by_side(&repo.join("src"), true, &[]).unwrap();
+    assert_eq!(side_changes(&status), [change('w', 'M', "src/lib.rs")]);
+    std::fs::create_dir(repo.join("[sn]*")).unwrap();
+    let status = git::status_by_side(&repo.join("[sn]*"), true, &[]).unwrap();
+    assert_eq!(side_changes(&status), []);
+}
+
+#[cfg(unix)]
+#[test]
+fn status_by_side_reports_type_changes() {
+    let temp_git = empty_git_repo();
+    let repo = &gix::path::realpath(temp_git.path()).unwrap();
+    std::fs::write(repo.join("target.txt"), "").unwrap();
+    std::fs::write(repo.join("file.txt"), "").unwrap();
+    create_commit(repo, true);
+    std::fs::remove_file(repo.join("file.txt")).unwrap();
+    std::os::unix::fs::symlink("target.txt", repo.join("file.txt")).unwrap();
+
+    let change = |side, kind, path: &str| (side, kind, path.to_string());
+    let status = git::status_by_side(repo, true, &[]).unwrap();
+    assert_eq!(side_changes(&status), [change('w', 'T', "file.txt")]);
+    exec_git_cmd("add file.txt", repo);
+    let status = git::status_by_side(repo, true, &[]).unwrap();
+    assert_eq!(side_changes(&status), [change('i', 'T', "file.txt")]);
+}

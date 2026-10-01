@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use gix::filter::plumbing::driver::apply::Delay;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gix::bstr::ByteSlice;
@@ -12,12 +12,12 @@ use gix::objs::tree::EntryKind;
 use gix::sec::trust::DefaultForLevel;
 use gix::status::{
     index_worktree::Item,
-    plumbing::index_as_worktree::{Change, EntryStatus},
+    plumbing::index_as_worktree::{Change as Change_, EntryStatus},
     UntrackedFiles,
 };
 use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 
-use crate::{FileChange, StatusOptions};
+use crate::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
 
 #[cfg(test)]
 mod test;
@@ -210,8 +210,8 @@ fn index_worktree_change(work_dir: &Path, item: Item) -> Result<Option<FileChang
             let path = work_dir.join(rela_path.to_path()?);
             match status {
                 EntryStatus::Conflict { .. } => FileChange::Conflict { path },
-                EntryStatus::Change(Change::Removed) => FileChange::Deleted { path },
-                EntryStatus::Change(Change::Modification { .. }) => FileChange::Modified { path },
+                EntryStatus::Change(Change_::Removed) => FileChange::Deleted { path },
+                EntryStatus::Change(Change_::Modification { .. }) => FileChange::Modified { path },
                 // Files marked with `git add --intent-to-add`. Such files
                 // still show up as new in `git status`, so it's appropriate
                 // to show them the same way as untracked files in the
@@ -265,6 +265,136 @@ fn tree_index_change(work_dir: &Path, change: gix::diff::index::Change) -> Resul
         },
     };
     Ok(change)
+}
+
+/// The status below `dir` with each change on its side and no rename detection, and whether the
+/// index tracks each of `paths`.
+pub fn status_by_side(dir: &Path, trust_full: bool, paths: &[PathBuf]) -> Result<DirStatus> {
+    let repo = open_repo(dir, trust_full)?.to_thread_local();
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow::anyhow!("working tree not found"))?
+        .to_path_buf();
+    let relative = |path: &Path| -> Result<gix::bstr::BString> {
+        let path = path
+            .strip_prefix(&workdir)
+            .context("path outside of the working tree")?;
+        Ok(gix::path::to_unix_separators_on_windows(gix::path::try_into_bstr(path)?).into_owned())
+    };
+
+    // `top` makes the pathspec relative to the working tree rather than the process' directory.
+    let dir = relative(dir)?;
+    let patterns: Vec<gix::bstr::BString> = if dir.is_empty() {
+        Vec::new()
+    } else {
+        let mut pattern = gix::bstr::BString::from(":(top,literal)");
+        pattern.extend_from_slice(&dir);
+        vec![pattern]
+    };
+    let platform = repo
+        .status(gix::progress::Discard)?
+        .untracked_files(UntrackedFiles::Files)
+        .index_worktree_rewrites(None)
+        .tree_index_track_renames(gix::status::tree_index::TrackRenames::Disabled);
+    let mut changes = Vec::new();
+    for item in platform.into_iter(patterns)? {
+        let (path, side, change) = match item? {
+            gix::status::Item::IndexWorktree(item) => {
+                let Some((path, change)) = worktree_side_change(item) else {
+                    continue;
+                };
+                (path, Side::Worktree, change)
+            }
+            gix::status::Item::TreeIndex(change) => {
+                let (path, change) = index_side_change(&change);
+                (path, Side::Index, change)
+            }
+        };
+        changes.push(SideChange {
+            path: workdir.join(path.to_path()?),
+            side,
+            change,
+        });
+    }
+
+    let index = repo.index_or_empty()?;
+    let tracked = paths
+        .iter()
+        .map(|path| {
+            let path = relative(path)?;
+            if path.is_empty() {
+                return Ok(!index.entries().is_empty());
+            }
+            if index.entry_by_path(path.as_ref()).is_some() {
+                return Ok(true);
+            }
+            let mut prefix = path;
+            prefix.push(b'/');
+            Ok(index.prefixed_entries(prefix.as_ref()).is_some())
+        })
+        .collect::<Result<_>>()?;
+    Ok(DirStatus {
+        workdir,
+        changes,
+        tracked,
+    })
+}
+
+/// A change between the index and the working tree, at its path relative to the working tree.
+fn worktree_side_change(item: Item) -> Option<(gix::bstr::BString, Change)> {
+    match item {
+        Item::Modification {
+            rela_path, status, ..
+        } => {
+            let change = match status {
+                EntryStatus::Conflict { .. } => Change::Conflict,
+                EntryStatus::Change(Change_::Removed) => Change::Deleted,
+                EntryStatus::Change(Change_::Type { .. }) => Change::TypeChange,
+                EntryStatus::Change(Change_::Modification { .. })
+                | EntryStatus::Change(Change_::SubmoduleModification(_)) => Change::Modified,
+                EntryStatus::IntentToAdd => Change::New,
+                EntryStatus::NeedsUpdate(_) => return None,
+            };
+            Some((rela_path, change))
+        }
+        Item::DirectoryContents { entry, .. } => {
+            (entry.status == Status::Untracked).then_some((entry.rela_path, Change::New))
+        }
+        // Not reported without rename tracking; the destination is what the listing shows.
+        Item::Rewrite { dirwalk_entry, .. } => Some((dirwalk_entry.rela_path, Change::New)),
+    }
+}
+
+/// A change staged in the index, at its path relative to the working tree.
+fn index_side_change(change: &gix::diff::index::Change) -> (gix::bstr::BString, Change) {
+    use gix::diff::index::ChangeRef;
+    use gix::objs::tree::EntryKind;
+
+    let kind = |mode: gix::index::entry::Mode| {
+        mode.to_tree_entry_mode().map(|mode| match mode.kind() {
+            EntryKind::BlobExecutable => EntryKind::Blob,
+            kind => kind,
+        })
+    };
+    match change {
+        ChangeRef::Addition { location, .. } | ChangeRef::Rewrite { location, .. } => {
+            (location.clone().into_owned(), Change::New)
+        }
+        ChangeRef::Deletion { location, .. } => (location.clone().into_owned(), Change::Deleted),
+        ChangeRef::Modification {
+            location,
+            previous_entry_mode,
+            entry_mode,
+            ..
+        } => {
+            let change = if kind(*previous_entry_mode) == kind(*entry_mode) {
+                Change::Modified
+            } else {
+                Change::TypeChange
+            };
+            (location.clone().into_owned(), change)
+        }
+    }
 }
 
 /// Finds the object that contains the contents of a file at a specific commit.
