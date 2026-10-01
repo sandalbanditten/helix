@@ -2063,6 +2063,29 @@ impl Editor {
     }
 
     pub fn create_path(&mut self, path: &Path, is_dir: bool) -> io::Result<()> {
+        self.create_path_with(path, is_dir, |path| {
+            if is_dir {
+                fs::create_dir(path)
+            } else {
+                fs::write(path, [])
+            }
+        })
+    }
+
+    /// Copies `from` to the new path `to` like `cp -rp`, telling the language servers about
+    /// the files it creates.
+    pub fn copy_path(&mut self, from: &Path, to: &Path) -> io::Result<()> {
+        let is_dir = fs::symlink_metadata(from)?.is_dir();
+        self.create_path_with(to, is_dir, |to| helix_stdx::fs::copy_path(from, to))
+    }
+
+    /// Creates `path` with `create`, in a directory created first if needed.
+    fn create_path_with(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        create: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<()> {
         let path = canonicalize(path);
         let language_servers: Vec<_> = self
             .language_servers
@@ -2091,11 +2114,7 @@ impl Editor {
                 fs::create_dir_all(dir)?;
             }
         }
-        if is_dir {
-            fs::create_dir(&path)?;
-        } else {
-            fs::write(&path, [])?;
-        }
+        create(&path)?;
 
         for ls in self.language_servers.iter_clients() {
             if !ls.is_initialized() {
