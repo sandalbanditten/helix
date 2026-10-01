@@ -90,6 +90,14 @@ fn keyword(word: &str) -> Option<Severity> {
     }
 }
 
+/// The severity a word before a locus names: also that of an exception thrown there, like
+/// `AssertionFailedError at AppTest.java:6`.
+fn keyword_before(word: &str) -> Option<Severity> {
+    let exception =
+        word.len() > "Error".len() && word.ends_with("Error") || word.ends_with("Exception");
+    keyword(word).or(exception.then_some(Severity::Error))
+}
+
 fn words(text: &str) -> impl Iterator<Item = &str> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -105,7 +113,7 @@ fn header(line: &str) -> Option<Severity> {
 
 /// How severe the message is that the locus at `range` in `line` belongs to: as the word after
 /// it says (`main.c:3:7: warning: …`), or a word before it (`[error] …`, Kotlin's `w: …`,
-/// `… panicked at …`), or the header line `above` it; else it is a note.
+/// `… panicked at …`, an exception), or the header line `above` it; else it is a note.
 pub fn severity(line: &str, range: &Range<usize>, above: &str) -> Severity {
     let kotlin = || match line.get(..3)? {
         "e: " => Some(Severity::Error),
@@ -117,7 +125,7 @@ pub fn severity(line: &str, range: &Range<usize>, above: &str) -> Severity {
         .next()
         .and_then(keyword)
         .or_else(kotlin)
-        .or_else(|| words(&line[..range.start]).find_map(keyword))
+        .or_else(|| words(&line[..range.start]).find_map(keyword_before))
         .or_else(|| header(above))
         .unwrap_or(Severity::Info)
 }
@@ -535,7 +543,7 @@ e: file://{kt}:12:5 Unresolved reference: foo
             files,
             [
                 (Severity::Error, "src/main/java/demo/App.java", 4, 1),
-                (Severity::Info, "src/test/java/demo/AppTest.java", 6, 1),
+                (Severity::Error, "src/test/java/demo/AppTest.java", 6, 1),
                 (Severity::Info, "src/main/java/demo/App.java", 5, 1),
                 (Severity::Info, "src/main/java/other/App.java", 7, 1),
                 (Severity::Error, "Main.kt", 12, 5),

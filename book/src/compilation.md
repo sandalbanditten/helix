@@ -92,8 +92,9 @@ the file picker ignores); the package of a stack frame, like `demo` in
 Loci are the diagnostics of the compilation buffer: they are underlined and marked in the gutter,
 the statusline counts them, `]d`, `[d`, `]D` and `[D` move between them, and `Space d` lists them.
 A locus is an error, a warning, a note or a hint as its message says: the word after it
-(`main.c:3:7: warning: …`), a word before it (`[error] …`, `e: …`, `… panicked at …`), or the
-line above it (`error[E0425]: …`); else it is a note.
+(`main.c:3:7: warning: …`), a word before it (`[error] …`, `e: …`, `… panicked at …`, an
+exception like `AssertionFailedError at AppTest.java:6`), or the line above it
+(`error[E0425]: …`); else it is a note.
 
 | Key | Description |
 | --- | --- |
