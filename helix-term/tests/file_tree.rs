@@ -68,6 +68,50 @@ mod test {
         doc!(app.editor).path()
     }
 
+    /// Popups placed against the left edge of the editor stay beside the file tree.
+    mod popups {
+        use super::*;
+
+        /// The column `text` starts at in the first row of the screen showing it.
+        fn column_of(app: &Application, text: &str) -> Option<usize> {
+            let screen = app.screen();
+            screen
+                .content
+                .chunks(screen.area.width as usize)
+                .find_map(|row| {
+                    row.windows(text.len()).position(|cells| {
+                        cells
+                            .iter()
+                            .map(|cell| cell.symbol.chars().next().unwrap_or(' '))
+                            .eq(text.chars())
+                    })
+                })
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn shell_output_is_shown_beside_the_file_tree() -> anyhow::Result<()> {
+            let workspace = Workspace::new(&["a.txt"])?;
+            let mut app = workspace.app("a.txt")?;
+            test_key_sequences(
+                &mut app,
+                vec![
+                    (Some("<space>E"), None),
+                    (
+                        Some(":sh echo hello<ret>"),
+                        Some(&|app| {
+                            let editor_x = app.editor.tree.area().x as usize;
+                            assert!(editor_x > 0, "the file tree isn't shown");
+                            // Two columns into the editor, inside the margin of the text.
+                            assert_eq!(column_of(app, "hello"), Some(editor_x + 3));
+                        }),
+                    ),
+                ],
+                false,
+            )
+            .await
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn moving_up_from_the_top_wraps_around() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["a.txt", "b.txt"])?;
