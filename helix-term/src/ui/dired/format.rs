@@ -449,9 +449,10 @@ pub fn parse(
     } else {
         rest.contains(" -> ")
     };
-    let name_end = match link {
-        true => arrow(rest).unwrap_or(rest.len()),
-        false => rest.len(),
+    let name_end = if link {
+        arrow(rest).unwrap_or(rest.len())
+    } else {
+        rest.len()
     };
     parsed.name = pos..pos + name_end;
     if name_end < rest.len() {

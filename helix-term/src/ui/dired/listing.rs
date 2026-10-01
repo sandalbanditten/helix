@@ -171,12 +171,13 @@ fn list(dir: &Path, sort: FileTreeSort) -> Vec<(OsString, Metadata)> {
 
 /// Where an entry sorts, the way the file tree groups it.
 fn group(path: &Path, metadata: &Metadata) -> Group {
-    let metadata = match metadata.is_symlink() {
-        true => match fs::metadata(path) {
+    let metadata = if metadata.is_symlink() {
+        match fs::metadata(path) {
             Ok(target) => target,
             Err(_) => return Group::Other,
-        },
-        false => metadata.clone(),
+        }
+    } else {
+        metadata.clone()
     };
     if metadata.is_dir() {
         Group::Directory

@@ -151,10 +151,11 @@ fn remapped(path: &Path, from: &Path, to: &Path, itself: bool) -> Option<PathBuf
         return None;
     }
     let rest = path.strip_prefix(from).ok()?;
-    match rest.as_os_str().is_empty() {
-        // `join("")` would append a separator.
-        true => itself.then(|| to.to_path_buf()),
-        false => Some(to.join(rest)),
+    // `join("")` would append a separator.
+    if rest.as_os_str().is_empty() {
+        itself.then(|| to.to_path_buf())
+    } else {
+        Some(to.join(rest))
     }
 }
 

@@ -192,13 +192,15 @@ pub fn unignore(repo: &Path, path: &Path, is_dir: bool) -> Result<IgnoreEdit, St
             change: IgnoreChange::Remove(pattern),
         });
     }
-    let file = match global {
-        true => repo.join(".git/info/exclude"),
-        false => source,
+    let file = if global {
+        repo.join(".git/info/exclude")
+    } else {
+        source
     };
-    let base = match global {
-        true => repo,
-        false => file.parent().unwrap_or(repo),
+    let base = if global {
+        repo
+    } else {
+        file.parent().unwrap_or(repo)
     };
     let line = format!("!{}", anchored(base, path, is_dir));
     Ok(IgnoreEdit {
