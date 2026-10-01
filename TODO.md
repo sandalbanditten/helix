@@ -8,7 +8,6 @@ Look online for examples of similar features and implementations.
 Ask when in doubt about specification or implementation, don't guess.
 Performance is very important, especially for large files, directories, and projects.
 
-MAYBE
 ## Compile command
 Should make a new fullscreen buffer, like `dired`.
 In said buffer a language-specific compile command (configured in `languages.toml`) should be run, e.g. `cargo build` or `gradle build`.
@@ -17,7 +16,7 @@ Should turn file positions (e.g. `src/lib.rs:7:5` for rust) in compilation error
 Overall it should work much like Emacs' Compilation Mode.
 In this view the keybind `]d` etc. should go to next hyperlink to the file position (_locus_ in Emacs terminology).
 
-MAYBE
+<!-- MAYBE -->
 ## File watching with `notify` crate
 Popup saying file changed, like there already already exists, if it already had unwritten changes.
 Otherwise just reload the changes
