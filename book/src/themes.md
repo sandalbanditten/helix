@@ -371,6 +371,19 @@ These scopes are used for theming the editor interface:
 | `ui.file-tree.unsaved`            | The `+` of files with unsaved changes, falling back to `info`                                  |
 | `ui.file-tree.error`              | Unreadable directories and broken links in the file tree, falling back to `error`              |
 | `ui.file-tree.match`              | Characters matching the file tree's search, falling back to bold `special`                     |
+| `ui.dired.octal`                  | Octal permissions in [dired][dired-section] without `eza`'s colors, falling back to `constant.numeric` |
+| `ui.dired.permission.read`        | `r` of dired permissions, falling back to `warning`                                            |
+| `ui.dired.permission.write`       | `w` of dired permissions, falling back to `error`                                              |
+| `ui.dired.permission.execute`     | `x` of dired permissions, falling back to `diff.plus`                                          |
+| `ui.dired.permission.special`     | `s` and `t` of dired permissions, falling back to `constant`                                   |
+| `ui.dired.permission.none`        | `-` of dired permissions, falling back to `comment`                                            |
+| `ui.dired.punctuation`            | Dired's tree guides and empty columns, falling back to `comment`                               |
+| `ui.dired.size`                   | Sizes in dired, falling back to `constant.numeric`                                             |
+| `ui.dired.user`                   | The editor's user in dired, falling back to `variable`                                         |
+| `ui.dired.group`                  | The editor's groups in dired, falling back to `variable`                                       |
+| `ui.dired.date`                   | Dates in dired, falling back to `info`                                                         |
+| `ui.dired.link`                   | Link targets in dired, falling back to `ui.text`                                               |
+| `ui.dired.git.new`                | `N` of dired's git column, falling back to `diff.plus`; also `.modified` (`M`, `diff.delta`), `.deleted` (`D`, `diff.minus`), `.renamed` (`R`, `diff.delta.moved`), `.typechange` (`T`, `diff.delta`), `.ignored` (`I`, `comment`) and `.conflict` (`U`, `diff.delta.conflict`) |
 | `ui.selection`                    | For selections in the editing area                                                             |
 | `ui.selection.primary`            |                                                                                                |
 | `ui.highlight`                    | Highlighted lines in the picker preview                                                        |
@@ -399,4 +412,5 @@ These scopes are used for theming the editor interface:
 
 [editor-section]: ./configuration.md#editor-section
 [file-tree-section]: ./editor.md#editorfile-tree-section
+[dired-section]: ./editor.md#editordired-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

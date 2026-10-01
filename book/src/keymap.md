@@ -521,6 +521,8 @@ there.
 | `a`                  | New file, in a row of its directory (with a trailing `/` a directory) |
 | `A`                  | New directory, in a row of its directory |
 | `d`                  | Delete for good, after asking |
+| `e`                  | Edit directory in [dired](./editor.md#editordired-section) |
+| `E`                  | Edit tree in [dired](./editor.md#editordired-section) |
 | `/`                  | Search for a file |
 | `n`, `N`             | Go to the next, previous match |
 | `+`, `-`             | Widen, narrow the file tree |

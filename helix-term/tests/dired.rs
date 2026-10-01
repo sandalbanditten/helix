@@ -1,0 +1,380 @@
+//! Dired buffers list directories of the working directory, which the whole process shares, so
+//! their tests run in a binary of their own and one after another, each in a workspace of its own.
+
+#[cfg(feature = "integration")]
+mod test {
+    #[allow(dead_code)]
+    mod helpers;
+
+    use std::{
+        fs,
+        path::PathBuf,
+        process::Command,
+        sync::{Mutex, MutexGuard, PoisonError},
+    };
+
+    use helix_term::application::Application;
+    use helix_view::doc;
+    use tempfile::TempDir;
+
+    use self::helpers::{test_key_sequences, AppBuilder};
+
+    static WORKING_DIRECTORY: Mutex<()> = Mutex::new(());
+
+    /// A temporary workspace that is the working directory while it lives.
+    struct Workspace {
+        dir: TempDir,
+        _working_directory: MutexGuard<'static, ()>,
+    }
+
+    impl Workspace {
+        /// Creates the files, and the directories ending in `/`, at `paths`.
+        fn new(paths: &[&str]) -> anyhow::Result<Self> {
+            let working_directory = WORKING_DIRECTORY
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let dir = tempfile::tempdir()?;
+            for path in paths {
+                let path = dir.path().join(path);
+                if path.to_string_lossy().ends_with('/') {
+                    fs::create_dir_all(&path)?;
+                } else {
+                    fs::create_dir_all(path.parent().unwrap())?;
+                    fs::write(&path, "")?;
+                }
+            }
+            helix_stdx::env::set_current_working_dir(dir.path())?;
+            Ok(Self {
+                dir,
+                _working_directory: working_directory,
+            })
+        }
+
+        fn path(&self, path: &str) -> PathBuf {
+            helix_stdx::path::canonicalize(self.dir.path().join(path))
+        }
+
+        fn app(&self, open: &str) -> anyhow::Result<Application> {
+            AppBuilder::new().with_file(self.path(open), None).build()
+        }
+
+        fn git(&self, args: &[&str]) {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(self.dir.path())
+                .args(["-c", "user.name=helix", "-c", "user.email=helix@helix"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .env_remove("GIT_DIR")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+    }
+
+    /// The rows of the screen as last drawn, without trailing spaces.
+    fn screen(app: &Application) -> Vec<String> {
+        let screen = app.screen();
+        screen
+            .content
+            .chunks(screen.area.width as usize)
+            .map(|row| {
+                let row: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+                row.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    fn dired_text(app: &Application) -> String {
+        let doc = doc!(app.editor);
+        assert!(doc.dired.is_some(), "not in a dired buffer");
+        doc.text().to_string()
+    }
+
+    fn status(app: &Application) -> String {
+        app.editor
+            .get_status()
+            .map(|(status, _)| status.to_string())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn renames_are_written_to_the_files() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "b.txt", "sub/"])?;
+        let mut app = workspace.app("a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (
+                    Some(":dired<ret>"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        assert_eq!(text.lines().count(), 3, "{text}");
+                        assert!(text.lines().next().unwrap().ends_with(" sub"), "{text}");
+                    }),
+                ),
+                (
+                    Some("/b\\.txt<ret>cc.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert!(!workspace.path("b.txt").exists());
+                        assert!(workspace.path("c.txt").exists());
+                        assert_eq!(status(app), "Applied 1 change");
+                        assert!(dired_text(app).contains(" c.txt\n"));
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                // Moving into a directory that does not exist takes `:w!`; the buffer on the
+                // file follows it.
+                (
+                    Some("/a\\.txt<ret>cnew/dir/a.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert!(workspace.path("a.txt").exists());
+                        assert!(
+                            status(app).contains("Creates the directory"),
+                            "{}",
+                            status(app)
+                        );
+                        assert!(doc!(app.editor).is_modified());
+                    }),
+                ),
+                (
+                    Some(":w!<ret>"),
+                    Some(&|app| {
+                        assert!(workspace.path("new/dir/a.txt").exists());
+                        let moved = app
+                            .editor
+                            .documents()
+                            .any(|doc| doc.path() == Some(&workspace.path("new/dir/a.txt")));
+                        assert!(moved, "the buffer stays on its file");
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletions_and_discards_take_force() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["keep.txt", "gone/inside.txt"])?;
+        let mut app = workspace.app("keep.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired<ret>"), None),
+                (
+                    Some("ggxd:w<ret>"),
+                    Some(&|app| {
+                        assert!(workspace.path("gone").exists());
+                        assert!(status(app).ends_with("Deletes gone (use :w! to apply)"));
+                        assert_eq!(doc!(app.editor).diagnostics().len(), 1);
+                    }),
+                ),
+                (
+                    Some(":w!<ret>"),
+                    Some(&|app| {
+                        assert!(!workspace.path("gone").exists());
+                        assert_eq!(dired_text(app).lines().count(), 1);
+                        assert!(doc!(app.editor).diagnostics().is_empty());
+                    }),
+                ),
+                // Undo cannot bring back what a write did.
+                (
+                    Some("u"),
+                    Some(&|app| {
+                        assert_eq!(dired_text(app).lines().count(), 1);
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tree_opens_dired_over_the_whole_editor() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "src/main.rs", "src/lib.rs"])?;
+        let mut app = workspace.app("src/main.rs")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                // The tree puts its cursor on the focused file once its directory is listed.
+                (Some(":vsplit<ret><space>e"), None),
+                (
+                    Some("e"),
+                    Some(&|app| {
+                        // The directory of the focused file, its cursor on it.
+                        let text = dired_text(app);
+                        assert_eq!(text.lines().count(), 2, "{text}");
+                        let screen = screen(app);
+                        assert_eq!(app.editor.tree.zoomed(), Some(app.editor.tree.focus));
+                        assert!(screen[0].contains("0644"), "{}", screen.join("\n"));
+                        // One split over everything: no tree, no other split beside it.
+                        assert!(!screen[0].contains('│'), "{}", screen.join("\n"));
+                        assert!(screen.iter().any(|row| row.contains("[dired] src/")));
+                        let (view, doc) = helix_view::current_ref!(app.editor);
+                        let text = doc.text().slice(..);
+                        let line = text.char_to_line(doc.selection(view.id).primary().head);
+                        assert!(text.line(line).to_string().contains("main.rs"));
+                    }),
+                ),
+                (
+                    Some("<space>e"),
+                    Some(&|app| {
+                        assert!(app.editor.documents().all(|doc| doc.dired.is_none()));
+                        assert_eq!(app.editor.tree.zoomed(), None);
+                        assert_eq!(app.editor.tree.views().count(), 2);
+                    }),
+                ),
+                // The tree as shown, nested.
+                (
+                    Some("E"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        let names: Vec<_> = text
+                            .lines()
+                            .map(|line| line.rsplit_once(' ').unwrap().1)
+                            .collect();
+                        assert_eq!(names, [".", "src", "lib.rs", "main.rs", "a.txt"], "{text}");
+                        assert!(text.contains("│   └── "), "{text}");
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_git_column_stages_and_ignores() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["tracked.txt", "new.txt", "noise.log"])?;
+        workspace.git(&["init", "-q"]);
+        fs::write(workspace.path(".gitignore"), "*.log\n")?;
+        workspace.git(&["add", "tracked.txt", ".gitignore"]);
+        workspace.git(&["commit", "-qm", "init"]);
+        fs::write(workspace.path("tracked.txt"), "changed")?;
+        let mut app = workspace.app("tracked.txt")?;
+        let porcelain = || {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(workspace.dir.path())
+                .args(["status", "--porcelain=v1", "--ignored"])
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        test_key_sequences(
+            &mut app,
+            vec![
+                (
+                    Some(":dired<ret>"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        assert!(text.contains(" -N ") && text.contains(" -M "), "{text}");
+                    }),
+                ),
+                (
+                    Some("/new<ret>xs -N <ret>c N- <esc>/tracked<ret>xs -M <ret>c M- <esc>/noise<ret>xs -I <ret>c -- <esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 3 changes");
+                        assert_eq!(
+                            porcelain(),
+                            " M .gitignore\nA  new.txt\nM  tracked.txt\n?? noise.log\n"
+                        );
+                        assert!(dired_text(app).contains(" N- "));
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unedited_buffers_follow_the_files() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt"])?;
+        let mut app = workspace.app("a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (
+                    Some(":dired<ret>"),
+                    Some(&|app| {
+                        assert_eq!(dired_text(app).lines().count(), 1);
+                        fs::write(workspace.path("b.txt"), "").unwrap();
+                    }),
+                ),
+                // Give the watcher and the listing time.
+                (Some("<esc>"), None),
+                (
+                    Some("<esc>"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        assert!(text.contains("b.txt"), "{text}");
+                        assert!(!doc!(app.editor).is_modified());
+                    }),
+                ),
+                // An edited buffer keeps its edits.
+                (
+                    Some("ggxd"),
+                    Some(&|_| fs::write(workspace.path("c.txt"), "").unwrap()),
+                ),
+                (Some("<esc>"), None),
+                (
+                    Some("<esc>"),
+                    Some(&|app| {
+                        let text = dired_text(app);
+                        assert_eq!(text.lines().count(), 1, "{text}");
+                        assert!(!text.contains("c.txt"), "{text}");
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    /// Times writing many renames at once, from the end of one step to the end of the next, of
+    /// which an empty step shows what waiting for the editor to be idle costs. Run it with
+    /// `cargo integration-test -- dired::test::measure_writes --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "a measurement, not a check"]
+    async fn measure_writes() -> anyhow::Result<()> {
+        const FILES: usize = 2000;
+        let names: Vec<String> = (0..FILES).map(|i| format!("file-{i:04}.txt")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let workspace = Workspace::new(&paths)?;
+        let mut app = workspace.app("file-0000.txt")?;
+        let last = std::cell::Cell::new(std::time::Instant::now());
+        let lap = |what: &str| {
+            let now = std::time::Instant::now();
+            println!("{what}: {:?}", now - last.replace(now));
+        };
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired<ret>"), Some(&|_| lap("open"))),
+                (Some("<esc>"), Some(&|_| lap("an empty step"))),
+                (Some("%s\\.txt<ret>c.md<esc>"), Some(&|_| lap("edit"))),
+                (
+                    Some(":w<ret>"),
+                    Some(&|app| {
+                        lap(&format!("write {FILES} renames"));
+                        assert_eq!(status(app), format!("Applied {FILES} changes"));
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await?;
+        assert!(workspace.path("file-1999.md").exists());
+        Ok(())
+    }
+}

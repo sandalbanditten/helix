@@ -462,3 +462,121 @@ pub fn cursor_path(doc: &Document, view: ViewId) -> Option<PathBuf> {
     let entry = listing.entries.get(line)?;
     Some(listing.source.root().join(&entry.path))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, time::Instant};
+
+    use helix_core::Transaction;
+    use helix_view::editor::FileTreeSort;
+
+    use super::*;
+
+    /// Times what a dired buffer costs on large listings. Run it in release:
+    /// `cargo test --release -p helix-term --lib dired::tests::measure -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = helix_stdx::path::canonicalize(dir.path());
+        // A directory of 10,000 files, and a tree of 50 directories of 200 files each.
+        fs::create_dir(root.join("flat")).unwrap();
+        for i in 0..10_000 {
+            fs::write(root.join(format!("flat/file-{i:05}.txt")), "x").unwrap();
+        }
+        let mut expanded = std::collections::BTreeSet::new();
+        for d in 0..50 {
+            let sub = PathBuf::from(format!("tree/dir-{d:02}"));
+            fs::create_dir_all(root.join(&sub)).unwrap();
+            for i in 0..200 {
+                fs::write(root.join(&sub).join(format!("file-{i:03}.rs")), "x").unwrap();
+            }
+            expanded.insert(sub);
+        }
+        expanded.insert(PathBuf::from("tree"));
+        let options = listing::Options {
+            sort: FileTreeSort::DirectoriesFirst,
+            icons: true,
+            providers: helix_vcs::DiffProviderRegistry::default(),
+            trust_git: true,
+        };
+        let clock = Clock::system();
+        let time = |what: &str, f: &mut dyn FnMut()| {
+            let start = Instant::now();
+            f();
+            println!("{what}: {:?}", start.elapsed());
+        };
+
+        for (name, source) in [
+            ("flat 10k", Source::Directory(root.join("flat"))),
+            (
+                "tree 10k",
+                Source::Tree {
+                    root: root.clone(),
+                    expanded: expanded.clone(),
+                },
+            ),
+        ] {
+            let mut listing = None;
+            time(&format!("{name}: read"), &mut || {
+                listing = Some(listing::read(&source, &options));
+            });
+            let mut listing = listing.unwrap();
+            let mut text = String::new();
+            time(&format!("{name}: format"), &mut || {
+                text = format::text(&listing, &clock)
+            });
+            listing.text = Rope::from(text.as_str());
+
+            let colors = EzaColors::from_environment();
+            let palette = match &colors {
+                Some(colors) => Palette::eza(colors),
+                None => Palette::theme(&helix_view::Theme::default()),
+            };
+            let you = you();
+            let tree = matches!(source, Source::Tree { .. });
+            time(&format!("{name}: spans of 60 lines"), &mut || {
+                for line in 5000..5060 {
+                    let line = listing.text.line(line).to_string();
+                    let parsed = format::parse(&line, listing.columns, tree).unwrap();
+                    std::hint::black_box(palette.spans(&line, &parsed, &you, false));
+                }
+            });
+
+            // Every name renamed: with a cursor on each, as `%s\.` and a change does, and by
+            // replacing the whole text.
+            let ends: Vec<_> = (0..listing.entries.len())
+                .map(|line| listing.text.line_to_char(line + 1) - 1)
+                .collect();
+            let renamed = Transaction::change(
+                &listing.text,
+                ends.into_iter().map(|end| (end, end, Some(".bak".into()))),
+            );
+            let edited = text.replace(".txt", ".md").replace(".rs\n", ".rs.bak\n");
+            let rewritten = Transaction::change(
+                &listing.text,
+                std::iter::once((0, listing.text.len_chars(), Some(edited.into()))),
+            );
+            let end = listing.text.line_to_char(5001) - 1;
+            let one = Transaction::change(
+                &listing.text,
+                std::iter::once((end, end, Some(".bak".into()))),
+            );
+            for (how, transaction) in [
+                ("one name", one),
+                ("each name", renamed),
+                ("the whole text", rewritten),
+            ] {
+                let mut planned = None;
+                time(&format!("{name}: plan renaming {how}"), &mut || {
+                    let mut text = listing.text.clone();
+                    transaction.apply(&mut text);
+                    let changes = transaction.changes();
+                    planned = Some(plan::plan(&listing, text.slice(..), changes, &clock, true));
+                });
+                let (plan, problems) = planned.unwrap();
+                println!("  {} moves, {} problems", plan.moves.len(), problems.len());
+            }
+        }
+    }
+}
