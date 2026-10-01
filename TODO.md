@@ -19,8 +19,13 @@ Access time stamps should also be editable.
 Git markers should also be editable, e.g. `-I` to `--` should remove the file from `.gitignore` and `-M` to `--` should restore and `M-` to `--` should unstage.
 
 ## File Tree
+We want a copy keybind (`y`) which copies a file and a (`p`) to paste it, or similar interface.
+
 There is a bug where sometimes when opening popups like `space k` for documentation; the popups show up where they should be.
 If the file tree _wasn't_ there, e.g. opening a popup on the first column of the editor viewport shows the popup on the first column on the terminal.
+
+There is also a bug which causes cursor flickering, which I believe was introduced with the file tree feature.
+This should be fixed.
 
 <!-- MAYBE -->
 ## File watching with `notify` crate
