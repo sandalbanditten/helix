@@ -1,11 +1,13 @@
 //! Working out what the edits of a dired buffer ask for, and whether it can be done.
 //!
 //! Which entry an edited line belongs to follows from the edits themselves, the changes since
-//! the buffer was listed: a line is the entry whose line break survived in it, wherever it was
-//! moved to. A line whose text was all deleted is a deletion, unless new lines took its place, as
-//! changing whole lines (`xc`) does: those then edit the entries they replaced, in order.
+//! the buffer was listed: a line is the entry whose text it kept, wherever it was moved to. An
+//! entry whose text is all gone was deleted, unless new lines took its place between the same
+//! neighbors, as changing whole lines (`xc`) does: those then edit the entries they replaced, in
+//! order.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
     ops::Range,
@@ -13,7 +15,7 @@ use std::{
     time::SystemTime,
 };
 
-use helix_core::{Assoc, ChangeSet, Operation, Rope, RopeSlice};
+use helix_core::{ChangeSet, Operation, Rope, RopeSlice};
 use helix_view::dired::{Entry, GitStatus, Kind, Listing, Source};
 
 use super::{
@@ -121,7 +123,7 @@ pub fn plan(
         match *line {
             Some(line) => planner.edited(index, line),
             None if joined.contains(&index) => {}
-            None => planner.deleted(index, lines.collapsed[index]),
+            None => planner.deleted(index, lines.places[index]),
         }
     }
     planner.validate();
@@ -133,11 +135,12 @@ pub fn plan(
 struct Lines {
     /// For each entry, the line it is on now, or `None` if its line was deleted.
     entries: Vec<Option<usize>>,
-    /// For each entry, the line where its text was before it was deleted.
-    collapsed: Vec<usize>,
+    /// For each entry, the line where it would be, for a deleted one.
+    places: Vec<usize>,
     /// Lines of new text that replace no entry.
     added: Vec<usize>,
-    /// Lines holding the text of an entry whose line break went: `(line, entry)`.
+    /// Lines holding text of an entry that is on another line: `(line, entry)`, when lines were
+    /// joined or split.
     joined: Vec<(usize, usize)>,
 }
 
@@ -167,96 +170,87 @@ fn kept(changes: &ChangeSet) -> Vec<Kept> {
     kept
 }
 
-/// Where the first char of `range` (of the listed text) that was kept is now.
-fn first_kept(kept: &[Kept], range: Range<usize>) -> Option<usize> {
-    let first = kept.partition_point(|kept| kept.old.end <= range.start);
-    let kept = kept.get(first)?;
-    let start = kept.old.start.max(range.start);
-    (start < range.end).then(|| kept.new + start - kept.old.start)
-}
-
 fn lines(listed: &Rope, text: RopeSlice, changes: &ChangeSet) -> Lines {
     let kept = kept(changes);
     let count = listed.len_lines() - 1;
     let mut lines = Lines {
         entries: vec![None; count],
-        collapsed: vec![0; count],
+        places: vec![0; count],
         ..Lines::default()
     };
-    let mut owners: HashMap<usize, usize> = HashMap::new();
-    let range = |entry: usize| {
-        let start = listed.line_to_char(entry);
-        start..listed.line_to_char(entry + 1)
-    };
 
-    // A line is the entry whose line break it ends with.
+    // A line is the entry whose text it kept, the first one if it kept the text of several.
+    let mut owners: HashMap<usize, usize> = HashMap::new();
     for entry in 0..count {
-        let line_break = range(entry).end - 1;
-        if let Some(pos) = first_kept(&kept, line_break..line_break + 1) {
-            let line = text.char_to_line(pos);
-            owners.insert(line, entry);
-            lines.entries[entry] = Some(line);
+        let start = listed.line_to_char(entry);
+        let end = listed.line_to_char(entry + 1) - 1;
+        let first = kept.partition_point(|kept| kept.old.end <= start);
+        let mut entry_lines = Vec::new();
+        for kept in kept[first..].iter().take_while(|kept| kept.old.start < end) {
+            let from = kept.new + kept.old.start.max(start) - kept.old.start;
+            let to = kept.new + kept.old.end.min(end) - kept.old.start;
+            if from < to {
+                let (first, last) = (text.char_to_line(from), text.char_to_line(to - 1));
+                for line in first..=last {
+                    if entry_lines.last() != Some(&line) {
+                        entry_lines.push(line);
+                    }
+                }
+            }
+        }
+        for (i, &line) in entry_lines.iter().enumerate() {
+            match owners.get(&line) {
+                None if i == 0 => {
+                    owners.insert(line, entry);
+                    lines.entries[entry] = Some(line);
+                }
+                _ => lines.joined.push((line, entry)),
+            }
         }
     }
-    // An entry that lost its line break but kept some text is on that text's line, unless that
-    // is the line of another entry.
-    for entry in 0..count {
-        if lines.entries[entry].is_some() {
-            continue;
-        }
-        let range = range(entry);
-        let start = range.start;
-        lines.collapsed[entry] = text.char_to_line(changes.map_pos(start, Assoc::Before));
-        let Some(pos) = first_kept(&kept, range.start..range.end - 1) else {
-            continue;
+
+    // Deleted entries between two kept ones are replaced by as many new lines between them.
+    let blank = |line: usize| text.line(line).chars().all(char::is_whitespace);
+    let new_lines = |range: Range<usize>| -> Vec<usize> {
+        range
+            .filter(|line| !owners.contains_key(line) && !blank(*line))
+            .collect()
+    };
+    let joined: HashSet<usize> = lines.joined.iter().map(|(_, entry)| *entry).collect();
+    let mut previous: Option<usize> = None;
+    let mut deleted = Vec::new();
+    for entry in 0..=count {
+        let line = match lines.entries.get(entry) {
+            Some(Some(line)) => *line,
+            Some(None) if !joined.contains(&entry) => {
+                deleted.push(entry);
+                continue;
+            }
+            Some(None) => continue,
+            None => text.len_lines(),
         };
-        let line = text.char_to_line(pos);
-        match owners.get(&line) {
-            Some(_) => lines.joined.push((line, entry)),
-            None => {
-                owners.insert(line, entry);
+        let start = previous.map_or(0, |previous| previous + 1);
+        let between = if start <= line {
+            new_lines(start..line)
+        } else {
+            Vec::new()
+        };
+        if between.len() == deleted.len() {
+            for (&entry, &line) in deleted.iter().zip(&between) {
                 lines.entries[entry] = Some(line);
             }
-        }
-    }
-
-    // New lines where deleted entries were replace them, as many as there were.
-    let blank = |line: usize| text.line(line).chars().all(char::is_whitespace);
-    let mut added: Vec<usize> = (0..text.len_lines())
-        .filter(|line| !owners.contains_key(line) && !blank(*line))
-        .collect();
-    let joined: HashSet<usize> = lines.joined.iter().map(|(_, entry)| *entry).collect();
-    let mut entry = 0;
-    while entry < count {
-        if lines.entries[entry].is_some() || joined.contains(&entry) {
-            entry += 1;
-            continue;
-        }
-        let line = lines.collapsed[entry];
-        let deleted = (entry..count)
-            .take_while(|&next| {
-                lines.entries[next].is_none()
-                    && !joined.contains(&next)
-                    && lines.collapsed[next] == line
-            })
-            .count();
-        let new = added.iter().position(|&added| added == line);
-        if let Some(new) = new {
-            let run = added[new..]
-                .iter()
-                .enumerate()
-                .take_while(|(i, added)| **added == line + i)
-                .count();
-            if run == deleted {
-                for i in 0..deleted {
-                    lines.entries[entry + i] = Some(line + i);
-                }
-                added.drain(new..new + run);
+        } else {
+            for &entry in &deleted {
+                lines.places[entry] = start.min(line);
             }
         }
-        entry += deleted;
+        deleted.clear();
+        previous = Some(line).filter(|_| start <= line).or(previous);
     }
-    lines.added = added;
+    // New lines that replace nothing, also those out of order with the kept ones.
+    let paired: HashSet<usize> = lines.entries.iter().flatten().copied().collect();
+    lines.added = new_lines(0..text.len_lines());
+    lines.added.retain(|line| !paired.contains(line));
     lines
 }
 
@@ -300,8 +294,8 @@ impl Planner<'_> {
     fn edited(&mut self, index: usize, line: usize) {
         let listing = self.listing;
         let entry = &listing.entries[index];
-        let listed_line = listing.text.line(index).to_string();
-        let line_text = self.text.line(line).to_string();
+        let listed_line: Cow<str> = listing.text.line(index).into();
+        let line_text: Cow<str> = self.text.line(line).into();
         if listed_line.trim_end() == line_text.trim_end() {
             return;
         }
@@ -551,31 +545,43 @@ impl Planner<'_> {
             .cloned()
             .collect();
 
-        let sources: HashSet<PathBuf> = self.plan.moves.iter().map(|m| m.from.clone()).collect();
-        let targets: HashSet<PathBuf> = self.plan.moves.iter().map(|m| m.to.clone()).collect();
-        let mut seen = HashSet::new();
-        let moves = self.plan.moves.clone();
-        for (Move { from, to }, range) in moves.into_iter().zip(self.move_ranges.clone()) {
-            let name = shown(&to);
-            if !seen.insert(to.clone()) {
-                self.problem(range, format!("Another entry moves to {name} too"), false);
-            } else if to.starts_with(&from) {
-                self.problem(range, "A directory cannot move into itself", false);
+        let moves = &self.plan.moves;
+        let sources: HashSet<&Path> = moves.iter().map(|step| step.from.as_path()).collect();
+        let targets: HashSet<&Path> = moves.iter().map(|step| step.to.as_path()).collect();
+        let mut seen: HashSet<&Path> = HashSet::with_capacity(moves.len());
+        // Many moves stay in one directory, which is looked up once.
+        let mut directories: HashMap<&Path, bool> = HashMap::new();
+        let mut problems = Vec::new();
+        for (Move { from, to }, range) in moves.iter().zip(&self.move_ranges) {
+            let mut problem = |message: String, forced| {
+                problems.push(Problem {
+                    range: range.clone(),
+                    message,
+                    forced,
+                })
+            };
+            let missing_parent = to.parent().filter(|parent| {
+                !*directories.entry(parent).or_insert_with(|| parent.is_dir())
+                    && !targets.contains(parent)
+                    && !sources.contains(parent)
+            });
+            if !seen.insert(to) {
+                problem(format!("Another entry moves to {} too", shown(to)), false);
+            } else if to.starts_with(from) {
+                problem("A directory cannot move into itself".to_owned(), false);
             } else if deleted.iter().any(|dir| to.starts_with(dir)) {
-                self.problem(range, format!("{name} is deleted by the same write"), false);
-            } else if fs::symlink_metadata(&to).is_ok() && !sources.contains(&to) {
-                self.problem(range, format!("{name} already exists"), false);
-            } else if let Some(parent) = to.parent().filter(|parent| {
-                !parent.is_dir() && !targets.contains(*parent) && !sources.contains(*parent)
-            }) {
+                problem(format!("{} is deleted by the same write", shown(to)), false);
+            } else if fs::symlink_metadata(to).is_ok() && !sources.contains(to.as_path()) {
+                problem(format!("{} already exists", shown(to)), false);
+            } else if let Some(parent) = missing_parent {
                 let parent = shown(parent);
-                self.problem(
-                    range,
+                problem(
                     format!("Creates the directory {parent} (use :w! to apply)"),
                     true,
                 );
             }
         }
+        self.problems.extend(problems);
 
         for (index, range) in std::mem::take(&mut self.touched) {
             let entry = &self.listing.entries[index];
@@ -695,6 +701,16 @@ mod tests {
     }
 
     #[test]
+    fn lines_retyped_like_helix_does_edit_their_entries() {
+        // `xc` on `b` deletes its line, then opens one above the next: a line break at the end
+        // of `a`, so that `a`'s own line break ends the typed text.
+        let (lines, text) = lines_after(LISTED, &[(2, 4, ""), (1, 1, "\n"), (2, 2, "B")]);
+        assert_eq!(text, "a\nB\nc\nd\n");
+        assert_eq!(lines.entries, [Some(0), Some(1), Some(2), Some(3)]);
+        assert!(lines.added.is_empty() && lines.joined.is_empty());
+    }
+
+    #[test]
     fn new_lines_elsewhere_are_added_lines() {
         // `b` deleted, and a line pasted after `d`.
         let (lines, text) = lines_after(LISTED, &[(2, 4, ""), (6, 6, "b\n")]);
@@ -710,8 +726,8 @@ mod tests {
     fn joined_lines_are_noticed() {
         let (lines, text) = lines_after(LISTED, &[(1, 2, " ")]);
         assert_eq!(text, "a b\nc\nd\n");
-        assert_eq!(lines.entries, [None, Some(0), Some(1), Some(2)]);
-        assert_eq!(lines.joined, [(0, 0)]);
+        assert_eq!(lines.entries, [Some(0), None, Some(1), Some(2)]);
+        assert_eq!(lines.joined, [(0, 1)]);
         // The last line may lose its line break.
         let (lines, _) = lines_after(LISTED, &[(7, 8, "")]);
         assert_eq!(lines.entries, [Some(0), Some(1), Some(2), Some(3)]);

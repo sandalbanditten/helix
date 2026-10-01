@@ -71,18 +71,24 @@ fn git(plan: &Plan, applied: &mut Applied) -> Result<()> {
 fn moves(editor: &mut Editor, mut pending: Vec<Move>, applied: &mut Applied) -> Result<()> {
     while !pending.is_empty() {
         // A move waits while its target is taken, or while another move makes its directory.
+        // The paths are normalized, so comparing their bytes is enough, and fast.
         let ready = pending.iter().position(|step| {
             fs::symlink_metadata(&step.to).is_err()
-                && !step
-                    .to
-                    .parent()
-                    .is_some_and(|parent| pending.iter().any(|other| other.to == parent))
+                && !step.to.parent().is_some_and(|parent| {
+                    pending
+                        .iter()
+                        .any(|other| other.to.as_os_str() == parent.as_os_str())
+                })
         });
         let Some(ready) = ready else {
             // Each target is taken by an entry still to move: entries swap places.
             let blocked = pending
                 .iter()
-                .position(|step| pending.iter().any(|other| other.from == step.to))
+                .position(|step| {
+                    pending
+                        .iter()
+                        .any(|other| other.from.as_os_str() == step.to.as_os_str())
+                })
                 .ok_or_else(|| anyhow!("{} already exists", shown(&pending[0].to)))?;
             let from = pending[blocked].from.clone();
             let temporary = temporary(&from);
@@ -124,6 +130,15 @@ fn remap(pending: &mut [Move], from: &Path, to: &Path) {
 /// Where `path` is once `from` moved to `to`, if it moved with it: when it is `from` itself (with
 /// `itself`) or lies inside it.
 fn remapped(path: &Path, from: &Path, to: &Path, itself: bool) -> Option<PathBuf> {
+    // Most paths share no prefix with `from`, which comparing bytes tells fast: this runs for
+    // every move still to do after each move.
+    let (bytes, prefix) = (
+        path.as_os_str().as_encoded_bytes(),
+        from.as_os_str().as_encoded_bytes(),
+    );
+    if !bytes.starts_with(prefix) {
+        return None;
+    }
     let rest = path.strip_prefix(from).ok()?;
     match rest.as_os_str().is_empty() {
         // `join("")` would append a separator.
