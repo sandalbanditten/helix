@@ -5,19 +5,31 @@
 //! off the main thread; the text is drawn in `eza`'s colors (or the theme's) by styling the
 //! visible lines as they are, edited or not.
 
+mod apply;
 mod colors;
 mod format;
 mod listing;
+mod plan;
 
-use std::{cell::OnceCell, ops::Range, path::PathBuf};
+use std::{
+    cell::OnceCell,
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
-use helix_core::{Rope, Selection};
+use anyhow::{anyhow, bail};
+use helix_core::{
+    diagnostic::{DiagnosticProvider, Severity},
+    ChangeSet, Diagnostic, Rope, Selection,
+};
 use helix_loader::workspace_trust::TrustQuery;
 use helix_view::{
+    current,
     dired::{Listing, Source},
+    doc, doc_mut,
     editor::Action,
     graphics::Style,
-    Document, Editor, View, ViewId,
+    view_mut, Document, DocumentId, Editor, ViewId,
 };
 
 use self::{
@@ -105,12 +117,10 @@ fn you() -> You {
     You::default()
 }
 
-/// Lists `source` in the background and shows it over the whole editor, with the cursor on the
-/// entry at `select` (relative to the listing's root) if there is one.
-pub fn open(editor: &Editor, source: Source, select: Option<PathBuf>) {
+/// How listings of `root` are read.
+fn options(editor: &Editor, root: &Path) -> listing::Options {
     let config = editor.config();
-    let root = source.root();
-    let options = listing::Options {
+    listing::Options {
         sort: config.file_tree.sort,
         icons: config.dired.icons,
         providers: editor.diff_providers.clone(),
@@ -118,15 +128,24 @@ pub fn open(editor: &Editor, source: Source, select: Option<PathBuf>) {
             .workspace_trust
             .query(&helix_loader::find_workspace_in(root).0, TrustQuery::Git)
             .is_trusted(),
-    };
+    }
+}
+
+/// Lists `source` in the background and shows it over the whole editor, with the cursor on the
+/// entry at `select` (relative to the listing's root) if there is one.
+pub fn open(editor: &Editor, source: Source, select: Option<PathBuf>) {
+    let options = options(editor, source.root());
     in_background(
-        move || {
-            let listing = listing::read(&source, &options);
-            let text = format::text(&listing, &Clock::system());
-            (listing, text)
-        },
-        move |editor, (listing, text)| show(editor, listing, text, select),
+        move || read(&source, &options),
+        move |editor, listing| show(editor, listing, select),
     );
+}
+
+/// Reads what `source` lists, and the text that shows it.
+fn read(source: &Source, options: &listing::Options) -> Listing {
+    let mut listing = listing::read(source, options);
+    listing.text = Rope::from(format::text(&listing, &Clock::system()));
+    listing
 }
 
 /// Runs `work` on a thread of its own, then `apply` with its result on the main thread.
@@ -148,7 +167,7 @@ fn in_background<T: Send + 'static>(
 
 /// Shows a listing in a zoomed split: in the buffer already showing the same source (listed
 /// anew unless edited), or in a new one.
-fn show(editor: &mut Editor, listing: Listing, text: String, select: Option<PathBuf>) {
+fn show(editor: &mut Editor, listing: Listing, select: Option<PathBuf>) {
     let shown = editor
         .documents()
         .find(|doc| {
@@ -168,14 +187,14 @@ fn show(editor: &mut Editor, listing: Listing, text: String, select: Option<Path
                 Some(view) => editor.focus(view),
                 None => editor.switch(doc_id, Action::VerticalSplit),
             }
-            let (view, doc) = current!(editor);
-            if !doc.is_modified() {
-                relist(doc, view, listing, &text);
+            if !doc!(editor, &doc_id).is_modified() {
+                let view = editor.tree.focus;
+                relist(editor, doc_id, view, listing);
             }
         }
         None => {
             let mut doc = Document::from(
-                Rope::from(text),
+                listing.text.clone(),
                 None,
                 editor.config.clone(),
                 editor.syn_loader.clone(),
@@ -199,12 +218,127 @@ fn show(editor: &mut Editor, listing: Listing, text: String, select: Option<Path
 
 /// Replaces the text of a dired buffer with a new listing, keeping the cursors where they were
 /// as far as the text allows, and starts its history afresh so undo cannot go back across it.
-fn relist(doc: &mut Document, view: &mut View, listing: Listing, text: &str) {
-    let transaction = helix_core::diff::compare_ropes(doc.text(), &Rope::from(text));
+fn relist(editor: &mut Editor, doc_id: DocumentId, view_id: ViewId, listing: Listing) {
+    let view = view_mut!(editor, view_id);
+    let doc = doc_mut!(editor, &doc_id);
+    let transaction = helix_core::diff::compare_ropes(doc.text(), &listing.text);
     doc.apply(&transaction, view.id);
     doc.append_changes_to_history(view);
-    doc.reset_history();
     doc.dired = Some(Box::new(listing));
+    publish(doc, &[]);
+    editor.reset_history(doc_id);
+}
+
+/// Applies the edits of the dired buffer `doc_id` to the files: all of them, or none if they
+/// have problems, which become diagnostics. Only `force` (`:w!`) applies what deletes or creates.
+/// The buffer is listed anew after.
+pub fn write(editor: &mut Editor, doc_id: DocumentId, force: bool) -> anyhow::Result<()> {
+    let view_id = editor.get_synced_view_id(doc_id);
+    let view = view_mut!(editor, view_id);
+    let doc = doc_mut!(editor, &doc_id);
+    doc.append_changes_to_history(view);
+    let Some(listing) = doc.dired.as_deref().cloned() else {
+        bail!("{} is no dired buffer", doc.display_name());
+    };
+    let changes = doc
+        .history
+        .get_mut()
+        .changes_since(0)
+        .map(|transaction| transaction.changes().clone())
+        .unwrap_or_else(|| ChangeSet::new(doc.text().slice(..)));
+    let (plan, problems) = plan::plan(&listing, doc.text().slice(..), &changes, &Clock::system());
+    publish(doc, &problems);
+    let blocking: Vec<_> = problems
+        .iter()
+        .filter(|problem| !(force && problem.forced))
+        .collect();
+    match blocking.as_slice() {
+        [] => {}
+        [problem] => bail!("{}", problem.message),
+        problems if problems.iter().all(|problem| problem.forced) => {
+            bail!("{} changes need :w!", problems.len())
+        }
+        problems => bail!("{} problems, nothing applied", problems.len()),
+    }
+
+    let (applied, result) = apply::apply(editor, &plan);
+    let source = moved_source(&listing.source, &applied);
+    let listing = read(&source, &options(editor, source.root()));
+    relist(editor, doc_id, view_id, listing);
+    result.map_err(|err| {
+        anyhow!(
+            "Applied {} of {} changes: {err:#}",
+            applied.done,
+            plan.len()
+        )
+    })?;
+    editor.set_status(match plan.len() {
+        _ if plan.is_empty() => "No changes".to_owned(),
+        1 => "Applied 1 change".to_owned(),
+        changes => format!("Applied {changes} changes"),
+    });
+    Ok(())
+}
+
+/// What `source` lists once the moves of a write are done: the same, with a tree's expanded
+/// directories where they moved to.
+fn moved_source(source: &Source, applied: &apply::Applied) -> Source {
+    match source {
+        Source::Directory(_) => source.clone(),
+        Source::Tree { root, expanded } => Source::Tree {
+            root: root.clone(),
+            expanded: expanded
+                .iter()
+                .filter_map(|dir| {
+                    let dir = applied.path(&root.join(dir));
+                    Some(dir.strip_prefix(root).ok()?.to_path_buf())
+                })
+                .collect(),
+        },
+    }
+}
+
+/// Lists the dired buffer `doc_id` anew, dropping its edits.
+pub fn reload(editor: &mut Editor, doc_id: DocumentId) {
+    let Some(source) = editor
+        .document(doc_id)
+        .and_then(|doc| Some(doc.dired.as_ref()?.source.clone()))
+    else {
+        return;
+    };
+    let listing = read(&source, &options(editor, source.root()));
+    let view_id = editor.get_synced_view_id(doc_id);
+    relist(editor, doc_id, view_id, listing);
+}
+
+/// Shows `problems` as the diagnostics of `doc`, replacing the ones a write found before.
+fn publish(doc: &mut Document, problems: &[plan::Problem]) {
+    let text = doc.text().slice(..);
+    let diagnostics: Vec<_> = problems
+        .iter()
+        .map(|problem| Diagnostic {
+            range: helix_core::diagnostic::Range {
+                start: problem.range.start,
+                end: problem.range.end,
+            },
+            ends_at_word: false,
+            starts_at_word: false,
+            zero_width: problem.range.is_empty(),
+            line: text.char_to_line(problem.range.start.min(text.len_chars())),
+            message: problem.message.clone(),
+            severity: Some(if problem.forced {
+                Severity::Warning
+            } else {
+                Severity::Error
+            }),
+            code: None,
+            provider: DiagnosticProvider::Dired,
+            tags: Vec::new(),
+            source: Some("dired".into()),
+            data: None,
+        })
+        .collect();
+    doc.replace_diagnostics(diagnostics, &[], &DiagnosticProvider::Dired);
 }
 
 /// Where the name of the entry at `path` (relative to the root) starts in an unedited buffer.

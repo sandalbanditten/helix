@@ -413,6 +413,14 @@ fn write_impl(
     let doc_id = doc.id();
     let view_id = view.id;
 
+    // A dired buffer is written to the files it lists.
+    if doc.dired.is_some() {
+        if path.is_some() {
+            bail!("A dired buffer cannot be written to a file");
+        }
+        return ui::dired::write(cx.editor, doc_id, options.force);
+    }
+
     if doc.trim_trailing_whitespace() {
         trim_trailing_whitespace(doc, view_id);
     }
@@ -888,6 +896,7 @@ pub fn write_all_impl(
     options: WriteAllOptions,
 ) -> anyhow::Result<()> {
     let mut errors: Vec<&'static str> = Vec::new();
+    let mut dired = Vec::new();
     let config = cx.editor.config();
     let saves: Vec<_> = cx
         .editor
@@ -899,6 +908,13 @@ pub fn write_all_impl(
         .filter_map(|id| {
             let doc = doc!(cx.editor, &id);
             if !doc.is_modified() {
+                return None;
+            }
+            // Dired buffers are only written when asked to, never by an auto save.
+            if doc.dired.is_some() {
+                if options.write_scratch {
+                    dired.push(id);
+                }
                 return None;
             }
             if doc.path().is_none() {
@@ -983,6 +999,19 @@ pub fn write_all_impl(
         } else {
             cx.editor.save::<PathBuf>(doc_id, None, force)?;
         }
+    }
+
+    let mut failed = Vec::new();
+    for doc_id in dired {
+        if let Err(err) = ui::dired::write(cx.editor, doc_id, options.force) {
+            failed.push(format!(
+                "{}: {err}",
+                doc!(cx.editor, &doc_id).display_name()
+            ));
+        }
+    }
+    if !failed.is_empty() {
+        bail!("{}", failed.join(", "));
     }
 
     if !errors.is_empty() && !options.force {
@@ -1619,6 +1648,11 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
     let scrolloff = cx.editor.config().scrolloff;
     let trust_full = doc_trust_full(cx.editor);
     let (view, doc) = current!(cx.editor);
+    if doc.dired.is_some() {
+        let doc_id = doc.id();
+        ui::dired::reload(cx.editor, doc_id);
+        return Ok(());
+    }
     doc.reload(view, &cx.editor.diff_providers, trust_full)
         .map(|_| {
             view.ensure_cursor_in_view(doc, scrolloff);
@@ -1656,6 +1690,10 @@ fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
         .collect();
 
     for (doc_id, view_ids) in docs_view_ids {
+        if doc!(cx.editor, &doc_id).dired.is_some() {
+            ui::dired::reload(cx.editor, doc_id);
+            continue;
+        }
         let doc = doc_mut!(cx.editor, &doc_id);
 
         // Every doc is guaranteed to have at least 1 view at this point.

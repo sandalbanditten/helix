@@ -923,6 +923,13 @@ impl View {
             .insert(doc.id(), doc.get_current_revision());
     }
 
+    /// Takes the history of `doc` as restarted: this view is synced to its first revision.
+    pub(crate) fn restart_revisions(&mut self, doc: DocumentId) {
+        if let Some(revision) = self.doc_revisions.get_mut(&doc) {
+            *revision = 0;
+        }
+    }
+
     pub fn sync_changes(&mut self, doc: &mut Document) {
         if let Some(transaction) = self.changes_to_sync(doc) {
             self.apply(&transaction, doc);
@@ -1444,6 +1451,36 @@ mod tests {
     /// `doc_revisions`, while `view1`'s `doc_revisions` is left pointing at the
     /// pre-edit revision. Pushing a jump into `view1` afterwards reproduces the
     /// exact situation `push` fails to guard against.
+    /// A document whose history restarts, like a dired buffer listed anew, keeps the views
+    /// that showed it working: they follow it to its first revision.
+    #[test]
+    fn views_follow_a_restarted_history() {
+        let config = Arc::new(ArcSwap::new(Arc::new(Config::default())));
+        let loader = Arc::new(ArcSwap::from_pointee(syntax::Loader::default()));
+        let mut doc = Document::from(Rope::from_str("ab"), None, config, loader);
+        let mut view = View::new(doc.id(), GutterConfig::default());
+        doc.ensure_view_init(view.id);
+        view.sync_changes(&mut doc);
+        for _ in 0..2 {
+            let insert = Transaction::change(doc.text(), std::iter::once((0, 0, Some("x".into()))));
+            assert!(doc.apply(&insert, view.id));
+            doc.append_changes_to_history(&mut view);
+        }
+        assert_eq!(doc.get_current_revision(), 2);
+
+        // What `Editor::reset_history` does for each view.
+        view.sync_changes(&mut doc);
+        view.restart_revisions(doc.id());
+        doc.reset_history();
+        assert!(!doc.is_modified());
+
+        let insert = Transaction::change(doc.text(), std::iter::once((0, 0, Some("y".into()))));
+        assert!(doc.apply(&insert, view.id));
+        doc.append_changes_to_history(&mut view);
+        view.sync_changes(&mut doc);
+        assert_eq!(doc.text(), "yxxab");
+    }
+
     #[test]
     fn jumplist_push_keeps_doc_revisions_in_sync() {
         let config = Arc::new(ArcSwap::new(Arc::new(Config::default())));

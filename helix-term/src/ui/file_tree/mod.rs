@@ -12,7 +12,7 @@ pub(crate) mod icons;
 mod keys;
 pub(crate) mod ls_colors;
 mod mouse;
-mod ops;
+pub(crate) mod ops;
 pub(crate) mod order;
 mod render;
 mod rows;

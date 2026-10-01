@@ -3,6 +3,7 @@
 //! A dired buffer is a document whose lines list files the way `eza --git -aolg` does. Writing
 //! it applies the edits of its lines to the files, so the listing keeps what each line showed.
 
+use helix_core::Rope;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -50,6 +51,9 @@ pub struct Listing {
     /// The working tree of the git repository holding the listed directory.
     pub repo: Option<PathBuf>,
     pub entries: Vec<Entry>,
+    /// The text the entries were shown as, one line each, which a write compares the edited
+    /// text with.
+    pub text: Rope,
 }
 
 impl Listing {

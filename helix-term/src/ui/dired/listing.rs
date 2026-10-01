@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use helix_core::Rope;
 use helix_vcs::{Change, DiffProviderRegistry, Side};
 use helix_view::{
     dired::{Columns, Entry, GitStatus, Kind, Link, Listing, Size, Source},
@@ -108,6 +109,7 @@ pub fn read(source: &Source, options: &Options) -> Listing {
         },
         repo,
         entries,
+        text: Rope::new(),
     }
 }
 

@@ -149,7 +149,6 @@ pub fn permissions(kind: Kind, mode: u32) -> String {
 }
 
 /// The kind letter and the mode bits of permissions like `drwxr-xr-x`.
-#[allow(dead_code)] // until writes read the columns back
 pub fn parse_permissions(text: &str) -> Option<(char, u32)> {
     let chars: Vec<char> = text.chars().collect();
     let [kind, bits @ ..] = chars.as_slice() else {
@@ -182,7 +181,6 @@ pub fn parse_permissions(text: &str) -> Option<(char, u32)> {
 }
 
 /// Octal permissions like `0755` or `755`.
-#[allow(dead_code)] // until writes read the columns back
 pub fn parse_octal(text: &str) -> Option<u32> {
     if text.is_empty() || text.len() > 4 {
         return None;
@@ -235,7 +233,6 @@ pub fn date(time: SystemTime, clock: &Clock) -> String {
 
 /// The time an edited date stands for: one of the forms dates are shown in, or
 /// `YYYY-MM-DD[ HH:MM[:SS]]`. Whatever the form leaves out is taken from `original`.
-#[allow(dead_code)] // until writes read the columns back
 pub fn parse_date(text: &str, original: SystemTime, clock: &Clock) -> Option<SystemTime> {
     let original = clock.zoned(original)?.datetime();
     let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -534,6 +531,7 @@ mod tests {
             columns,
             repo: Some("/repo".into()),
             entries,
+            text: helix_core::Rope::new(),
         }
     }
 

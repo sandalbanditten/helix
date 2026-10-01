@@ -9,6 +9,27 @@ pub fn device_numbers(dev: u64) -> (u32, u32) {
     (rustix::fs::major(dev), rustix::fs::minor(dev))
 }
 
+/// Sets the modified time of `path`, of a link itself rather than its target.
+#[cfg(unix)]
+pub fn set_modified(path: &Path, time: std::time::SystemTime) -> io::Result<()> {
+    use rustix::fs::{AtFlags, Timespec, Timestamps, CWD, UTIME_OMIT};
+    let since_epoch = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "time before 1970"))?;
+    let timestamps = Timestamps {
+        last_access: Timespec {
+            tv_sec: 0,
+            tv_nsec: UTIME_OMIT,
+        },
+        last_modification: Timespec {
+            tv_sec: since_epoch.as_secs() as _,
+            tv_nsec: since_epoch.subsec_nanos() as _,
+        },
+    };
+    rustix::fs::utimensat(CWD, path, &timestamps, AtFlags::SYMLINK_NOFOLLOW)?;
+    Ok(())
+}
+
 /// Moves `from` to `to` like [`fs::rename`]. When the two paths are on different filesystems,
 /// `from` is copied (contents, permissions and symlinks) and then removed instead.
 ///

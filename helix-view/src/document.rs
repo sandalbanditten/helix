@@ -2007,8 +2007,8 @@ impl Document {
     }
 
     /// Starts the history afresh at the current text, which counts as saved. Commit pending
-    /// changes first.
-    pub fn reset_history(&mut self) {
+    /// changes first; views go through [`Editor::reset_history`](crate::Editor::reset_history).
+    pub(crate) fn reset_history(&mut self) {
         debug_assert!(self.changes.is_empty());
         self.history.set(History::default());
         self.last_saved_revision = 0;

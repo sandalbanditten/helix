@@ -68,6 +68,8 @@ pub enum DiagnosticProvider {
     },
     /// Diagnostics from the built-in spell checker.
     Spelling,
+    /// Problems with the edits of a dired buffer, found when writing it.
+    Dired,
 }
 
 impl DiagnosticProvider {

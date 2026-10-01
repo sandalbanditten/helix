@@ -2440,6 +2440,19 @@ impl Editor {
         id
     }
 
+    /// Starts the history of the document `doc_id` afresh at its current text, which then
+    /// counts as saved, so undo cannot go back to before it. Commit pending changes first.
+    pub fn reset_history(&mut self, doc_id: DocumentId) {
+        let Some(doc) = self.documents.get_mut(&doc_id) else {
+            return;
+        };
+        for (view, _) in self.tree.views_mut() {
+            view.sync_changes(doc);
+            view.restart_revisions(doc_id);
+        }
+        doc.reset_history();
+    }
+
     /// Registers `doc` and shows it as `action` says.
     pub fn new_file_from_document(&mut self, action: Action, doc: Document) -> DocumentId {
         let id = self.new_document(doc);
