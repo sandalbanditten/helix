@@ -54,13 +54,16 @@ impl Assoc {
     }
 
     fn insert_offset(self, s: &str) -> usize {
-        let chars = s.chars().count();
+        // Counting is left to the variants that need it: positions mapped through one large
+        // insertion would count it for every position.
         match self {
-            Assoc::After | Assoc::AfterSticky => chars,
+            Assoc::After | Assoc::AfterSticky => s.chars().count(),
             Assoc::AfterWord => s.chars().take_while(|&c| char_is_word(c)).count(),
             // return position before inserted text
             Assoc::Before | Assoc::BeforeSticky => 0,
-            Assoc::BeforeWord => chars - s.chars().rev().take_while(|&c| char_is_word(c)).count(),
+            Assoc::BeforeWord => {
+                s.chars().count() - s.chars().rev().take_while(|&c| char_is_word(c)).count()
+            }
         }
     }
 
