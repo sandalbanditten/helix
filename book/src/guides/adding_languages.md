@@ -54,6 +54,7 @@ below.
    | `rainbows.scm` | rainbow brackets | [rainbow_bracket_queries.md](./rainbow_bracket_queries.md) |
    | `breadcrumbs.scm` | breadcrumbs of the enclosing syntax nodes | [breadcrumbs.md](./breadcrumbs.md) |
    | `folds.scm` | code folding | [folding.md](./folding.md) |
+   | `conceals.scm` | text shown as the symbol it stands for | [conceal.md](./conceal.md) |
 
    A query file may reuse another language's with `; inherits: <lang>` on the
    first line. Run `cargo xtask query-check [language]` to check that the queries

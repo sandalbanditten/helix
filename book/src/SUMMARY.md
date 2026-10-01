@@ -39,3 +39,4 @@
   - [Adding breadcrumb queries](./guides/breadcrumbs.md)
   - [Adding fold queries](./guides/folding.md)
   - [Adding spellcheck queries](./guides/spellcheck.md)
+  - [Adding conceal queries](./guides/conceal.md)

@@ -24,6 +24,7 @@
 - [`[editor.soft-wrap]` Section](#editorsoft-wrap-section)
 - [`[editor.smooth-scroll]` Section](#editorsmooth-scroll-section)
 - [`[editor.folding]` Section](#editorfolding-section)
+- [`[editor.conceal]` Section](#editorconceal-section)
 - [`[editor.smart-tab]` Section](#editorsmart-tab-section)
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
@@ -591,6 +592,31 @@ Example:
 [editor.folding]
 start-folded = true
 placeholder = "⋯"
+```
+
+### `[editor.conceal]` Section
+
+Concealing shows text as the symbol it stands for until a cursor comes close: Typst's
+`$2 alpha^2$` is shown as `$2 α^2$`, and as it is while a cursor is on `alpha` or next to it. The
+text to conceal and its symbols come from the language's `conceals.scm` query (see
+[Adding conceal queries](./guides/conceal.md)); `hx --health` lists the languages that have one.
+
+Only the cursors of the focused view reveal concealed text. A selection that starts or ends inside
+concealed text reveals it too, and nothing is concealed while jump labels are shown. Moving the
+cursor up or down keeps to the columns as they are shown.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `enable` | Whether text is concealed | `true` |
+| `reveal` | When a cursor shows concealed text as it is: `adjacent` while it is on the text or on the character before or after it, `symbol` while it is on the text, `line` while it is on the text's line | `adjacent` |
+
+Concealed text keeps its syntax highlighting, with the `ui.virtual.conceal` theme scope on top.
+
+Example:
+
+```toml
+[editor.conceal]
+reveal = "line"
 ```
 
 ### `[editor.smart-tab]` Section
