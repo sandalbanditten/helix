@@ -54,6 +54,7 @@ below.
    | `rainbows.scm` | rainbow brackets | [rainbow_bracket_queries.md](./rainbow_bracket_queries.md) |
    | `breadcrumbs.scm` | breadcrumbs of the enclosing syntax nodes | [breadcrumbs.md](./breadcrumbs.md) |
    | `folds.scm` | code folding | [folding.md](./folding.md) |
+   | `spellcheck.scm` | which parts of a document are spell checked | [spellcheck.md](./spellcheck.md) |
    | `conceals.scm` | text shown as the symbol it stands for | [conceal.md](./conceal.md) |
 
    A query file may reuse another language's with `; inherits: <lang>` on the
