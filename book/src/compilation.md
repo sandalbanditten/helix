@@ -43,13 +43,13 @@ Helix comes with these:
 
 | Languages | `compile-command` | `test-command` |
 | --- | --- | --- |
-| `rust` | `cargo build` | `cargo test` |
+| `rust` | `cargo build --color=always` | `cargo test --color=always -- --color=always` |
 | `go` | `go build ./...` | `go test ./...` |
-| `zig` | `zig build` | `zig build test` |
-| `typst` | `typst compile %{file_path_absolute}` | |
-| `java`, `kotlin` | `gradle build` | `gradle test` |
-| `scala` | `sbt compile` | `sbt test` |
-| `haskell` | `cabal build` | `cabal test` |
+| `zig` | `zig build --color on` | `zig build test --color on` |
+| `typst` | `typst --color always compile %{file_path_absolute}` | |
+| `java`, `kotlin` | `gradle build --console=colored` | `gradle test --console=colored` |
+| `scala` | `sbt -Dsbt.color=always compile` | `sbt -Dsbt.color=always test` |
+| `haskell` | `cabal build --ghc-options=-fdiagnostics-color=always` | `cabal test --ghc-options=-fdiagnostics-color=always` |
 | `c`, `cpp` | `make` | `make test` |
 
 A workspace's own `.helix/languages.toml` is only read in a
@@ -67,10 +67,14 @@ that arrives later than two seconds after is left out.
 The output follows the command and the directory and time it started in, and ends with how it
 ended, like `Exited with code 101 at 14:03:15 after 2.81 s`, which the statusline shows too. A line
 that hasn't ended yet, like a prompt or a progress bar, shows as it is so far. The output keeps
-its colors, in the colors of the terminal: commands are asked for them with `CARGO_TERM_COLOR=always`,
-`CLICOLOR_FORCE=1` and `FORCE_COLOR=1`, unless these are set already, which makes cargo, rustc,
-Typst and many other tools color their output; gcc and clang color it with
-`-fdiagnostics-color=always`. Other escape sequences are left out, and a carriage return lets the
+its colors, in the colors of the terminal. Most tools only color output going to a terminal, so
+commands are asked for them with `CARGO_TERM_COLOR=always`, `CLICOLOR_FORCE=1` and `FORCE_COLOR=1`,
+unless these are set already, and the shipped commands pass the flags that make their tools color
+anyway, like Typst's `--color always`; give them in your own commands too, like
+`:compile-any typst --color always c main.typ`. gcc and clang color with
+`-fdiagnostics-color=always` among the flags of the project, which `make` cannot add. cabal keeps
+the GHC options a package was built with, so its colors may only show once `dist-newstyle` is
+built anew ([haskell/cabal#6177](https://github.com/haskell/cabal/issues/6177)). Other escape sequences are left out, and a carriage return lets the
 rest of a line overwrite it, as in a terminal. With the cursor on the last line, the cursor stays
 on it as output arrives; elsewhere, it stays put.
 

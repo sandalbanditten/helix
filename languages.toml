@@ -355,8 +355,8 @@ block-comment-tokens = [
 language-servers = [ "rust-analyzer" ]
 indent = { tab-width = 4, unit = "    " }
 persistent-diagnostic-sources = ["rustc", "clippy"]
-compile-command = "cargo build"
-test-command = "cargo test"
+compile-command = "cargo build --color=always"
+test-command = "cargo test --color=always -- --color=always"
 
 [language.auto-pairs]
 '(' = ')'
@@ -1520,8 +1520,8 @@ language-servers = [ "jdtls" ]
 indent = { tab-width = 2, unit = "  " }
 comment-tokens = ["//"]
 block-comment-tokens = { start = "/*", end = "*/" }
-compile-command = "gradle build"
-test-command = "gradle test"
+compile-command = "gradle build --console=colored"
+test-command = "gradle test --console=colored"
 
 [[grammar]]
 name = "java"
@@ -1751,8 +1751,8 @@ comment-token = "--"
 block-comment-tokens = { start = "{-", end = "-}" }
 language-servers = [ "haskell-language-server" ]
 indent = { tab-width = 2, unit = "  " }
-compile-command = "cabal build"
-test-command = "cabal test"
+compile-command = "cabal build --ghc-options=-fdiagnostics-color=always"
+test-command = "cabal test --ghc-options=-fdiagnostics-color=always"
 
 [[grammar]]
 name = "haskell"
@@ -1813,8 +1813,8 @@ comment-tokens = ["//", "///", "//!"]
 language-servers = [ "zls" ]
 indent = { tab-width = 4, unit = "    " }
 formatter = { command = "zig" , args = ["fmt", "--stdin"] }
-compile-command = "zig build"
-test-command = "zig build test"
+compile-command = "zig build --color on"
+test-command = "zig build test --color on"
 
 [language.debugger]
 name = "lldb-dap"
@@ -2198,8 +2198,8 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 2, unit = "  " }
 language-servers = [ "metals" ]
-compile-command = "sbt compile"
-test-command = "sbt test"
+compile-command = "sbt -Dsbt.color=always compile"
+test-command = "sbt -Dsbt.color=always test"
 
 [[grammar]]
 name = "scala"
@@ -2432,8 +2432,8 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 4, unit = "    " }
 language-servers = [ "kotlin-language-server" ]
-compile-command = "gradle build"
-test-command = "gradle test"
+compile-command = "gradle build --console=colored"
+test-command = "gradle test --console=colored"
 
 [[grammar]]
 name = "kotlin"
@@ -3974,7 +3974,7 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = ["tinymist"]
 indent = { tab-width = 2, unit = "  " }
-compile-command = "typst compile %{file_path_absolute}"
+compile-command = "typst --color always compile %{file_path_absolute}"
 
 [language.auto-pairs]
 '(' = ')'
