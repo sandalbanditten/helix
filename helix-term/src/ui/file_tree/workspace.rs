@@ -34,8 +34,8 @@ use super::{
     search::{Candidates, Hit, Matching},
     tree::{Kind, NodeId, Reveal, Tree},
     viewport::{self, Align},
-    watch::Watcher,
 };
+use crate::watch::Watcher;
 
 /// The file tree of one workspace root.
 pub(super) struct Workspace {

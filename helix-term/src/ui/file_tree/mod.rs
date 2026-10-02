@@ -19,7 +19,6 @@ mod rows;
 mod search;
 mod tree;
 mod viewport;
-pub(crate) mod watch;
 mod workspace;
 
 use std::{
@@ -52,13 +51,13 @@ use self::{
     search::{Candidates, Direction},
     tree::{Kind, Listing},
     viewport::Align,
-    watch::Watcher,
     workspace::{Focus, GitRefresh, Purpose, Workspace},
 };
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
     job,
     ui::EditorView,
+    watch::Watcher,
 };
 
 /// The narrowest and widest the panel gets, its rail included.

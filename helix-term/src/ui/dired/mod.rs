@@ -41,10 +41,8 @@ use self::{
 };
 use crate::{
     job::{self, Jobs},
-    ui::{
-        file_tree::{ops, watch::Watcher},
-        EditorView,
-    },
+    ui::{file_tree::ops, EditorView},
+    watch::Watcher,
 };
 
 /// What dired keeps beside its buffers: the colors of the environment and who the editor runs

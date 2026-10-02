@@ -1,5 +1,5 @@
-//! Watching directories, so that the tree and dired buffers follow changes made outside of them:
-//! in another program, by `git`, or by a build.
+//! Watching directories, so that the file tree and dired buffers follow changes made outside of
+//! them: in another program, by `git`, or by a build.
 
 use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
 
@@ -16,7 +16,7 @@ use crate::{compositor::Compositor, job};
 /// What handles a batch of changed paths, on the main thread.
 type Handler = Arc<dyn Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync>;
 
-/// How long changes are collected before the tree handles them, so that a burst of them, like
+/// How long changes are collected before they are handled, so that a burst of them, like
 /// `git checkout` rewriting many files, is handled at once.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -68,7 +68,7 @@ impl Watcher {
         for dir in dirs.difference(&self.watched) {
             if let Err(err) = self.inner.watch(dir, RecursiveMode::NonRecursive) {
                 // Out of inotify watches, for example; focusing the terminal still refreshes.
-                log::warn!("file tree cannot watch {}: {err}", dir.display());
+                log::warn!("cannot watch {}: {err}", dir.display());
             }
         }
         self.watched = dirs;
