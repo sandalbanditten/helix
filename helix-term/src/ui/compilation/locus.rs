@@ -160,6 +160,62 @@ pub fn target(data: &serde_json::Value) -> Option<(PathBuf, Position)> {
     ))
 }
 
+/// The display column, from 1, that the caret of the source excerpt below the locus on `line`
+/// of `text` points at, as gcc, clang, GHC and rustc print it, with tabs expanded:
+///
+/// ```text
+///     4 |   std::vector<int> v = 3;
+///       |                        ^
+/// ```
+pub fn caret_column(text: RopeSlice, line: usize) -> Option<usize> {
+    let below: Vec<String> = (line + 1..text.len_lines().min(line + 8))
+        .map(|line| text.line(line).to_string())
+        .collect();
+    below.windows(2).find_map(|pair| {
+        let (source, caret) = (&pair[0], &pair[1]);
+        let bar = caret.find('|')?;
+        let gutter = |line: &str| {
+            line[..bar]
+                .bytes()
+                .all(|byte| byte == b' ' || byte.is_ascii_digit())
+        };
+        let marks = &caret[bar + 1..];
+        let source_bar = source.as_bytes().get(bar) == Some(&b'|');
+        (source_bar && gutter(source) && gutter(caret) && marks.trim_start().starts_with('^'))
+            .then(|| marks.find('^'))
+            .flatten()
+    })
+}
+
+/// The char a locus at `column` (from 0) of `line` points at. Compilers like gcc and GHC count
+/// display columns, tabs to the next multiple of eight: that is what they count when the caret
+/// of their excerpt, `caret`, is at the column they tell, or when it is past the line's end.
+pub fn column_in(line: RopeSlice, column: usize, caret: Option<usize>) -> usize {
+    const TAB: usize = 8;
+    if !line.chars().any(|c| c == '\t') {
+        return column;
+    }
+    let display = match caret {
+        Some(caret) => caret == column + 1,
+        None => column >= line.len_chars(),
+    };
+    if !display {
+        return column;
+    }
+    let mut width = 0;
+    for (index, c) in line.chars().enumerate() {
+        if width >= column || c == '\n' {
+            return index;
+        }
+        width += if c == '\t' {
+            TAB - width % TAB
+        } else {
+            helix_core::unicode::width::UnicodeWidthChar::width(c).unwrap_or(1)
+        };
+    }
+    line.len_chars()
+}
+
 /// Finds the files that the loci of a run name, from the directory it ran in.
 #[derive(Debug)]
 pub struct Resolver {
@@ -653,6 +709,38 @@ test tests::it_works ... ok
                 start.elapsed()
             );
         }
+    }
+
+    #[test]
+    fn display_columns_are_told_by_the_caret() {
+        let excerpt = |text: &str| caret_column(RopeSlice::from(text), 0);
+        // gcc and clang on `\treturn y;`, rustc and GHC.
+        let gcc = "tab.c:2:16: error: ‘y’ undeclared\n    2 |         return y;\n      |                ^\n";
+        let clang = "tab.c:2:9: error: use of undeclared identifier 'y'\n    2 |         return y;\n      |                ^\n";
+        let rustc = " --> tab.rs:2:10\n  |\n2 |     let x = y;\n  |             ^ not found in this scope\n";
+        let ghc = "Tab.hs:2:15: error: [GHC-88464] Variable not in scope: y\n  |\n2 |         print y\n  |               ^\n";
+        assert_eq!(
+            [gcc, clang, rustc, ghc].map(excerpt),
+            [Some(16), Some(16), Some(13), Some(15)]
+        );
+        assert_eq!(
+            excerpt("main.typ:5:12\n  │\n5 │ #let x = 1 +\n  │             ^\n"),
+            None
+        );
+        assert_eq!(excerpt("a.rs:1:1: error\n  | not | a caret\n"), None);
+
+        let line = |text: &'static str| RopeSlice::from(text);
+        let c = line("\treturn y;\n");
+        // gcc counts display columns, clang chars.
+        assert_eq!(column_in(c, 15, Some(16)), 8);
+        assert_eq!(column_in(c, 8, Some(16)), 8);
+        // Without an excerpt, a column past the line's end is one of display columns.
+        assert_eq!(column_in(c, 15, None), 8);
+        assert_eq!(column_in(c, 8, None), 8);
+        let haskell = line("\tprint y\n");
+        assert_eq!(column_in(haskell, 14, Some(15)), 7);
+        // Without tabs, both agree.
+        assert_eq!(column_in(line("    return y;\n"), 11, Some(5)), 11);
     }
 
     #[test]

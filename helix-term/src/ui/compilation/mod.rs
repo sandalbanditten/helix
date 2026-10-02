@@ -438,10 +438,10 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
 /// else in a new one. Otherwise it opens in the focused split.
 fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     let doc = doc_mut!(editor, &doc_id);
-    let target = loci(doc)
-        .find(|locus| locus.range.start == start)
-        .and_then(|locus| locus::target(locus.data.as_ref()?));
-    let (Some((path, position)), Some(compilation)) = (target, doc.compilation.as_mut()) else {
+    let locus = loci(doc).find(|locus| locus.range.start == start);
+    let target = locus.and_then(|locus| locus::target(locus.data.as_ref()?));
+    let caret = locus.and_then(|locus| locus::caret_column(doc.text().slice(..), locus.line));
+    let (Some((path, mut position)), Some(compilation)) = (target, doc.compilation.as_mut()) else {
         return;
     };
     compilation.visited = Some(start);
@@ -462,7 +462,13 @@ fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
         }
     }
     match editor.open(&path, action) {
-        Ok(_) => crate::commands::goto_position(editor, position),
+        Ok(_) => {
+            let text = doc!(editor).text().slice(..);
+            if let Some(line) = text.get_line(position.row) {
+                position.col = locus::column_in(line, position.col, caret);
+            }
+            crate::commands::goto_position(editor, position);
+        }
         Err(err) => editor.set_error(format!("Open file failed: {err}")),
     }
 }

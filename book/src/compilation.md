@@ -104,5 +104,7 @@ exception like `AssertionFailedError at AppTest.java:6`), or the line above it
 | `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one |
 | `]q`, `[q` | Open the next or previous locus, after the one opened last, or the cursor in the compilation buffer, and move the buffer's cursor to it |
 
-Columns are counted in characters, as with `:open file:7:5`. gcc and GHC count tabs to the next
-multiple of eight, so on lines indented with tabs their positions land further to the right.
+Columns are counted in characters, as with `:open file:7:5`, except on lines with tabs when the
+compiler counts display columns, tabs to the next multiple of eight, as gcc and GHC do. That shows
+in the caret of the source excerpt they print below the message, or in a column past the end of
+the line.

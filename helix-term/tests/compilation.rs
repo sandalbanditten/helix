@@ -505,6 +505,26 @@ mod test {
         session.quit().await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn columns_follow_the_compiler_on_tabbed_lines() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["tab.c"])?;
+        fs::write(workspace.path("tab.c"), "int main() {\n\treturn y;\n}\n")?;
+        let mut session = workspace.session("tab.c", None)?;
+        // gcc counts display columns, clang chars; both point at `y`.
+        for column in [16, 9] {
+            let output = format!(
+                "tab.c:2:{column}: error: y\\n    2 |         return y;\\n      |                ^\\n"
+            );
+            session
+                .keys(&typed(&format!("compile-any printf '{output}'")))
+                .await?;
+            session.finished().await;
+            session.keys("]dgf").await?;
+            assert_eq!(cursor(&session.app), ("tab.c".to_owned(), 2, 9), "{column}");
+        }
+        session.quit().await
+    }
+
     /// Times how fast output arrives in the buffer, and how fast keys are handled meanwhile, in
     /// release: `cargo test --release --features integration --test compilation measure -- --ignored --nocapture`
     #[tokio::test(flavor = "multi_thread")]
