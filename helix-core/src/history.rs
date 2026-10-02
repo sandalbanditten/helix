@@ -22,9 +22,10 @@ pub struct State {
 /// When using `u` to undo a change, an inverse of the stored transaction will
 /// be applied which will transition the buffer to the parent state.
 ///
-/// Each revision with the exception of the last in the vector also has a
-/// last child revision. When using `U` to redo a change, the last child transaction
-/// will be applied to the current state of the buffer.
+/// Each revision with children also has a last child revision. When using `U` to redo a
+/// change, the last child transaction will be applied to the current state of the buffer.
+/// The last child is the newest one until undo or a jump goes through another: like in Vim,
+/// redo follows the branch visited last.
 ///
 /// The current revision is the one currently displayed in the buffer.
 ///
@@ -156,9 +157,12 @@ impl History {
             return None;
         }
 
-        let current_revision = &self.revisions[self.current];
-        self.current = current_revision.parent;
-        Some(&current_revision.inversion)
+        let current = self.current;
+        let parent = self.revisions[current].parent;
+        // Redo comes back here, also from a branch older than the parent's newest.
+        self.revisions[parent].last_child = NonZeroUsize::new(current);
+        self.current = parent;
+        Some(&self.revisions[current].inversion)
     }
 
     /// Redo the last edit.
@@ -231,6 +235,11 @@ impl History {
         let up = self.path_up(self.current, lca);
         let down = self.path_up(to, lca);
         self.current = to;
+        // Like Vim, redo then follows the way taken: back up the branch left, down the one entered.
+        for &n in up.iter().chain(&down) {
+            let parent = self.revisions[n].parent;
+            self.revisions[parent].last_child = NonZeroUsize::new(n);
+        }
         let up_txns = up.iter().map(|&n| self.revisions[n].inversion.clone());
         let down_txns = down
             .iter()
@@ -490,6 +499,99 @@ mod test {
         // undo at root is a no-op
         undo(&mut history, &mut state);
         assert_eq!("hello", state.doc);
+    }
+
+    /// Applies what `history` hands out for a step to `state`.
+    fn apply(state: &mut State, transactions: &[Transaction]) {
+        for transaction in transactions {
+            transaction.apply(&mut state.doc);
+        }
+    }
+
+    fn undo(history: &mut History, state: &mut State) {
+        let transaction = history.undo().cloned();
+        apply(state, transaction.as_slice());
+    }
+
+    fn redo(history: &mut History, state: &mut State) {
+        let transaction = history.redo().cloned();
+        apply(state, transaction.as_slice());
+    }
+
+    /// Deletes the char at `pos` as a revision of its own, like `x` in Vim.
+    fn delete_char(history: &mut History, state: &mut State, pos: usize) {
+        let transaction = Transaction::change(&state.doc, [(pos, pos + 1, None)].into_iter());
+        history.commit_revision(&transaction, state);
+        transaction.apply(&mut state.doc);
+    }
+
+    /// The example of Vim's `:help undo-branches`, then `u` and `CTRL-R` from the branch it
+    /// ends in.
+    #[test]
+    fn redo_follows_the_branch_visited_last() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from("one two three"),
+            selection: Selection::point(0),
+        };
+        for _ in 0..3 {
+            delete_char(&mut history, &mut state, 0);
+        }
+        assert_eq!(state.doc, " two three");
+        for _ in 0..3 {
+            undo(&mut history, &mut state);
+        }
+        assert_eq!(state.doc, "one two three");
+        for _ in 0..3 {
+            delete_char(&mut history, &mut state, 4);
+        }
+        assert_eq!(state.doc, "one  three");
+
+        // `g-` three times goes back to the first branch.
+        for expected in ["one o three", "one wo three", " two three"] {
+            apply(&mut state, &history.earlier(UndoKind::Steps(1)));
+            assert_eq!(state.doc, expected);
+        }
+        for _ in 0..3 {
+            undo(&mut history, &mut state);
+        }
+        assert_eq!(state.doc, "one two three");
+        // Redo takes the branch visited last, not the newest one.
+        redo(&mut history, &mut state);
+        assert_eq!(state.doc, "ne two three");
+
+        // Jumping into the newest branch makes redo follow it again.
+        apply(&mut state, &history.later(UndoKind::Steps(5)));
+        assert_eq!(state.doc, "one  three");
+        for _ in 0..3 {
+            undo(&mut history, &mut state);
+        }
+        redo(&mut history, &mut state);
+        assert_eq!(state.doc, "one wo three");
+    }
+
+    /// Undoing and redoing retrace their steps when a revision has several children.
+    #[test]
+    fn redo_comes_back_where_undo_left() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from("abc"),
+            selection: Selection::point(0),
+        };
+        delete_char(&mut history, &mut state, 0); // 1: "bc"
+        undo(&mut history, &mut state);
+        delete_char(&mut history, &mut state, 2); // 2: "ab"
+        undo(&mut history, &mut state);
+        redo(&mut history, &mut state);
+        assert_eq!(state.doc, "ab");
+
+        // To revision 1 by time, back to the root, and redo goes to revision 1 again.
+        apply(&mut state, &history.earlier(UndoKind::Steps(1)));
+        assert_eq!(state.doc, "bc");
+        undo(&mut history, &mut state);
+        assert_eq!(state.doc, "abc");
+        redo(&mut history, &mut state);
+        assert_eq!(state.doc, "bc");
     }
 
     #[test]
