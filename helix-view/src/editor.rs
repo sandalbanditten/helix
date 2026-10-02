@@ -291,6 +291,25 @@ impl Default for DiredConfig {
     }
 }
 
+/// The compilation buffer, which shows the output of `:compile` and the like.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CompilationConfig {
+    /// Where `gf` and `gd` open a locus of the output. Defaults to `beside`.
+    pub open: CompilationOpen,
+}
+
+/// Where a locus of the compilation buffer opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompilationOpen {
+    /// In the split the command was run from, the output staying in its own.
+    #[default]
+    Beside,
+    /// In the output's split, like `gf` anywhere.
+    Replace,
+}
+
 /// The file tree docked beside the editor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -540,6 +559,8 @@ pub struct Config {
     pub file_tree: FileTreeConfig,
     /// Dired buffers, directory listings that are edited to change the files.
     pub dired: DiredConfig,
+    /// The compilation buffer, which shows the output of `:compile` and the like.
+    pub compilation: CompilationConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1541,6 +1562,7 @@ impl Default for Config {
             file_explorer: FileExplorerConfig::default(),
             file_tree: FileTreeConfig::default(),
             dired: DiredConfig::default(),
+            compilation: CompilationConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,

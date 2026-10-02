@@ -10,6 +10,7 @@
 - [`[editor.file-explorer]` Section](#editorfile-explorer-section)
 - [`[editor.file-tree]` Section](#editorfile-tree-section)
 - [`[editor.dired]` Section](#editordired-section)
+- [`[editor.compilation]` Section](#editorcompilation-section)
 - [`[editor.buffer-picker]` Section](#editorbuffer-picker-section)
 - [`[editor.auto-pairs]` Section](#editorauto-pairs-section)
 - [`[editor.auto-save]` Section](#editorauto-save-section)
@@ -390,6 +391,15 @@ the time zone offset they had, and a file that became a link shows `T` like `git
 | --- | --- | --- |
 | `colors` | Whether listings take the colors of `eza`, from `LS_COLORS`, `EZA_COLORS` and `EXA_COLORS`, rather than the `ui.dired` [theme scopes](./themes.md#interface). The theme is used when none of these is set | `true` |
 | `icons` | Whether names show the icons `eza` shows, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
+
+### `[editor.compilation]` Section
+
+The [compilation buffer](./compilation.md) shows the output of `:compile`, `:compile-test` and
+`:compile-any`.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `open` | Where `gf` and `gd` open a locus of the output: `"beside"` it, in the split the command was run from, or `"replace"` in the output's own split, like `gf` anywhere; `]q` and `[q` show a hidden output the same way | `"beside"` |
 
 ### `[editor.buffer-picker]` Section
 

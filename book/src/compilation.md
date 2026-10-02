@@ -2,8 +2,8 @@
 
 `:compile` runs the build command of the current buffer's language, like `cargo build`, and shows
 its output in the compilation buffer, over the whole editor, as it arrives. The file positions in
-the output, like `src/lib.rs:3:9`, are its _loci_: `gf` opens the one under the cursor beside the
-output, and `]q` and `[q` visit them one by one from any buffer.
+the output, like `src/lib.rs:3:9`, are its _loci_: `]q` and `[q` select them one by one, from any
+buffer, and `gf` opens the one under the cursor beside the output.
 
 ## Running commands
 
@@ -101,8 +101,8 @@ exception like `AssertionFailedError at AppTest.java:6`), or the line above it
 
 | Key | Description |
 | --- | --- |
-| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one |
-| `]q`, `[q` | Open the next or previous locus, after the one opened last, or the cursor in the compilation buffer, and move the buffer's cursor to it |
+| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one; with [`open = "replace"`](./editor.md#editorcompilation-section), in the buffer's own split |
+| `]q`, `[q` | Select the next or previous locus in the compilation buffer, which gets the focus. A hidden buffer shows where `gf` would open a file, and goes on from the locus selected or opened last |
 
 Columns are counted in characters, as with `:open file:7:5`, except on lines with tabs when the
 compiler counts display columns, tabs to the next multiple of eight, as gcc and GHC do. That shows

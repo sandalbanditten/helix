@@ -37,7 +37,8 @@ pub struct Compilation {
     pub process: Option<ProcessGroup>,
     /// The split the command was run from, which loci open in.
     pub origin: Option<ViewId>,
-    /// Where the locus visited last starts, which `]q` and `[q` go on from.
+    /// Where the locus selected or opened last starts, which `]q` and `[q` go on from while the
+    /// buffer is hidden.
     pub visited: Option<usize>,
 }
 

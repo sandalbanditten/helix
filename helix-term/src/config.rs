@@ -329,6 +329,30 @@ mod tests {
     }
 
     #[test]
+    fn parsing_compilation_config() {
+        use helix_view::editor::{CompilationConfig, CompilationOpen};
+
+        let compilation = |config: &str| Config::load_test(config).editor.compilation;
+        assert_eq!(compilation("").open, CompilationOpen::Beside);
+        assert_eq!(
+            compilation("[editor.compilation]\nopen = \"replace\""),
+            CompilationConfig {
+                open: CompilationOpen::Replace,
+            }
+        );
+        for invalid in [
+            "[editor.compilation]\nopen = \"split\"",
+            "[editor.compilation]\nfollow = true",
+        ] {
+            let invalid = invalid.to_owned();
+            assert!(
+                Config::load(Ok(&invalid), Err(ConfigLoadError::default())).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn parsing_file_tree_config() {
         use helix_view::editor::{
             Expanders, FileTreeConfig, FileTreeSide, FileTreeSort, FileTreeStart, LsColors,

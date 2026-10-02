@@ -14,9 +14,9 @@ mod test {
         time::{Duration, Instant},
     };
 
-    use helix_core::{diagnostic::Severity, Position};
-    use helix_term::application::Application;
-    use helix_view::{current_ref, input::parse_macro, Document};
+    use helix_core::diagnostic::Severity;
+    use helix_term::{application::Application, config::Config};
+    use helix_view::{current_ref, editor::CompilationOpen, input::parse_macro, Document};
     use tempfile::TempDir;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
     use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -65,6 +65,15 @@ mod test {
             let app = AppBuilder::new()
                 .with_file(self.path(open), None)
                 .with_lang_loader(test_syntax_loader(languages.map(ToOwned::to_owned)))
+                .build()?;
+            Ok(Session::new(app))
+        }
+
+        /// The editor with `open` open and `config`.
+        fn session_with(&self, open: &str, config: Config) -> anyhow::Result<Session> {
+            let app = AppBuilder::new()
+                .with_file(self.path(open), None)
+                .with_config(config)
                 .build()?;
             Ok(Session::new(app))
         }
@@ -171,6 +180,13 @@ mod test {
             .unwrap_or_default()
     }
 
+    /// The text of the primary selection of the focused buffer.
+    fn selected(app: &Application) -> String {
+        let (view, doc) = current_ref!(app.editor);
+        let range = doc.selection(view.id).primary();
+        doc.text().slice(range.from()..range.to()).to_string()
+    }
+
     /// The name of the focused file and the line and column of its cursor, from 1.
     fn cursor(app: &Application) -> (String, usize, usize) {
         let (view, doc) = current_ref!(app.editor);
@@ -261,25 +277,20 @@ mod test {
         assert_eq!(cursor(&session.app), ("src/lib.rs".to_owned(), 2, 3));
         assert!(session.app.editor.tree.zoomed().is_none());
         assert_eq!(session.app.editor.tree.views().count(), 2);
-        // `]q` goes on from there, `[q` back, from the file.
+        // From the file, `]q` selects the next locus in the output, and `gf` opens it.
         session.keys("]q").await?;
+        assert_eq!(selected(&session.app), "src/main.rs:3:1");
+        session.keys("gf").await?;
         assert_eq!(cursor(&session.app), ("src/main.rs".to_owned(), 3, 1));
         session.keys("]q").await?;
         assert_eq!(status(&session.app), "No next locus");
+        assert_eq!(cursor(&session.app).0, "src/main.rs");
         session.keys("[q").await?;
-        assert_eq!(cursor(&session.app), ("src/lib.rs".to_owned(), 2, 3));
-        // The output's cursor shows the locus.
-        let (view, _) = session
-            .app
-            .editor
-            .tree
-            .views()
-            .find(|(view, _)| view.doc == buffer(&session.app).unwrap().id())
-            .unwrap();
-        let doc = buffer(&session.app).unwrap();
-        let text = doc.text().slice(..);
-        let at = helix_core::coords_at_pos(text, doc.selection(view.id).primary().from());
-        assert_eq!(at, Position::new(4, 5));
+        assert_eq!(selected(&session.app), "src/lib.rs:2:3");
+        // A hidden output shows beside the file again, after the locus selected last.
+        session.keys(":q<ret>]q").await?;
+        assert_eq!(selected(&session.app), "src/main.rs:3:1");
+        assert_eq!(session.app.editor.tree.views().count(), 2);
         // Running again from the file covers the editor again.
         session.keys(":compile-any true<ret>").await?;
         assert!(session.app.editor.tree.zoomed().is_some());
@@ -307,11 +318,35 @@ mod test {
             cursor(&session.app),
             ("src/test/java/demo/AppTest.java".to_owned(), 2, 1)
         );
-        session.keys("]q").await?;
+        session.keys("]qgf").await?;
         assert_eq!(
             cursor(&session.app),
             ("src/main/java/other/App.java".to_owned(), 3, 1)
         );
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loci_open_in_the_output_split_when_configured() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs", "src/main.rs"])?;
+        let mut config = helpers::test_config();
+        config.editor.compilation.open = CompilationOpen::Replace;
+        let mut session = workspace.session_with("src/main.rs", config)?;
+        let output = " --> src/lib.rs:2:3\\n --> src/main.rs:3:1\\n";
+        session
+            .keys(&typed(&format!("compile-any printf '{output}'")))
+            .await?;
+        session.finished().await;
+        // `gf` opens the locus in the output's split, `C-o` goes back to it.
+        session.keys("]dgf").await?;
+        assert_eq!(cursor(&session.app), ("src/lib.rs".to_owned(), 2, 3));
+        assert_eq!(session.app.editor.tree.views().count(), 2);
+        session.keys("<C-o>").await?;
+        assert!(cursor(&session.app).0.starts_with("[compilation]"));
+        // From a file, `]q` shows the hidden output in its split.
+        session.keys("gf]q").await?;
+        assert_eq!(selected(&session.app), "src/main.rs:3:1");
+        assert_eq!(session.app.editor.tree.views().count(), 2);
         session.quit().await
     }
 

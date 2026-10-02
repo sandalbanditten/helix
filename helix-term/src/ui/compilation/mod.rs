@@ -19,8 +19,8 @@ use helix_core::{
 };
 use helix_view::{
     compilation::{Compilation, Kind},
-    current_ref, doc, doc_mut,
-    editor::Action,
+    current, current_ref, doc, doc_mut,
+    editor::{Action, CompilationOpen},
     expansion, view, view_mut, Document, DocumentId, Editor, ViewId,
 };
 use jiff::Zoned;
@@ -378,24 +378,29 @@ pub fn open_on_cursor_line(editor: &mut Editor) -> bool {
     true
 }
 
-/// Visits the next or previous locus of the compilation buffer: after the cursor when the buffer
-/// has the focus, else after the locus visited last. Its cursors move to it, and it opens.
+/// Selects the next or previous locus of the compilation buffer, after the cursor of its split,
+/// which gets the focus. A hidden buffer is shown as loci open, and goes on from the locus
+/// selected or opened last.
 pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
     let Some(doc_id) = buffer(editor) else {
         bail!("No compilation buffer");
     };
-    let doc = doc!(editor, &doc_id);
-    let focused = view!(editor);
-    let from = if focused.doc == doc_id {
-        Some(
-            doc.selection(focused.id)
-                .primary()
-                .cursor(doc.text().slice(..)),
-        )
+    let shown = if view!(editor).doc == doc_id {
+        Some(editor.tree.focus)
     } else {
-        doc.compilation
+        let mut views = editor.tree.views();
+        views
+            .find(|(view, _)| view.doc == doc_id)
+            .map(|(view, _)| view.id)
+    };
+    let doc = doc!(editor, &doc_id);
+    // From the start of the selection, which may be the locus selected before.
+    let from = match shown {
+        Some(view) => Some(doc.selection(view).primary().from()),
+        None => doc
+            .compilation
             .as_ref()
-            .and_then(|compilation| compilation.visited)
+            .and_then(|compilation| compilation.visited),
     };
     let range = {
         let mut loci = loci(doc);
@@ -416,26 +421,32 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
         }
     };
 
-    let scrolloff = editor.config().scrolloff;
-    let views: Vec<ViewId> = editor
-        .tree
-        .views()
-        .filter(|(view, _)| view.doc == doc_id)
-        .map(|(view, _)| view.id)
-        .collect();
-    for view_id in views {
-        let view = view_mut!(editor, view_id);
-        let doc = doc_mut!(editor, &doc_id);
-        doc.set_selection(view_id, Selection::single(range.start, range.end));
-        view.ensure_cursor_in_view(doc, scrolloff);
+    match shown {
+        Some(view) => editor.focus(view),
+        None => {
+            let action = match editor.config().compilation.open {
+                CompilationOpen::Beside => Action::VerticalSplit,
+                CompilationOpen::Replace => Action::Replace,
+            };
+            editor.switch(doc_id, action);
+        }
     }
-    open(editor, doc_id, range.start);
+    let scrolloff = editor.config().scrolloff;
+    let (view, doc) = current!(editor);
+    doc.append_changes_to_history(view);
+    let jump = (doc.id(), doc.selection(view.id).clone());
+    view.push_jump(doc, jump);
+    doc.set_selection(view.id, Selection::single(range.start, range.end));
+    view.ensure_cursor_in_view(doc, scrolloff);
+    if let Some(compilation) = doc.compilation.as_mut() {
+        compilation.visited = Some(range.start);
+    }
     Ok(())
 }
 
-/// Opens the locus starting at `start` in the compilation buffer `doc_id`. When the buffer has
-/// the focus, the file opens beside it: in the split the command was run from, else in another,
-/// else in a new one. Otherwise it opens in the focused split.
+/// Opens the locus starting at `start` in the compilation buffer `doc_id`, which has the focus:
+/// in its split, or, opening `beside` it, in the split the command was run from, else in
+/// another, else in a new one.
 fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     let doc = doc_mut!(editor, &doc_id);
     let locus = loci(doc).find(|locus| locus.range.start == start);
@@ -449,7 +460,7 @@ fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
 
     let focused = editor.tree.focus;
     let mut action = Action::Replace;
-    if view!(editor).doc == doc_id {
+    if editor.config().compilation.open == CompilationOpen::Beside {
         let beside = origin
             .filter(|&origin| origin != focused && editor.tree.contains(origin))
             .or_else(|| {
