@@ -22,7 +22,7 @@ use helix_view::{
     compilation::{Compilation, Kind},
     current, current_ref, doc, doc_mut,
     editor::{Action, CompilationOpen},
-    expansion, view, view_mut, Document, DocumentId, Editor, ViewId,
+    expansion, view, view_mut, Document, DocumentId, Editor, View, ViewId,
 };
 use jiff::Zoned;
 
@@ -146,12 +146,22 @@ pub fn start(editor: &mut Editor, run: Run) {
         None => (0, Some(focused)),
     };
     let colors = editor.config().compilation.colors;
-    let spawned = run::spawn(&shell, &run.command, &run.dir, colors, finder, doc_id, id);
-    let (process, text) = match spawned {
-        Ok(process) => (Some(process), header),
+    let size = size(view!(editor), doc!(editor));
+    let spawned = run::spawn(
+        &shell,
+        &run.command,
+        &run.dir,
+        size,
+        colors,
+        finder,
+        doc_id,
+        id,
+    );
+    let (process, terminal, text) = match spawned {
+        Ok((process, terminal)) => (Some(process), terminal, header),
         Err(err) => {
             editor.set_error(format!("Failed to run '{}': {err}", run.command));
-            (None, format!("{header}Failed to run: {err}\n"))
+            (None, None, format!("{header}Failed to run: {err}\n"))
         }
     };
     doc_mut!(editor, &doc_id).compilation = Some(Box::new(Compilation {
@@ -162,11 +172,47 @@ pub fn start(editor: &mut Editor, run: Run) {
         run: id,
         started: Instant::now(),
         process,
+        terminal,
         origin,
         visited: None,
         styles: Vec::new(),
     }));
     replace(editor, doc_id, &text);
+}
+
+/// The columns and rows of the text that `view` shows of `doc`.
+fn size(view: &View, doc: &Document) -> (u16, u16) {
+    let rows = u16::try_from(view.inner_height()).unwrap_or(u16::MAX);
+    (view.inner_width(doc), rows)
+}
+
+/// Gives the terminal of the running command the size of the view that shows its output, the
+/// focused one if it does, and tells the command when that changes.
+pub fn follow_size(editor: &Editor) {
+    let Some(doc) = buffer(editor).and_then(|doc| editor.document(doc)) else {
+        return;
+    };
+    let Some(Compilation {
+        process: Some(process),
+        terminal: Some(terminal),
+        ..
+    }) = doc.compilation.as_deref()
+    else {
+        return;
+    };
+    let Some((view, _)) = editor
+        .tree
+        .visible_views()
+        .filter(|(view, _)| view.doc == doc.id())
+        .max_by_key(|&(_, focused)| focused)
+    else {
+        return;
+    };
+    let (cols, rows) = size(view, doc);
+    if terminal.size().is_ok_and(|size| size != (cols, rows)) && terminal.resize(cols, rows).is_ok()
+    {
+        let _ = process.notify_resize();
+    }
 }
 
 /// How a hidden compilation buffer shows over the whole editor: in a split of its own, or, when
@@ -344,6 +390,7 @@ fn finish(editor: &mut Editor, doc_id: DocumentId, end: End) {
     let doc = doc_mut!(editor, &doc_id);
     if let Some(compilation) = doc.compilation.as_mut() {
         compilation.process = None;
+        compilation.terminal = None;
     }
     let count = |severity| {
         doc.diagnostics()

@@ -13,7 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use helix_stdx::process::{self, Leader, ProcessGroup};
+use helix_stdx::{
+    process::{self, Leader, ProcessGroup},
+    pty::Pty,
+};
 use helix_view::{graphics::Style, DocumentId, Editor};
 use tokio::runtime::Handle;
 
@@ -153,6 +156,15 @@ const REFRESH: Duration = Duration::from_millis(100);
 /// leader exited. Output that comes later than twice this after the leader exited is dropped.
 const GRACE: Duration = Duration::from_secs(1);
 
+/// What commands writing to a terminal are told: that it shows colors and moves the cursor, and
+/// that there's no one to page their output for.
+const TERMINAL: [(&str, &str); 4] = [
+    ("TERM", "xterm-256color"),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+    ("MANPAGER", "cat"),
+];
+
 /// What makes tools color their output into a pipe, unless the environment says otherwise.
 const FORCE_COLORS: [(&str, &str); 3] = [
     ("CARGO_TERM_COLOR", "always"),
@@ -160,62 +172,81 @@ const FORCE_COLORS: [(&str, &str); 3] = [
     ("FORCE_COLOR", "1"),
 ];
 
-/// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
-/// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it,
-/// and its `colors`, which tools are asked for. The returned group stops it.
+/// Runs `command` with `shell` in `dir`, and appends what it writes to the compilation buffer
+/// `doc` as run `run`, with the loci `finder` finds in it, and with its `colors`.
+///
+/// Its stdout and stderr are a terminal of `size`, columns and rows, where there are
+/// pseudo-terminals, else one pipe, into which tools are asked for colors. Returns the group
+/// that stops it, and the terminal, to resize.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     shell: &[String],
     command: &str,
     dir: &Path,
+    (cols, rows): (u16, u16),
     colors: bool,
     finder: Finder,
     doc: DocumentId,
     run: u64,
-) -> io::Result<ProcessGroup> {
+) -> io::Result<(ProcessGroup, Option<Pty>)> {
     let Some((program, args)) = shell.split_first() else {
         return Err(io::Error::other("No shell set"));
     };
-    let (reader, writer) = io::pipe()?;
     let mut process = Command::new(program);
     process
         .args(args)
         .arg(command)
         .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(writer.try_clone()?)
-        .stderr(writer);
-    if colors {
-        for (name, value) in FORCE_COLORS {
-            if std::env::var_os(name).is_none() {
-                process.env(name, value);
-            }
+        .stdin(Stdio::null());
+    let (output, terminal, screen): (Box<dyn Read + Send>, _, _) = match Pty::open(cols, rows) {
+        Ok((terminal, end)) => {
+            process.stdout(end.try_clone()?).stderr(end).envs(TERMINAL);
+            let output = terminal.reader()?;
+            (
+                Box::new(output),
+                Some(terminal),
+                Screen::new(cols, rows, colors),
+            )
         }
-    }
+        Err(err) => {
+            if err.kind() != io::ErrorKind::Unsupported {
+                log::warn!("cannot open a pseudo-terminal, running on a pipe: {err}");
+            }
+            let (output, end) = io::pipe()?;
+            process.stdout(end.try_clone()?).stderr(end);
+            if colors {
+                for (name, value) in FORCE_COLORS {
+                    if std::env::var_os(name).is_none() {
+                        process.env(name, value);
+                    }
+                }
+            }
+            // Nothing redraws output on a pipe, so the screen is one row.
+            (Box::new(output), None, Screen::new(u16::MAX, 1, colors))
+        }
+    };
     let (leader, group) = process::spawn_group(&mut process)?;
-    // The command keeps the write end, which must close for the output to end.
+    // The command keeps the end it writes to, which must close for the output to end.
     drop(process);
 
     // A few chunks in flight at most, so that a busy editor makes the command wait.
     let (chunks, received) = mpsc::sync_channel(16);
     std::thread::Builder::new()
         .name("compilation output".to_owned())
-        .spawn(move || read(reader, &chunks))?;
+        .spawn(move || read(output, &chunks))?;
+    let size = terminal.as_ref().map(Pty::try_clone).transpose()?;
     let handle = Handle::current();
     std::thread::Builder::new()
         .name("compilation".to_owned())
-        .spawn(move || {
-            // Nothing redraws output on a pipe, so the screen is one row.
-            let screen = Screen::new(u16::MAX, 1, colors);
-            follow(&received, leader, screen, finder, &handle, doc, run)
-        })?;
-    Ok(group)
+        .spawn(move || follow(&received, leader, screen, size, finder, &handle, doc, run))?;
+    Ok((group, terminal))
 }
 
-/// Reads `pipe` until it ends, sending what it reads to `chunks`.
-fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
+/// Reads `output` until it ends, sending what it reads to `chunks`.
+fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
     let mut buf = vec![0; 64 * 1024];
     loop {
-        match pipe.read(&mut buf) {
+        match output.read(&mut buf) {
             Ok(0) => return,
             // The run stopped following its output.
             Ok(read) if chunks.send(buf[..read].to_vec()).is_err() => return,
@@ -230,11 +261,14 @@ fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
 }
 
 /// Hands over the output in `chunks` as it arrives, until it ends and the leader exited. Stops
-/// what the leader leaves behind, and by force what a kill didn't stop.
+/// what the leader leaves behind, and by force what a kill didn't stop. The screen takes the
+/// `size` of the terminal, when there is one.
+#[allow(clippy::too_many_arguments)]
 fn follow(
     chunks: &Receiver<Vec<u8>>,
     mut leader: Leader,
     mut screen: Screen,
+    size: Option<Pty>,
     mut finder: Finder,
     handle: &Handle,
     doc: DocumentId,
@@ -259,6 +293,9 @@ fn follow(
             };
             match chunks.recv_timeout(wait) {
                 Ok(chunk) => {
+                    if let Some((cols, rows)) = size.as_ref().and_then(|pty| pty.size().ok()) {
+                        screen.resize(cols, rows);
+                    }
                     screen.push(&chunk);
                     changed = true;
                 }

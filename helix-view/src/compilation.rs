@@ -6,7 +6,7 @@
 use std::{ops::Range, path::PathBuf, time::Instant};
 
 use helix_core::{Assoc, ChangeSet};
-use helix_stdx::process::ProcessGroup;
+use helix_stdx::{process::ProcessGroup, pty::Pty};
 
 use crate::{graphics::Style, ViewId};
 
@@ -36,6 +36,9 @@ pub struct Compilation {
     pub started: Instant,
     /// The running command, stopped when dropped; `None` once it ended.
     pub process: Option<ProcessGroup>,
+    /// The terminal the running command writes to, as large as the view showing its output;
+    /// `None` on a pipe, or once it ended.
+    pub terminal: Option<Pty>,
     /// The split the command was run from, which loci open in.
     pub origin: Option<ViewId>,
     /// Where the locus selected or opened last starts, which `]q` and `[q` go on from while the
@@ -86,6 +89,7 @@ mod tests {
             run: 0,
             started: Instant::now(),
             process: None,
+            terminal: None,
             origin: None,
             visited: None,
             styles: vec![(0..3, red), (4..7, red), (8..11, red)],

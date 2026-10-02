@@ -32,6 +32,18 @@ impl Pty {
         imp::resize(&self.master, cols, rows)
     }
 
+    /// The columns and rows of the terminal.
+    pub fn size(&self) -> io::Result<(u16, u16)> {
+        imp::size(&self.master)
+    }
+
+    /// Another handle of the pseudo-terminal, to resize it or to learn its size elsewhere.
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            master: self.master.try_clone()?,
+        })
+    }
+
     /// A reader of the output, which ends once no command has the terminal end open.
     pub fn reader(&self) -> io::Result<Reader> {
         Ok(Reader(self.master.try_clone()?))
@@ -67,7 +79,9 @@ mod imp {
     use rustix::{
         fs::{Mode, OFlags},
         pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags},
-        termios::{tcgetattr, tcsetattr, tcsetwinsize, OptionalActions, OutputModes, Winsize},
+        termios::{
+            tcgetattr, tcgetwinsize, tcsetattr, tcsetwinsize, OptionalActions, OutputModes, Winsize,
+        },
     };
 
     use super::Pty;
@@ -107,6 +121,11 @@ mod imp {
         };
         Ok(tcsetwinsize(master, size)?)
     }
+
+    pub fn size(master: &File) -> io::Result<(u16, u16)> {
+        let size = tcgetwinsize(master)?;
+        Ok((size.ws_col, size.ws_row))
+    }
 }
 
 #[cfg(not(any(
@@ -127,7 +146,11 @@ mod imp {
     }
 
     pub fn resize(_master: &File, _cols: u16, _rows: u16) -> io::Result<()> {
-        Ok(())
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    pub fn size(_master: &File) -> io::Result<(u16, u16)> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -188,7 +211,8 @@ mod tests {
         let (pty, reader, leader, group) = run(100, 30, script);
         let mut lines = BufReader::new(reader).lines();
         assert_eq!(lines.next().unwrap().unwrap(), "30 100");
-        pty.resize(120, 40).unwrap();
+        pty.try_clone().unwrap().resize(120, 40).unwrap();
+        assert_eq!(pty.size().unwrap(), (120, 40));
         group.notify_resize().unwrap();
         assert_eq!(lines.next().unwrap().unwrap(), "40 120");
         assert!(lines.next().is_none());

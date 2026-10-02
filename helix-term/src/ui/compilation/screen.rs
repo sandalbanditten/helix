@@ -257,6 +257,25 @@ impl Screen {
         }
     }
 
+    /// Changes the size of the screen. The rows that no longer fit above the cursor scroll
+    /// away; rows wider than the screen stay as they are.
+    pub fn resize(&mut self, cols: u16, height: u16) {
+        let (cols, height) = (usize::from(cols.max(1)), usize::from(height.max(1)));
+        if (cols, height) == (self.cols, self.height) {
+            return;
+        }
+        let used = self.used().max(self.row + 1);
+        // Rows below the cursor that don't fit go, as the cursor's stays.
+        let over = used.saturating_sub(height).min(self.row);
+        self.rows.truncate(used);
+        self.scroll_up(over);
+        self.row -= over;
+        (self.cols, self.height) = (cols, height);
+        self.rows.truncate(height);
+        self.move_to_row(self.row);
+        self.col = self.col.min(cols);
+    }
+
     /// Writes `bytes` of output to the screen.
     pub fn push(&mut self, bytes: &[u8]) {
         let joined;
@@ -962,6 +981,29 @@ mod tests {
         assert_eq!(shown("abcdefghij\x1b[Kk"), "abcdefghik");
         assert_eq!(shown("abcdefghijk\x1b[1;1Hx"), "xbcdefghijk");
         assert_eq!(shown("abcdefghij\rk"), "kbcdefghij");
+    }
+
+    #[test]
+    fn resizing() {
+        let mut screen = Screen::new(10, 4, false);
+        screen.push(b"1\n2\n3\n4");
+        // Rows that no longer fit above the cursor scroll away.
+        screen.resize(10, 2);
+        assert_eq!(screen.take_scrolled().text, "1\n2\n");
+        assert_eq!(screen.shown().text, "3\n4");
+        // Lines written later wrap at the new width; rows written before stay.
+        screen.resize(3, 2);
+        screen.push(b"\nabcd");
+        assert_eq!(screen.take_scrolled().text, "3\n4\n");
+        assert_eq!(screen.shown().text, "abcd");
+        screen.push(b"\x1b[1;1Hlonger");
+        assert_eq!(screen.shown().text, "longer");
+        // Rows below the cursor that don't fit go.
+        let mut screen = Screen::new(10, 4, false);
+        screen.push(b"1\n2\n3\n4\x1b[1;1H");
+        screen.resize(10, 2);
+        assert_eq!(screen.take_scrolled().text, "");
+        assert_eq!(screen.shown().text, "1\n2");
     }
 
     /// Times the screen on lines of output, and on progress redrawn, in release:

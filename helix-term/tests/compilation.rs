@@ -623,13 +623,15 @@ mod test {
         session.quit().await
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn output_keeps_its_colors() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/lib.rs"])?;
         let mut session = workspace.session("src/lib.rs", None)?;
         session
             .keys(&typed(
-                "compile-any printf '\\033[1;31mred\\033[0m plain\\n'; echo \"$CARGO_TERM_COLOR $FORCE_COLOR\"",
+                "compile-any printf '\\033[1;31mred\\033[0m plain\\n'; \
+                 test -t 1 && test -t 2 && echo \"terminal $TERM $PAGER $GIT_PAGER $MANPAGER\"",
             ))
             .await?;
         session.finished().await;
@@ -642,13 +644,11 @@ mod test {
             .add_modifier(Modifier::BOLD);
         let styles = &doc.compilation.as_ref().unwrap().styles;
         assert_eq!(styles, &[(red..red + 3, style)]);
-        let forced = |name, value: &str| std::env::var(name).unwrap_or(value.to_owned());
-        let env = format!(
-            "{} {}",
-            forced("CARGO_TERM_COLOR", "always"),
-            forced("FORCE_COLOR", "1")
+        // Commands write to a terminal that shows colors, with no one to page their output for.
+        assert!(
+            output.contains("\nterminal xterm-256color cat cat cat\n"),
+            "{output}"
         );
-        assert!(output.contains(&format!("\n{env}\n")), "{output}");
         // The screen shows them.
         let screen = session.app.screen();
         let width = screen.area.width as usize;
