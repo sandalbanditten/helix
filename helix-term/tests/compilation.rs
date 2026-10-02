@@ -249,7 +249,9 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn loci_are_diagnostics_that_open_beside_the_output() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/lib.rs", "src/main.rs"])?;
-        let mut session = workspace.session("src/main.rs", None)?;
+        let mut config = helpers::test_config();
+        config.editor.compilation.open = CompilationOpen::Beside;
+        let mut session = workspace.session_with("src/main.rs", config)?;
         let output = "error[E0425]: cannot find value `c` in this scope\\n --> src/lib.rs:2:3\\n\
                       warning: unused\\n --> src/main.rs:3:1\\nmissing.rs:1:1: error: gone\\n";
         session

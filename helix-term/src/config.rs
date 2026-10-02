@@ -333,7 +333,7 @@ mod tests {
         use helix_view::editor::{CompilationConfig, CompilationOpen};
 
         let compilation = |config: &str| Config::load_test(config).editor.compilation;
-        assert_eq!(compilation("").open, CompilationOpen::Beside);
+        assert_eq!(compilation("").open, CompilationOpen::Return);
         assert_eq!(
             compilation("[editor.compilation]\nopen = \"replace\"\ncolors = false"),
             CompilationConfig {
@@ -343,8 +343,8 @@ mod tests {
         );
         assert!(compilation("").colors);
         assert_eq!(
-            compilation("[editor.compilation]\nopen = \"return\"").open,
-            CompilationOpen::Return
+            compilation("[editor.compilation]\nopen = \"beside\"").open,
+            CompilationOpen::Beside
         );
         for invalid in [
             "[editor.compilation]\nopen = \"split\"",

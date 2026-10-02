@@ -295,7 +295,7 @@ impl Default for DiredConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CompilationConfig {
-    /// Where `gf` and `gd` open a locus of the output. Defaults to `beside`.
+    /// Where `gf` and `gd` open a locus of the output. Defaults to `return`.
     pub open: CompilationOpen,
     /// Whether the output keeps its colors, which commands are asked for. Defaults to `true`.
     pub colors: bool,
@@ -315,12 +315,12 @@ impl Default for CompilationConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum CompilationOpen {
     /// In the split the command was run from, the output staying in its own.
-    #[default]
     Beside,
     /// In the output's split, like `gf` anywhere.
     Replace,
-    /// Back in the layout the output covered, whose split closes: in a split showing the file,
-    /// else in the one the command was run from.
+    /// Back in the layout the output covers from the split it is shown in, which has no split
+    /// of its own: in a split showing the file, else in that split.
+    #[default]
     Return,
 }
 

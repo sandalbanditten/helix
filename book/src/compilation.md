@@ -3,7 +3,7 @@
 `:compile` runs the build command of the current buffer's language, like `cargo build`, and shows
 its output in the compilation buffer, over the whole editor, as it arrives. The file positions in
 the output, like `src/lib.rs:3:9`, are its _loci_: `]q` and `[q` select them one by one, from any
-buffer, and `gf` opens the one under the cursor beside the output.
+buffer, and `gf` opens the one under the cursor.
 
 ## Running commands
 
@@ -104,7 +104,7 @@ exception like `AssertionFailedError at AppTest.java:6`), or the line above it
 
 | Key | Description |
 | --- | --- |
-| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one; with [`open = "replace"`](./editor.md#editorcompilation-section), in the buffer's own split; with `open = "return"`, back in your layout: in a split already showing the file, else in the split the buffer is shown in, which it has no split of its own but covers the editor from |
+| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line back in your layout: in a split already showing the file, else in the split the buffer covers the editor from, as it has none of its own. With [`open = "beside"`](./editor.md#editorcompilation-section), beside the buffer instead, in the split the command was run from, else in another split, else in a new one; with `open = "replace"`, in the buffer's own split |
 | `]q`, `[q` | Select the next or previous locus in the compilation buffer, which gets the focus. A hidden buffer shows where `gf` would open a file, and goes on from the locus selected or opened last |
 
 Columns are counted in characters, as with `:open file:7:5`, except on lines with tabs when the
