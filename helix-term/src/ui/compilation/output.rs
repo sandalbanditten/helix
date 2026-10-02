@@ -18,7 +18,8 @@ impl Lines {
         let mut rest = bytes;
         while let Some(end) = rest.iter().position(|&byte| byte == b'\n') {
             self.partial.extend_from_slice(&rest[..end]);
-            clean_into(&self.partial, &mut text);
+            text.push_str(&clean(&self.partial));
+            text.push('\n');
             self.partial.clear();
             rest = &rest[end + 1..];
         }
@@ -26,11 +27,17 @@ impl Lines {
         text
     }
 
+    /// The line arrived so far without its line break, cleaned up, to show until it ends.
+    pub fn partial(&self) -> String {
+        clean(&self.partial)
+    }
+
     /// The line the output ended in without a line break, cleaned up, if there is one.
     pub fn finish(&mut self) -> String {
         let mut text = String::new();
         if !self.partial.is_empty() {
-            clean_into(&self.partial, &mut text);
+            text.push_str(&clean(&self.partial));
+            text.push('\n');
             self.partial.clear();
         }
         text
@@ -51,10 +58,9 @@ enum Escape {
     StringEnd,
 }
 
-/// Appends `line` to `text` the way a terminal shows it, with a line break: decoded, without
-/// escape sequences and other control characters, and with what a carriage return let the rest
-/// of the line overwrite.
-fn clean_into(line: &[u8], text: &mut String) {
+/// `line` the way a terminal shows it: decoded, without escape sequences and other control
+/// characters, and with what a carriage return let the rest of the line overwrite.
+fn clean(line: &[u8]) -> String {
     let mut shown: Vec<char> = Vec::new();
     let mut column = 0;
     let mut escape = Escape::None;
@@ -89,8 +95,7 @@ fn clean_into(line: &[u8], text: &mut String) {
             (Escape::StringEnd, _) => Escape::String,
         };
     }
-    text.extend(shown);
-    text.push('\n');
+    shown.into_iter().collect()
 }
 
 /// The lines before the output: the command, then where and when it started.
@@ -163,9 +168,7 @@ mod tests {
     use super::*;
 
     fn clean(line: &str) -> String {
-        let mut text = String::new();
-        clean_into(line.as_bytes(), &mut text);
-        text
+        super::clean(line.as_bytes()) + "\n"
     }
 
     #[test]
@@ -176,6 +179,7 @@ mod tests {
             "   Compiling demo\n"
         );
         assert_eq!(lines.push(b"not find"), "");
+        assert_eq!(lines.partial(), "error[E0425]: cannot find");
         assert_eq!(
             lines.push(b" value\r\n\nwarn"),
             "error[E0425]: cannot find value\n\n"
@@ -209,9 +213,7 @@ mod tests {
         assert_eq!(clean("crlf\r"), "crlf\n");
         assert_eq!(clean("a\tb\x07\x08c"), "a\tbc\n");
         // Invalid UTF-8 shows replaced.
-        let mut text = String::new();
-        clean_into(b"bad \xff byte", &mut text);
-        assert_eq!(text, "bad \u{fffd} byte\n");
+        assert_eq!(super::clean(b"bad \xff byte"), "bad \u{fffd} byte");
     }
 
     #[test]

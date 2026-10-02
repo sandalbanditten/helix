@@ -12,7 +12,7 @@ output, and `]q` and `[q` visit them one by one from any buffer.
 | `:compile` | The `compile-command` of the buffer's language, like `cargo build` |
 | `:compile-test` | Its `test-command`, like `cargo test` |
 | `:compile-any <command>` | Any shell command, like `cargo check` |
-| `:compile-kill` | Stops the running command and keeps its output |
+| `:compile-kill` | Stops the running command and keeps its output: with `SIGTERM`, then with `SIGKILL` what still runs a second later |
 
 While file buffers have unsaved changes, which a build would miss, these commands refuse to run
 and name the buffers; `:compile!`, `:compile-test!` and `:compile-any!` run anyway.
@@ -60,12 +60,15 @@ run.
 
 There is one compilation buffer, named after its command, like `[compilation] cargo build`. A new
 run replaces its output and stops the run before it. Closing the buffer, or quitting Helix, stops
-its run too; closing its split leaves the buffer, and its run, in the background.
+its run too; closing its split leaves the buffer, and its run, in the background. When the command
+exits, what it left running in the background is stopped as well, so that the run ends; output
+that arrives later than two seconds after is left out.
 
 The output follows the command and the directory and time it started in, and ends with how it
 ended, like `Exited with code 101 at 14:03:15 after 2.81 s`, which the statusline shows too. A line
-shows once it ends. Colors and other escape sequences are left out, and a carriage return lets the
-rest of a line overwrite it, as in a terminal. With the cursor on the last line, the cursor stays
+that hasn't ended yet, like a prompt or a progress bar, shows as it is so far. Colors and other
+escape sequences are left out, and a carriage return lets the rest of a line overwrite it, as in a
+terminal. With the cursor on the last line, the cursor stays
 on it as output arrives; elsewhere, it stays put.
 
 The buffer can be edited, but not written, and never counts as modified: it closes and quits

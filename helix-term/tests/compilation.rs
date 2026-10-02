@@ -438,6 +438,73 @@ mod test {
         session.quit().await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unfinished_lines_show_until_they_end() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        let tail = |app: &Application| {
+            let text = text(app);
+            text.lines().last().unwrap_or_default().to_owned()
+        };
+        session
+            .keys(&typed(
+                "compile-any printf 'Password: '; sleep 1; printf 'one'; sleep 1; printf '\\rdone\\n'",
+            ))
+            .await?;
+        session
+            .until("the prompt", |app| tail(app) == "Password: ")
+            .await;
+        session
+            .until("the progress", |app| tail(app) == "Password: one")
+            .await;
+        session.finished().await;
+        let text = text(&session.app);
+        let lines: Vec<_> = text.lines().skip(3).collect();
+        // The carriage return lets the end of the line overwrite its start.
+        assert_eq!(lines[0], "doneword: one", "{text}");
+        assert!(lines[2].starts_with("Finished at "), "{text}");
+        session.quit().await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn what_the_command_leaves_running_is_stopped() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        let pid = workspace.path("pid");
+        // Left behind holding the output, and ignoring terms.
+        let start = Instant::now();
+        session
+            .keys(&typed(&format!(
+                "compile-any sleep 30 & echo $! > {}; echo left",
+                pid.display()
+            )))
+            .await?;
+        session.finished().await;
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(!running(&pid));
+        assert!(text(&session.app).contains("\nleft\n\nFinished at "));
+
+        let start = Instant::now();
+        session
+            .keys(&typed(&format!(
+                "compile-any trap '' TERM; sleep 30 & echo $! > {}; wait",
+                pid.display()
+            )))
+            .await?;
+        session.until("the run", |_| pid.exists()).await;
+        session.keys(":compile-kill<ret>").await?;
+        session.finished().await;
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(!running(&pid));
+        assert!(text(&session.app)
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("Killed at "));
+        session.quit().await
+    }
+
     /// Times how fast output arrives in the buffer, and how fast keys are handled meanwhile, in
     /// release: `cargo test --release --features integration --test compilation measure -- --ignored --nocapture`
     #[tokio::test(flavor = "multi_thread")]

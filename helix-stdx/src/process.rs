@@ -1,72 +1,58 @@
 //! Commands run as a group of processes, so that stopping one stops everything it started.
+//!
+//! The process leading the group is only reaped once the group is done with, so that the group's
+//! id, which is the leader's pid, stays its own while it is signalled.
 
 use std::{
     io,
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 
-/// Spawns `command` leading a process group of its own, and the handle that stops the group.
-///
-/// Whoever waits for the child marks the group [`GroupStatus::exited`] once it returns, so that
-/// dropping the handle afterwards stops nothing.
-pub fn spawn_group(command: &mut Command) -> io::Result<(Child, ProcessGroup)> {
+/// Spawns `command` leading a process group of its own: the leader to wait for, and the handle
+/// that stops the group.
+pub fn spawn_group(command: &mut Command) -> io::Result<(Leader, ProcessGroup)> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
     let child = command.spawn()?;
+    let status = Arc::new(GroupStatus::default());
     let group = ProcessGroup {
         pid: child.id(),
-        status: Arc::default(),
+        status: status.clone(),
     };
-    Ok((child, group))
+    Ok((Leader { child, status }, group))
 }
 
 /// The process group a spawned command leads. Dropping it stops the group, unless its leader
-/// has exited.
+/// was reaped.
 #[derive(Debug)]
 pub struct ProcessGroup {
     pid: u32,
     status: Arc<GroupStatus>,
 }
 
-/// What became of a process group, shared with whoever waits for its leader.
+/// What became of a process group, shared by its [`Leader`] and its [`ProcessGroup`].
 #[derive(Debug, Default)]
-pub struct GroupStatus {
-    exited: AtomicBool,
+struct GroupStatus {
+    reaped: AtomicBool,
     killed: AtomicBool,
 }
 
-impl GroupStatus {
-    /// Notes that the leader exited and was waited for, so the group is no longer stopped.
-    pub fn exited(&self) {
-        self.exited.store(true, Ordering::Release);
-    }
-
-    /// Whether the group was stopped through its [`ProcessGroup`].
-    pub fn killed(&self) -> bool {
-        self.killed.load(Ordering::Acquire)
-    }
-}
-
 impl ProcessGroup {
-    pub fn status(&self) -> Arc<GroupStatus> {
-        self.status.clone()
-    }
-
-    /// Stops every process of the group, unless its leader has exited: with `SIGTERM` on Unix,
-    /// with `taskkill /T /F` on Windows.
+    /// Stops every process of the group with `SIGTERM` on Unix, or `taskkill /T /F` on
+    /// Windows, unless its leader was reaped.
     pub fn kill(&self) -> io::Result<()> {
-        if self.status.exited.load(Ordering::Acquire) {
+        if self.status.reaped.load(Ordering::Acquire) {
             return Ok(());
         }
         self.status.killed.store(true, Ordering::Release);
-        kill_group(self.pid)
+        kill_group(self.pid, false)
     }
 }
 
@@ -76,8 +62,54 @@ impl Drop for ProcessGroup {
     }
 }
 
+/// The process leading a group, to wait for.
+#[derive(Debug)]
+pub struct Leader {
+    child: Child,
+    status: Arc<GroupStatus>,
+}
+
+impl Leader {
+    /// Whether the leader exited, without reaping it.
+    pub fn has_exited(&mut self) -> io::Result<bool> {
+        #[cfg(all(unix, not(any(target_os = "openbsd", target_os = "redox"))))]
+        {
+            use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+            let pid = i32::try_from(self.child.id())
+                .ok()
+                .and_then(Pid::from_raw)
+                .ok_or_else(|| io::Error::other("no such process"))?;
+            let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+            Ok(waitid(WaitId::Pid(pid), options)?.is_some())
+        }
+        // Reaped here, the leader's pid might be reused while the group is signalled.
+        #[cfg(not(all(unix, not(any(target_os = "openbsd", target_os = "redox")))))]
+        {
+            Ok(self.child.try_wait()?.is_some())
+        }
+    }
+
+    /// Stops the processes of the group, the ones the leader left behind too: with `SIGTERM`,
+    /// or with `SIGKILL` when `force` is set.
+    pub fn stop(&self, force: bool) -> io::Result<()> {
+        kill_group(self.child.id(), force)
+    }
+
+    /// Whether the group was stopped through its [`ProcessGroup`].
+    pub fn killed(&self) -> bool {
+        self.status.killed.load(Ordering::Acquire)
+    }
+
+    /// Waits for the leader and reaps it, after which the group is no longer stopped.
+    pub fn reap(mut self) -> io::Result<ExitStatus> {
+        let status = self.child.wait();
+        self.status.reaped.store(true, Ordering::Release);
+        status
+    }
+}
+
 #[cfg(unix)]
-fn kill_group(pid: u32) -> io::Result<()> {
+fn kill_group(pid: u32, force: bool) -> io::Result<()> {
     use rustix::process::{kill_process_group, Pid, Signal};
     // `kill(-1)` would signal every process we may signal.
     let pid = i32::try_from(pid)
@@ -85,11 +117,12 @@ fn kill_group(pid: u32) -> io::Result<()> {
         .filter(|&pid| pid > 1)
         .and_then(Pid::from_raw)
         .ok_or_else(|| io::Error::other("no such process group"))?;
-    Ok(kill_process_group(pid, Signal::TERM)?)
+    let signal = if force { Signal::KILL } else { Signal::TERM };
+    Ok(kill_process_group(pid, signal)?)
 }
 
 #[cfg(windows)]
-fn kill_group(pid: u32) -> io::Result<()> {
+fn kill_group(pid: u32, _force: bool) -> io::Result<()> {
     use std::process::Stdio;
     Command::new("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
@@ -99,70 +132,90 @@ fn kill_group(pid: u32) -> io::Result<()> {
         .map(drop)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{
+        io::{BufRead, BufReader},
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
 
     use super::*;
 
-    /// Whether a process with `pid` still exists, waited for or not.
-    #[cfg(unix)]
-    fn alive(pid: u32) -> bool {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-            && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .is_ok_and(|stat| stat.contains(") Z "))
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn dropping_the_group_stops_what_the_command_started() {
-        // The shell starts a `sleep` of its own and prints its pid.
+    /// Runs `script` with `sh` in a group, and the pid it prints first.
+    fn spawn(script: &str) -> (Leader, ProcessGroup, u32) {
+        let (output, writer) = io::pipe().unwrap();
         let mut command = Command::new("sh");
         command
-            .args(["-c", "sleep 30 & echo $!; wait"])
-            .stdout(Stdio::piped())
+            .args(["-c", script])
+            .stdout(writer)
             .stdin(Stdio::null());
-        let (mut child, group) = spawn_group(&mut command).unwrap();
+        let (leader, group) = spawn_group(&mut command).unwrap();
+        drop(command);
         let mut line = String::new();
-        std::io::BufRead::read_line(
-            &mut std::io::BufReader::new(child.stdout.take().unwrap()),
-            &mut line,
-        )
-        .unwrap();
-        let sleep: u32 = line.trim().parse().unwrap();
-        // Stopped between its fork and its exec, the shell's child may hold the signal back.
+        BufReader::new(output).read_line(&mut line).unwrap();
+        let pid: u32 = line.trim().parse().unwrap();
+        // Stopped between its fork and its exec, the shell's child may hold signals back.
+        until("the grandchild to start", || {
+            std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap() == "sleep\n"
+        });
+        (leader, group, pid)
+    }
+
+    fn until(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while std::fs::read_to_string(format!("/proc/{sleep}/comm")).unwrap() != "sleep\n" {
-            assert!(Instant::now() < deadline, "the grandchild never starts");
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(alive(sleep));
+    }
 
-        let status = group.status();
-        drop(group);
-        assert!(status.killed());
-        child.wait().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(sleep) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!alive(sleep), "the grandchild still runs");
+    /// Whether a process with `pid` still exists, waited for or not.
+    fn alive(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .is_ok_and(|stat| !stat.contains(") Z "))
     }
 
     #[test]
-    fn an_exited_group_is_not_stopped() {
-        let mut command = Command::new(if cfg!(windows) { "cmd" } else { "true" });
-        if cfg!(windows) {
-            command.args(["/C", "exit"]);
-        }
-        let (mut child, group) = spawn_group(&mut command).unwrap();
-        child.wait().unwrap();
-        let status = group.status();
-        status.exited();
+    fn dropping_the_group_stops_what_the_command_started() {
+        let (leader, group, sleep) = spawn("sleep 30 & echo $!; wait");
+        assert!(alive(sleep));
         drop(group);
-        assert!(!status.killed());
+        assert!(leader.killed());
+        leader.reap().unwrap();
+        until("the grandchild to stop", || !alive(sleep));
+    }
+
+    #[test]
+    fn what_an_exited_leader_left_behind_is_stopped() {
+        let (mut leader, group, sleep) = spawn("sleep 30 & echo $!");
+        until("the leader to exit", || leader.has_exited().unwrap());
+        // Not reaped yet, its group can still be stopped.
+        assert!(alive(sleep));
+        leader.stop(false).unwrap();
+        until("the grandchild to stop", || !alive(sleep));
+        assert!(!leader.killed());
+        leader.reap().unwrap();
+        drop(group);
+    }
+
+    #[test]
+    fn processes_ignoring_terms_are_stopped_by_force() {
+        let (mut leader, group, sleep) = spawn("trap '' TERM; sleep 30 & echo $!; wait");
+        group.kill().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(alive(sleep) && !leader.has_exited().unwrap());
+        leader.stop(true).unwrap();
+        until("the grandchild to stop", || !alive(sleep));
+        leader.reap().unwrap();
+    }
+
+    #[test]
+    fn a_reaped_group_is_not_stopped() {
+        let mut command = Command::new("true");
+        let (leader, group) = spawn_group(&mut command).unwrap();
+        leader.reap().unwrap();
+        // Signalling the group that is gone would fail.
+        group.kill().unwrap();
     }
 }

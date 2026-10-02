@@ -234,7 +234,7 @@ fn last_line(text: RopeSlice) -> usize {
 }
 
 /// Appends `output` of run `run` to the compilation buffer `doc_id`, unless it shows another run
-/// by now. The cursors on the last line stay on it.
+/// by now, in place of the line it shows unfinished. The cursors on the last line stay on it.
 fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output) {
     let Some(doc) = editor.document(doc_id) else {
         return;
@@ -264,12 +264,14 @@ fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output
             .map(|(view, _)| view.id)
             .collect()
     };
+    // The line shown unfinished is replaced by what it became.
     let end = doc.text().len_chars();
-    let transaction = Transaction::change(doc.text(), [(end, end, Some(text.into()))].into_iter());
+    let from = end - output.replace.min(end);
+    let transaction = Transaction::change(doc.text(), [(from, end, Some(text.into()))].into_iter());
     apply(editor, doc_id, &transaction);
     let doc = doc_mut!(editor, &doc_id);
-    let diagnostics = diagnostics(doc.text().slice(..), end, output.loci);
-    let appended = end..doc.text().len_chars();
+    let diagnostics = diagnostics(doc.text().slice(..), from, output.loci);
+    let appended = from..doc.text().len_chars();
     doc.splice_diagnostics(diagnostics, &[appended], &DiagnosticProvider::Compilation);
 
     let scrolloff = editor.config().scrolloff;

@@ -4,12 +4,15 @@ use std::{
     io::{self, Read},
     mem,
     path::Path,
-    process::{Child, Command, Stdio},
-    sync::{Arc, Condvar, Mutex},
-    time::Duration,
+    process::{Command, Stdio},
+    sync::{
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
+        Arc, Condvar, Mutex,
+    },
+    time::{Duration, Instant},
 };
 
-use helix_stdx::process::{self, GroupStatus, ProcessGroup};
+use helix_stdx::process::{self, Leader, ProcessGroup};
 use helix_view::{DocumentId, Editor};
 use tokio::runtime::Handle;
 
@@ -22,6 +25,8 @@ use crate::{compositor::Compositor, job};
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
 pub struct Output {
+    /// The chars at the end of the buffer that `text` replaces: the line shown unfinished.
+    pub replace: usize,
     pub text: String,
     /// The chars of `text`.
     pub chars: usize,
@@ -35,6 +40,9 @@ impl Output {
     /// Takes the lines of about the first `max` bytes, and how the run ended once nothing is
     /// left.
     fn take_front(&mut self, max: usize) -> Output {
+        if self.text.len() <= max {
+            return mem::take(self);
+        }
         let bytes = self.text.as_bytes();
         let split = bytes[..max.min(bytes.len())]
             .iter()
@@ -56,6 +64,7 @@ impl Output {
         }
         self.chars -= chars;
         Output {
+            replace: mem::take(&mut self.replace),
             text,
             chars,
             loci,
@@ -63,8 +72,21 @@ impl Output {
         }
     }
 
-    /// Adds the lines `text` with the `loci` in them.
-    fn push(&mut self, text: &str, loci: Vec<Locus>) {
+    /// Adds `text` with the `loci` in it, in place of the last `replace` chars of the output:
+    /// the line shown unfinished, which is either still pending here or in the buffer already.
+    fn push(&mut self, replace: usize, text: &str, loci: Vec<Locus>) {
+        let pending = replace.min(self.chars);
+        if pending > 0 {
+            let at = self
+                .text
+                .char_indices()
+                .rev()
+                .nth(pending - 1)
+                .map_or(0, |(at, _)| at);
+            self.text.truncate(at);
+            self.chars -= pending;
+        }
+        self.replace += replace - pending;
         let start = self.chars;
         self.loci.extend(loci.into_iter().map(|mut locus| {
             locus.start += start;
@@ -73,15 +95,13 @@ impl Output {
         self.text.push_str(text);
         self.chars += text.chars().count();
     }
-}
 
-impl Output {
     fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.end.is_none()
+        self.replace == 0 && self.text.is_empty() && self.end.is_none()
     }
 }
 
-/// The output a reader thread hands over to the main thread.
+/// The output the reader hands over to the main thread.
 #[derive(Debug, Default)]
 struct Pending {
     output: Output,
@@ -102,6 +122,13 @@ const BATCH: usize = 256 * 1024;
 /// The reader waits while this much output is pending, rather than filling memory with output
 /// that arrives faster than the editor takes it.
 const PENDING: usize = 4 * 1024 * 1024;
+/// How often the reader looks at the leader when no output arrives.
+const TICK: Duration = Duration::from_millis(50);
+/// A line shows unfinished, like a prompt or a progress bar, at most this often.
+const UNFINISHED: Duration = Duration::from_millis(100);
+/// How long what keeps running has before it is stopped by force: after a kill, or after the
+/// leader exited. Output that comes later than twice this after the leader exited is dropped.
+const GRACE: Duration = Duration::from_secs(1);
 
 /// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
 /// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it.
@@ -126,65 +153,122 @@ pub fn spawn(
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
         .stderr(writer);
-    let (child, group) = process::spawn_group(&mut process)?;
+    let (leader, group) = process::spawn_group(&mut process)?;
     // The command keeps the write end, which must close for the output to end.
     drop(process);
 
-    let status = group.status();
+    // A few chunks in flight at most, so that a busy editor makes the command wait.
+    let (chunks, received) = mpsc::sync_channel(16);
+    std::thread::Builder::new()
+        .name("compilation output".to_owned())
+        .spawn(move || read(reader, &chunks))?;
     let handle = Handle::current();
     std::thread::Builder::new()
         .name("compilation".to_owned())
-        .spawn(move || read(reader, child, finder, &status, &handle, doc, run))?;
+        .spawn(move || follow(&received, leader, finder, &handle, doc, run))?;
     Ok(group)
 }
 
-/// Reads the output of `child` until it ends, then waits for it.
-fn read(
-    mut pipe: io::PipeReader,
-    mut child: Child,
+/// Reads `pipe` until it ends, sending what it reads to `chunks`.
+fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        match pipe.read(&mut buf) {
+            Ok(0) => return,
+            // The run stopped following its output.
+            Ok(read) if chunks.send(buf[..read].to_vec()).is_err() => return,
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => {
+                log::warn!("cannot read compilation output: {err}");
+                return;
+            }
+        }
+    }
+}
+
+/// Hands over the output in `chunks` as it arrives, until it ends and the leader exited. Stops
+/// what the leader leaves behind, and by force what a kill didn't stop.
+fn follow(
+    chunks: &Receiver<Vec<u8>>,
+    mut leader: Leader,
     mut finder: Finder,
-    status: &GroupStatus,
     handle: &Handle,
     doc: DocumentId,
     run: u64,
 ) {
     let shared = Arc::new(Shared::default());
+    let hand_over = |add: &mut dyn FnMut(&mut Output)| hand_over(&shared, handle, doc, run, add);
     let mut lines = Lines::default();
-    let mut buf = vec![0; 64 * 1024];
+    // The unfinished last line as the buffer shows it, and when it was shown.
+    let mut shown = String::new();
+    let mut shown_at = Instant::now();
+    let mut open = true;
+    let mut exited: Option<Instant> = None;
+    let mut killed: Option<Instant> = None;
+    let mut forced = false;
     loop {
-        let read = match pipe.read(&mut buf) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => {
-                log::warn!("cannot read compilation output: {err}");
-                break;
+        if open {
+            match chunks.recv_timeout(TICK) {
+                Ok(chunk) => {
+                    let text = lines.push(&chunk);
+                    if !text.is_empty() {
+                        let mut loci = finder.find(&text);
+                        let replace = mem::take(&mut shown).chars().count();
+                        hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => open = false,
             }
-        };
-        let text = lines.push(&buf[..read]);
-        if !text.is_empty() {
-            let loci = finder.find(&text);
-            hand_over(&shared, handle, doc, run, |output| output.push(&text, loci));
+        } else {
+            std::thread::sleep(TICK / 5);
+        }
+
+        if shown_at.elapsed() >= UNFINISHED {
+            let unfinished = lines.partial();
+            if unfinished != shown {
+                let replace = shown.chars().count();
+                hand_over(&mut |output| output.push(replace, &unfinished, Vec::new()));
+                shown = unfinished;
+            }
+            shown_at = Instant::now();
+        }
+
+        if exited.is_none() && leader.has_exited().unwrap_or(true) {
+            exited = Some(Instant::now());
+            // What it left running would keep the output, and the run, going.
+            let _ = leader.stop(false);
+        }
+        if killed.is_none() && leader.killed() {
+            killed = Some(Instant::now());
+        }
+        let overdue = |since: Option<Instant>| since.is_some_and(|since| since.elapsed() >= GRACE);
+        if !forced && (overdue(killed) || open && overdue(exited)) {
+            let _ = leader.stop(true);
+            forced = true;
+        }
+        // Processes of other groups may keep the output open longer.
+        let given_up = exited.is_some_and(|exited| exited.elapsed() >= 2 * GRACE);
+        if exited.is_some() && (!open || given_up) {
+            break;
         }
     }
+
     let rest = lines.finish();
-    let rest_loci = finder.find(&rest);
-    let exit = child.wait();
-    // Once waited for, its pid may be reused: the group must not be stopped any more.
-    status.exited();
-    let end = if status.killed() {
-        End::Killed
-    } else {
-        match exit {
-            Ok(exit) => exit_end(exit),
-            Err(err) => {
-                log::warn!("cannot wait for the compilation: {err}");
-                End::Exited(-1)
-            }
+    let mut rest_loci = finder.find(&rest);
+    let replace = shown.chars().count();
+    let killed = leader.killed();
+    let end = match leader.reap() {
+        _ if killed => End::Killed,
+        Ok(exit) => exit_end(exit),
+        Err(err) => {
+            log::warn!("cannot wait for the compilation: {err}");
+            End::Exited(-1)
         }
     };
-    hand_over(&shared, handle, doc, run, |output| {
-        output.push(&rest, rest_loci);
+    hand_over(&mut |output| {
+        output.push(replace, &rest, mem::take(&mut rest_loci));
         output.end = Some(end);
     });
 }
@@ -211,7 +295,7 @@ fn hand_over(
     handle: &Handle,
     doc: DocumentId,
     run: u64,
-    add: impl FnOnce(&mut Output),
+    add: &mut dyn FnMut(&mut Output),
 ) {
     let mut pending = shared.pending.lock().unwrap();
     add(&mut pending.output);
@@ -275,8 +359,8 @@ mod tests {
     #[test]
     fn output_is_taken_in_whole_lines() {
         let mut output = Output::default();
-        output.push("äb\ncd\n", vec![locus(0), locus(3)]);
-        output.push("ef\n", vec![locus(1)]);
+        output.push(0, "äb\ncd\n", vec![locus(0), locus(3)]);
+        output.push(0, "ef\n", vec![locus(1)]);
         output.end = Some(End::Exited(0));
 
         // A batch ends at the last line break within it, or the first after it.
@@ -298,5 +382,30 @@ mod tests {
         );
         assert_eq!(last.loci, [locus(1)]);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn unfinished_lines_are_replaced() {
+        // Still pending, the unfinished line goes; in the buffer, the batch replaces it there.
+        let mut output = Output::default();
+        output.push(0, "one\ntw", Vec::new());
+        output.push(2, "two\nthr", Vec::new());
+        assert_eq!(
+            (output.replace, output.text.as_str(), output.chars),
+            (0, "one\ntwo\nthr", 11)
+        );
+        let taken = output.take_front(64);
+        assert_eq!(taken.text, "one\ntwo\nthr");
+        output.push(3, "thrëe\n", vec![locus(0)]);
+        assert_eq!(
+            (output.replace, output.text.as_str(), output.chars),
+            (3, "thrëe\n", 6)
+        );
+        assert_eq!(output.loci, [locus(0)]);
+        // A batch carries what it replaces, the rest none.
+        output.push(0, "four\n", Vec::new());
+        let first = output.take_front(1);
+        assert_eq!((first.replace, first.text.as_str()), (3, "thrëe\n"));
+        assert_eq!((output.replace, output.text.as_str()), (0, "four\n"));
     }
 }
