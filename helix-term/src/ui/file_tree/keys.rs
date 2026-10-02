@@ -1,9 +1,11 @@
-//! The keys of a focused file tree. The one table below drives both the key handling and the
-//! `?` help, so the two cannot disagree.
+//! The keys of a focused file tree.
 
 use helix_view::{info::Info, input::KeyEvent};
 
-use crate::{ctrl, key};
+use crate::{
+    ctrl, key,
+    ui::panel_keys::{self, bind, Bindings},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -45,7 +47,7 @@ pub enum Action {
     Unfocus,
 }
 
-impl Action {
+impl panel_keys::Action for Action {
     fn doc(self) -> &'static str {
         match self {
             Self::Down => "Move down",
@@ -88,17 +90,7 @@ impl Action {
     }
 }
 
-struct Binding {
-    /// Key sequences that trigger `action`, each one or two keys long.
-    keys: &'static [&'static [KeyEvent]],
-    action: Action,
-}
-
-const fn bind(keys: &'static [&'static [KeyEvent]], action: Action) -> Binding {
-    Binding { keys, action }
-}
-
-const BINDINGS: &[Binding] = &[
+const BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!('j')], &[key!(Down)]], Action::Down),
     bind(&[&[key!('k')], &[key!(Up)]], Action::Up),
     bind(&[&[key!('l')], &[key!(Right)]], Action::Expand),
@@ -138,58 +130,17 @@ const BINDINGS: &[Binding] = &[
     bind(&[&[key!('=')]], Action::Fit),
     bind(&[&[key!('?')]], Action::Help),
     bind(&[&[key!(Esc)]], Action::Unfocus),
-];
+]);
 
-pub enum Lookup {
-    Action(Action),
-    /// The start of a longer sequence.
-    Prefix,
-    Unbound,
-}
+pub type Lookup = panel_keys::Lookup<Action>;
 
 pub fn lookup(sequence: &[KeyEvent]) -> Lookup {
-    let mut prefix = false;
-    for binding in BINDINGS {
-        for keys in binding.keys {
-            if *keys == sequence {
-                return Lookup::Action(binding.action);
-            }
-            prefix |= keys.starts_with(sequence);
-        }
-    }
-    if prefix {
-        Lookup::Prefix
-    } else {
-        Lookup::Unbound
-    }
+    BINDINGS.lookup(sequence)
 }
 
 /// The keys of the file tree, or the ones continuing `prefix`, as an infobox.
 pub fn info(prefix: &[KeyEvent]) -> Info {
-    let body: Vec<_> = BINDINGS
-        .iter()
-        .filter_map(|binding| {
-            let keys: Vec<_> = binding
-                .keys
-                .iter()
-                .filter(|keys| keys.len() > prefix.len() && keys.starts_with(prefix))
-                .map(|keys| sequence(&keys[prefix.len()..]))
-                .collect();
-            (!keys.is_empty()).then(|| (keys.join(", "), binding.action.doc()))
-        })
-        .collect();
-    // The sequences share their prefixes, and so their names, with the editor's.
-    let title = match prefix {
-        [] => "File tree",
-        [key!('g')] => "Goto",
-        [key!('z')] => "View",
-        _ => "",
-    };
-    Info::new(title, &body)
-}
-
-fn sequence(keys: &[KeyEvent]) -> String {
-    keys.iter().map(ToString::to_string).collect()
+    BINDINGS.info(prefix, "File tree")
 }
 
 #[cfg(test)]
@@ -210,13 +161,7 @@ mod tests {
 
     #[test]
     fn every_sequence_is_bound_once() {
-        let sequences: Vec<_> = BINDINGS.iter().flat_map(|binding| binding.keys).collect();
-        for (i, keys) in sequences.iter().enumerate() {
-            assert!(
-                !sequences[i + 1..].contains(keys),
-                "{keys:?} is bound twice"
-            );
-        }
+        assert!(BINDINGS.are_unique());
     }
 
     #[test]

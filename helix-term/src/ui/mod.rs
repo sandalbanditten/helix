@@ -1,6 +1,7 @@
 pub(crate) mod compilation;
 mod completion;
 pub(crate) mod dired;
+mod dock;
 mod document;
 pub(crate) mod editor;
 mod file_tree;
@@ -9,6 +10,7 @@ pub mod lsp;
 mod markdown;
 pub mod menu;
 pub mod overlay;
+mod panel_keys;
 pub mod picker;
 pub mod popup;
 pub mod prompt;

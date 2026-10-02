@@ -9,8 +9,9 @@ use helix_view::{
     Editor,
 };
 
-use super::{ops, tree::Kind, viewport, FileTree, Workspace, MAX_WIDTH, MIN_WIDTH};
+use super::{ops, tree::Kind, viewport, FileTree, Workspace};
 use crate::compositor::EventResult;
+use crate::ui::dock;
 
 /// A press on the rail and the drag that may follow it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +145,10 @@ impl FileTree {
             FileTreeSide::Left => (column + 1).saturating_sub(area.left()),
             FileTreeSide::Right => area.right().saturating_sub(column),
         };
-        self.width = Some(width.min(self.max_width.min(MAX_WIDTH)).max(MIN_WIDTH));
+        self.width = Some(dock::clamp_width(
+            width,
+            self.max_width.min(dock::MAX_WIDTH),
+        ));
     }
 
     /// Opens the file on the screen row `row`, or expands or collapses the directory on it.

@@ -20,6 +20,7 @@ use super::{
     tree::{Children, Kind, LinkTarget, Node, Special, Tree},
     viewport,
 };
+use crate::ui::dock;
 
 /// The columns a row needs to show its label in full, unsaved mark included.
 pub fn natural_width(row: &Row, root: bool, icons: bool) -> usize {
@@ -185,10 +186,7 @@ impl Scene<'_> {
     /// Draws the panel into `area`. Returns where the label of the row being edited goes, if it
     /// is in view.
     pub fn render(&self, area: Rect, surface: &mut Surface) -> Option<Rect> {
-        let (content, rail) = match self.side {
-            FileTreeSide::Left => (area.clip_right(1), area.right() - 1),
-            FileTreeSide::Right => (area.clip_left(1), area.left()),
-        };
+        let (content, _) = dock::split(area, self.side.into());
         surface.clear_with(content, self.styles.base);
 
         let height = area.height as usize;
@@ -206,19 +204,14 @@ impl Scene<'_> {
         }
 
         let thumb = viewport::thumb(self.rows, self.start, height).unwrap_or_default();
-        // A half block like the scrollbars of menus, on the tree's half of the rail.
-        let thumb_symbol = match self.side {
-            FileTreeSide::Left => "▌",
-            FileTreeSide::Right => "▐",
-        };
-        for (i, y) in (area.top()..area.bottom()).enumerate() {
-            let (symbol, style) = if thumb.contains(&i) {
-                (thumb_symbol, self.styles.thumb)
-            } else {
-                ("│", self.styles.track)
-            };
-            surface[(rail, y)].set_symbol(symbol).set_style(style);
-        }
+        dock::render_rail(
+            surface,
+            area,
+            self.side.into(),
+            thumb,
+            self.styles.track,
+            self.styles.thumb,
+        );
         edit_area
     }
 

@@ -7,6 +7,7 @@ use crate::{
     keymap::{KeymapResult, Keymaps},
     ui::{
         dired::{self, Dired},
+        dock,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
         statusline,
@@ -1836,7 +1837,7 @@ impl Component for EditorView {
 
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
-            let statusline_area = statusline_area(view.area, file_tree_area);
+            let statusline_area = dock::statusline_area(view.area, file_tree_area.as_slice());
             self.render_view(
                 cx.editor,
                 doc,
@@ -1973,21 +1974,6 @@ fn is_file_tree_command(command: &commands::MappableCommand) -> bool {
     matches!(command.name(), "focus_file_tree" | "toggle_file_tree")
 }
 
-/// The last row of a view's `area`. The file tree ends above the bottom statusline, so a
-/// statusline right below it takes its columns too.
-fn statusline_area(area: Rect, file_tree_area: Option<Rect>) -> Rect {
-    let area = area.clip_top(area.height.saturating_sub(1));
-    match file_tree_area {
-        Some(file_tree) if file_tree.bottom() == area.top() && file_tree.right() == area.left() => {
-            Rect::new(file_tree.left(), area.y, file_tree.width + area.width, 1)
-        }
-        Some(file_tree) if file_tree.bottom() == area.top() && area.right() == file_tree.left() => {
-            Rect::new(area.x, area.y, area.width + file_tree.width, 1)
-        }
-        _ => area,
-    }
-}
-
 fn canonicalize_key(key: &mut KeyEvent) {
     if let KeyEvent {
         code: KeyCode::Char(_),
@@ -1995,44 +1981,5 @@ fn canonicalize_key(key: &mut KeyEvent) {
     } = key
     {
         key.modifiers.remove(KeyModifiers::SHIFT)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn statuslines_below_the_file_tree_take_its_columns() {
-        // A 100x30 screen: the tree takes 20 columns and ends above the bottom statusline row.
-        let left = Some(Rect::new(0, 0, 20, 28));
-        let right = Some(Rect::new(80, 0, 20, 28));
-        // One view beside the tree.
-        assert_eq!(
-            statusline_area(Rect::new(20, 0, 80, 29), left),
-            Rect::new(0, 28, 100, 1)
-        );
-        assert_eq!(
-            statusline_area(Rect::new(0, 0, 80, 29), right),
-            Rect::new(0, 28, 100, 1)
-        );
-        // Stacked views: only the bottom one reaches below the tree.
-        assert_eq!(
-            statusline_area(Rect::new(20, 0, 80, 14), left),
-            Rect::new(20, 13, 80, 1)
-        );
-        assert_eq!(
-            statusline_area(Rect::new(20, 14, 80, 15), left),
-            Rect::new(0, 28, 100, 1)
-        );
-        // Side by side: only the view next to the tree.
-        assert_eq!(
-            statusline_area(Rect::new(61, 0, 39, 29), left),
-            Rect::new(61, 28, 39, 1)
-        );
-        assert_eq!(
-            statusline_area(Rect::new(20, 0, 80, 29), None),
-            Rect::new(20, 28, 80, 1)
-        );
     }
 }

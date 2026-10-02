@@ -56,15 +56,10 @@ use self::{
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
     job,
-    ui::EditorView,
+    ui::{dock, EditorView},
     watch::Watcher,
 };
 
-/// The narrowest and widest the panel gets, its rail included.
-const MIN_WIDTH: u16 = 16;
-const MAX_WIDTH: u16 = 64;
-/// The columns the panel always leaves to the editor; with fewer it yields.
-const MIN_EDITOR_WIDTH: u16 = 20;
 /// When the panel is shown.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Visibility {
@@ -315,12 +310,12 @@ impl FileTree {
             return None;
         }
         let config = editor.config();
-        self.max_width = main.width.saturating_sub(MIN_EDITOR_WIDTH).min(MAX_WIDTH);
+        self.max_width = dock::max_width(main);
         let width = match self.width {
             Some(width) => width,
             None => *self.width.insert(self.fitted_width(config.file_tree.icons)),
         };
-        if main.height < 2 || main.width < width + MIN_EDITOR_WIDTH {
+        if main.height < 2 || main.width < width + dock::MIN_EDITOR_WIDTH {
             self.focused = false;
             return None;
         }
@@ -343,9 +338,7 @@ impl FileTree {
                 .max()
                 .unwrap_or_default()
         });
-        // one more column for the rail
-        let width = u16::try_from(widest + 1).unwrap_or(u16::MAX);
-        width.min(self.max_width).max(MIN_WIDTH)
+        dock::fitted_width(widest, self.max_width)
     }
 
     /// Handles `key` while the tree is focused. A key it does not bind is ignored, for the
@@ -529,12 +522,12 @@ impl FileTree {
             Action::Help => editor.autoinfo = Some(keys::info(&[])),
             Action::Unfocus => self.focused = false,
             Action::Grow | Action::Shrink => {
-                let width = self.width.unwrap_or(MIN_WIDTH);
+                let width = self.width.unwrap_or(dock::MIN_WIDTH);
                 let width = match action {
                     Action::Grow => width.saturating_add(1),
                     _ => width.saturating_sub(1),
                 };
-                self.width = Some(width.min(self.max_width).max(MIN_WIDTH));
+                self.width = Some(dock::clamp_width(width, self.max_width));
             }
             Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
             Action::EditDirectory | Action::EditTree => {
