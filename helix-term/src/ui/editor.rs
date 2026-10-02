@@ -11,7 +11,7 @@ use crate::{
         file_tree::FileTree,
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
-        Completion, ProgressSpinners,
+        Completion, ProgressSpinners, ReloadQuestion,
     },
 };
 
@@ -49,6 +49,7 @@ pub struct EditorView {
     terminal_focused: bool,
     pub(crate) file_tree: FileTree,
     pub(crate) dired: Dired,
+    pub(crate) reload_question: ReloadQuestion,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +75,19 @@ impl EditorView {
             terminal_focused: true,
             file_tree: FileTree::default(),
             dired: Dired::default(),
+            reload_question: ReloadQuestion::default(),
         }
+    }
+
+    /// Whether the question about buffers changed on disk is up: only in normal mode between
+    /// key sequences, so that keys typed for something else never answer it.
+    fn asks_about_reloads(&mut self, editor: &Editor) -> bool {
+        editor.mode() == Mode::Normal
+            && self.keymaps.pending().is_empty()
+            && self.keymaps.sticky().is_none()
+            && self.on_next_key.is_none()
+            && editor.count.is_none()
+            && self.reload_question.is_asking(editor)
     }
 
     pub fn spinners_mut(&mut self) -> &mut ProgressSpinners {
@@ -1609,6 +1622,12 @@ impl Component for EditorView {
                 // clear status
                 cx.editor.status_msg = None;
 
+                // The question about buffers changed on disk takes every key while it is up.
+                if self.asks_about_reloads(cx.editor) {
+                    self.reload_question.answer(key, cx.editor);
+                    return EventResult::Consumed(None);
+                }
+
                 // A focused file tree gets the keys first, unless the editor is in the middle of
                 // a key sequence of its own.
                 if self.file_tree.is_focused()
@@ -1837,6 +1856,10 @@ impl Component for EditorView {
                 info.render(area, surface, cx);
                 cx.editor.autoinfo = Some(info)
             }
+        }
+
+        if self.asks_about_reloads(cx.editor) {
+            self.reload_question.render(area, surface, cx);
         }
 
         let key_width = 15u16; // for showing pending keys

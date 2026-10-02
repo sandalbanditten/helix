@@ -26,7 +26,7 @@ use helix_view::{
 };
 use parking_lot::Mutex;
 
-use crate::{job, watch::Watcher};
+use crate::{compositor::Compositor, job, ui::EditorView, watch::Watcher};
 
 /// How long a check waits while the editor writes files itself: its own writes look like changes
 /// from outside until they are done, and an atomic save even moves the file away first.
@@ -153,7 +153,7 @@ fn check(docs: HashSet<DocumentId>, trigger: Trigger, editor: &mut Editor) {
                 })
                 .collect()
         },
-        move |editor, _, results| apply(results, trigger, editor),
+        move |editor, compositor, results| apply(results, trigger, editor, compositor),
     );
 }
 
@@ -187,7 +187,7 @@ enum Outcome {
     /// The file was written anew, at this time, with the text the document knows.
     Rewritten(SystemTime),
     /// The file changed while the document has unsaved changes.
-    Conflict,
+    Conflict(DiskText),
     Changed(Reload),
     Failed(anyhow::Error),
 }
@@ -245,7 +245,7 @@ impl Candidate {
             return Outcome::Rewritten(disk.mtime);
         }
         if self.modified {
-            return Outcome::Conflict;
+            return Outcome::Conflict(disk);
         }
         Outcome::Changed(Reload {
             changes: compare_ropes(&self.text, &disk.text),
@@ -261,13 +261,24 @@ fn is_not_found(err: &anyhow::Error) -> bool {
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
-/// Applies what the files turned out to be, checking again those whose documents moved on
-/// meanwhile.
-fn apply(results: Vec<(Candidate, Outcome)>, trigger: Trigger, editor: &mut Editor) {
+/// Applies what the files turned out to be, asking about the documents with unsaved changes and
+/// checking again those that moved on meanwhile.
+fn apply(
+    results: Vec<(Candidate, Outcome)>,
+    trigger: Trigger,
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+) {
     if editor.write_count > 0 {
         let docs = results.iter().map(|(candidate, _)| candidate.doc).collect();
         return retry(docs, trigger);
     }
+    let Some(question) = compositor
+        .find::<EditorView>()
+        .map(|editor_view| &mut editor_view.reload_question)
+    else {
+        return;
+    };
     let mut reloaded = Vec::new();
     let mut deleted = Vec::new();
     let mut stale = HashSet::new();
@@ -280,16 +291,20 @@ fn apply(results: Vec<(Candidate, Outcome)>, trigger: Trigger, editor: &mut Edit
             continue;
         }
         match outcome {
-            Outcome::Known | Outcome::Conflict => {}
+            Outcome::Known => {}
             Outcome::Deleted => {
+                question.forget(candidate.doc);
                 if trigger == Trigger::Watcher {
                     deleted.push(candidate.path);
                 }
             }
             Outcome::Rewritten(mtime) => {
+                // Back to what the buffer knows, like after `git stash pop`.
+                question.forget(candidate.doc);
                 let text = doc.disk_text().clone();
                 doc.ignore_disk_change(DiskText { text, mtime });
             }
+            Outcome::Conflict(disk) => question.ask(candidate.doc, disk, candidate.last_saved_time),
             Outcome::Changed(reload) => {
                 editor.apply_reload(candidate.doc, reload.disk, &reload.changes);
                 doc_mut!(editor, &candidate.doc).set_vcs(reload.diff_base, reload.head);

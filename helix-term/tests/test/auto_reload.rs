@@ -190,6 +190,171 @@ async fn nothing_is_followed_with_auto_reload_off() -> anyhow::Result<()> {
     session.quit().await
 }
 
+/// The screen as last drawn, its rows without trailing spaces.
+fn screen(app: &Application) -> String {
+    let screen = app.screen();
+    let rows: Vec<String> = screen
+        .content
+        .chunks(screen.area.width as usize)
+        .map(|row| {
+            let row: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+            row.trim_end().to_owned()
+        })
+        .collect();
+    rows.join("\n")
+}
+
+/// Whether the question about a buffer with unsaved changes is up.
+fn asks(app: &Application) -> bool {
+    screen(app).contains("changed on disk")
+}
+
+/// A buffer of a file holding "one\n", with "hello " typed into it, and the file changed to
+/// "two\n" since.
+async fn conflict() -> anyhow::Result<(tempfile::TempDir, PathBuf, Session)> {
+    let (dir, path) = file("one\n")?;
+    let mut session = session(&path)?;
+    session.keys("ihello <esc>").await?;
+    fs::write(&path, "two\n")?;
+    session.until("the question", asks).await;
+    Ok((dir, path, session))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsaved_changes_are_asked_about_before_reloading() -> anyhow::Result<()> {
+    let (_dir, _path, mut session) = conflict().await?;
+    let screen = screen(&session.app);
+    assert!(screen.contains("r  Reload"), "{screen}");
+    assert!(screen.contains("k  Keep unsaved changes"), "{screen}");
+    assert!(!screen.contains("Reload all"), "{screen}");
+    assert_eq!(text(&session.app), "hello one\n");
+
+    session.keys("r").await?;
+    assert!(!asks(&session.app));
+    assert_eq!(text(&session.app), "two\n");
+    assert!(!doc!(session.app.editor).is_modified());
+    assert!(status(&session.app).ends_with("file.txt reloaded"));
+    // The unsaved changes are a step back.
+    session.keys("u").await?;
+    assert_eq!(text(&session.app), "hello one\n");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn kept_changes_overwrite_the_file_on_a_plain_write() -> anyhow::Result<()> {
+    let (_dir, path, mut session) = conflict().await?;
+    session.keys("k").await?;
+    assert!(!asks(&session.app));
+    assert!(status(&session.app).ends_with("file.txt kept"));
+    assert_eq!(text(&session.app), "hello one\n");
+    assert!(doc!(session.app.editor).is_modified());
+
+    session.keys(":w<ret>").await?;
+    assert_eq!(fs::read_to_string(&path)?, "hello one\n");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stray_keys_are_swallowed_and_escape_keeps() -> anyhow::Result<()> {
+    let (_dir, _path, mut session) = conflict().await?;
+    session.keys("dd").await?;
+    assert!(asks(&session.app));
+    assert_eq!(text(&session.app), "hello one\n");
+    session.keys("<esc>").await?;
+    assert!(!asks(&session.app));
+    assert!(status(&session.app).ends_with("file.txt kept"));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_question_waits_for_insert_mode_to_end() -> anyhow::Result<()> {
+    let (_dir, path) = file("one\n")?;
+    let mut session = session(&path)?;
+    session.keys("ihello ").await?;
+    fs::write(&path, "two\n")?;
+    session.wait(QUIET).await;
+    assert!(!asks(&session.app));
+    // Typing goes on into the buffer.
+    session.keys("kr").await?;
+    assert_eq!(text(&session.app), "hello krone\n");
+    session.keys("<esc>").await?;
+    assert!(asks(&session.app));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_open_prompt_keeps_its_keys() -> anyhow::Result<()> {
+    let (_dir, path) = file("one\n")?;
+    let mut session = session(&path)?;
+    session.keys("ihello <esc>:").await?;
+    fs::write(&path, "two\n")?;
+    session.wait(QUIET).await;
+    // Escape closes the prompt rather than answering.
+    session.keys("<esc>").await?;
+    assert!(asks(&session.app));
+    assert!(!status(&session.app).contains("kept"));
+    session.keys("k").await?;
+    assert!(!asks(&session.app));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn many_buffers_are_answered_at_once() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let paths: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"]
+        .iter()
+        .map(|name| helix_stdx::path::canonicalize(dir.path().join(name)))
+        .collect();
+    let mut config = test_config();
+    config.editor.auto_reload = true;
+    let mut builder = AppBuilder::new().with_config(config);
+    for path in &paths {
+        fs::write(path, "one\n")?;
+        builder = builder.with_file(path, None);
+    }
+    let mut session = Session::new(builder.build()?);
+    session
+        .keys("ix<esc>:bn<ret>ix<esc>:bn<ret>ix<esc>")
+        .await?;
+    for path in &paths {
+        fs::write(path, "two\n")?;
+    }
+    session
+        .until("all three asked about", |app| {
+            screen(app).contains("R  Reload all 3")
+        })
+        .await;
+    assert!(screen(&session.app).contains("K  Keep all 3"));
+
+    // One answered, then the other two at once.
+    session.keys("k").await?;
+    assert!(screen(&session.app).contains("R  Reload all 2"));
+    session.keys("R").await?;
+    assert!(!asks(&session.app));
+    assert_eq!(status(&session.app), "2 buffers reloaded");
+    let texts: Vec<String> = session
+        .app
+        .editor
+        .documents()
+        .map(|doc| doc.text().to_string())
+        .collect();
+    assert_eq!(texts.iter().filter(|text| *text == "two\n").count(), 2);
+    assert_eq!(texts.iter().filter(|text| *text == "xone\n").count(), 1);
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_known_text_back_on_disk_asks_nothing() -> anyhow::Result<()> {
+    let (_dir, path, mut session) = conflict().await?;
+    // Like `git stash` followed by `git stash pop`.
+    fs::write(&path, "one\n")?;
+    session.until("the question to go", |app| !asks(app)).await;
+    assert_eq!(text(&session.app), "hello one\n");
+    session.keys(":w<ret>").await?;
+    assert_eq!(fs::read_to_string(&path)?, "hello one\n");
+    session.quit().await
+}
+
 /// Measurements of how fast changes are followed and what following costs. Run them with
 /// `cargo test --release --features integration -p helix-term --test integration --
 /// auto_reload::measure --ignored --nocapture --test-threads 1`.
