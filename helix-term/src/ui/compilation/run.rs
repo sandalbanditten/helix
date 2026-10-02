@@ -3,6 +3,7 @@
 use std::{
     io::{self, Read},
     mem,
+    ops::Range,
     path::Path,
     process::{Command, Stdio},
     sync::{
@@ -13,12 +14,12 @@ use std::{
 };
 
 use helix_stdx::process::{self, Leader, ProcessGroup};
-use helix_view::{DocumentId, Editor};
+use helix_view::{graphics::Style, DocumentId, Editor};
 use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
-    output::{End, Lines},
+    output::{End, Lines, Shown},
 };
 use crate::{compositor::Compositor, job};
 
@@ -32,6 +33,8 @@ pub struct Output {
     pub chars: usize,
     /// The loci in `text`, counting their chars from its start.
     pub loci: Vec<Locus>,
+    /// The styles of char ranges of `text`, in order and apart.
+    pub styles: Vec<(Range<usize>, Style)>,
     /// How the run ended, once it did; nothing is read after.
     pub end: Option<End>,
 }
@@ -62,19 +65,28 @@ impl Output {
         for locus in &mut self.loci {
             locus.start -= chars;
         }
+        let rest = self.styles.split_off(
+            self.styles
+                .partition_point(|(range, _)| range.start < chars),
+        );
+        let styles = mem::replace(&mut self.styles, rest);
+        for (range, _) in &mut self.styles {
+            *range = range.start - chars..range.end - chars;
+        }
         self.chars -= chars;
         Output {
             replace: mem::take(&mut self.replace),
             text,
             chars,
             loci,
+            styles,
             end: None,
         }
     }
 
-    /// Adds `text` with the `loci` in it, in place of the last `replace` chars of the output:
+    /// Adds `shown` with the `loci` in it, in place of the last `replace` chars of the output:
     /// the line shown unfinished, which is either still pending here or in the buffer already.
-    fn push(&mut self, replace: usize, text: &str, loci: Vec<Locus>) {
+    fn push(&mut self, replace: usize, shown: &Shown, loci: Vec<Locus>) {
         let pending = replace.min(self.chars);
         if pending > 0 {
             let at = self
@@ -85,6 +97,10 @@ impl Output {
                 .map_or(0, |(at, _)| at);
             self.text.truncate(at);
             self.chars -= pending;
+            let kept = self
+                .styles
+                .partition_point(|(range, _)| range.start < self.chars);
+            self.styles.truncate(kept);
         }
         self.replace += replace - pending;
         let start = self.chars;
@@ -92,8 +108,11 @@ impl Output {
             locus.start += start;
             locus
         }));
-        self.text.push_str(text);
-        self.chars += text.chars().count();
+        let styles = shown.styles.iter();
+        self.styles
+            .extend(styles.map(|(range, style)| (range.start + start..range.end + start, *style)));
+        self.text.push_str(&shown.text);
+        self.chars += shown.chars;
     }
 
     fn is_empty(&self) -> bool {
@@ -130,13 +149,21 @@ const UNFINISHED: Duration = Duration::from_millis(100);
 /// leader exited. Output that comes later than twice this after the leader exited is dropped.
 const GRACE: Duration = Duration::from_secs(1);
 
+/// What makes tools color their output into a pipe, unless the environment says otherwise.
+const FORCE_COLORS: [(&str, &str); 3] = [
+    ("CARGO_TERM_COLOR", "always"),
+    ("CLICOLOR_FORCE", "1"),
+    ("FORCE_COLOR", "1"),
+];
+
 /// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
-/// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it.
-/// The returned group stops it.
+/// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it,
+/// and its `colors`, which tools are asked for. The returned group stops it.
 pub fn spawn(
     shell: &[String],
     command: &str,
     dir: &Path,
+    colors: bool,
     finder: Finder,
     doc: DocumentId,
     run: u64,
@@ -153,6 +180,13 @@ pub fn spawn(
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
         .stderr(writer);
+    if colors {
+        for (name, value) in FORCE_COLORS {
+            if std::env::var_os(name).is_none() {
+                process.env(name, value);
+            }
+        }
+    }
     let (leader, group) = process::spawn_group(&mut process)?;
     // The command keeps the write end, which must close for the output to end.
     drop(process);
@@ -165,7 +199,10 @@ pub fn spawn(
     let handle = Handle::current();
     std::thread::Builder::new()
         .name("compilation".to_owned())
-        .spawn(move || follow(&received, leader, finder, &handle, doc, run))?;
+        .spawn(move || {
+            let lines = Lines::new(colors);
+            follow(&received, leader, lines, finder, &handle, doc, run)
+        })?;
     Ok(group)
 }
 
@@ -192,6 +229,7 @@ fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
 fn follow(
     chunks: &Receiver<Vec<u8>>,
     mut leader: Leader,
+    mut lines: Lines,
     mut finder: Finder,
     handle: &Handle,
     doc: DocumentId,
@@ -199,9 +237,8 @@ fn follow(
 ) {
     let shared = Arc::new(Shared::default());
     let hand_over = |add: &mut dyn FnMut(&mut Output)| hand_over(&shared, handle, doc, run, add);
-    let mut lines = Lines::default();
     // The unfinished last line as the buffer shows it, and when it was shown.
-    let mut shown = String::new();
+    let mut shown = Shown::default();
     let mut shown_at = Instant::now();
     let mut open = true;
     let mut exited: Option<Instant> = None;
@@ -212,9 +249,9 @@ fn follow(
             match chunks.recv_timeout(TICK) {
                 Ok(chunk) => {
                     let text = lines.push(&chunk);
-                    if !text.is_empty() {
-                        let mut loci = finder.find(&text);
-                        let replace = mem::take(&mut shown).chars().count();
+                    if !text.text.is_empty() {
+                        let mut loci = finder.find(&text.text);
+                        let replace = mem::take(&mut shown).chars;
                         hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
                     }
                 }
@@ -228,7 +265,7 @@ fn follow(
         if shown_at.elapsed() >= UNFINISHED {
             let unfinished = lines.partial();
             if unfinished != shown {
-                let replace = shown.chars().count();
+                let replace = shown.chars;
                 hand_over(&mut |output| output.push(replace, &unfinished, Vec::new()));
                 shown = unfinished;
             }
@@ -256,8 +293,8 @@ fn follow(
     }
 
     let rest = lines.finish();
-    let mut rest_loci = finder.find(&rest);
-    let replace = shown.chars().count();
+    let mut rest_loci = finder.find(&rest.text);
+    let replace = shown.chars;
     let killed = leader.killed();
     let end = match leader.reap() {
         _ if killed => End::Killed,
@@ -345,6 +382,14 @@ mod tests {
 
     use super::*;
 
+    fn plain(text: &str) -> Shown {
+        Shown {
+            text: text.to_owned(),
+            chars: text.chars().count(),
+            styles: Vec::new(),
+        }
+    }
+
     fn locus(start: usize) -> Locus {
         Locus {
             start,
@@ -359,8 +404,8 @@ mod tests {
     #[test]
     fn output_is_taken_in_whole_lines() {
         let mut output = Output::default();
-        output.push(0, "äb\ncd\n", vec![locus(0), locus(3)]);
-        output.push(0, "ef\n", vec![locus(1)]);
+        output.push(0, &plain("äb\ncd\n"), vec![locus(0), locus(3)]);
+        output.push(0, &plain("ef\n"), vec![locus(1)]);
         output.end = Some(End::Exited(0));
 
         // A batch ends at the last line break within it, or the first after it.
@@ -385,25 +430,44 @@ mod tests {
     }
 
     #[test]
+    fn styles_go_with_their_text() {
+        let red = Style::default().fg(helix_view::graphics::Color::Indexed(1));
+        let styled = |text: &str, range: Range<usize>| Shown {
+            styles: vec![(range, red)],
+            ..plain(text)
+        };
+        let mut output = Output::default();
+        output.push(0, &styled("ab\ncd\n", 3..5), Vec::new());
+        output.push(0, &styled("e", 0..1), Vec::new());
+        assert_eq!(output.styles, [(3..5, red), (6..7, red)]);
+        // The unfinished line goes with its styles, and batches take theirs.
+        output.push(1, &styled("ef\n", 1..2), Vec::new());
+        assert_eq!(output.styles, [(3..5, red), (7..8, red)]);
+        let first = output.take_front(1);
+        assert_eq!((first.text.as_str(), first.styles), ("ab\n", Vec::new()));
+        assert_eq!(output.styles, [(0..2, red), (4..5, red)]);
+    }
+
+    #[test]
     fn unfinished_lines_are_replaced() {
         // Still pending, the unfinished line goes; in the buffer, the batch replaces it there.
         let mut output = Output::default();
-        output.push(0, "one\ntw", Vec::new());
-        output.push(2, "two\nthr", Vec::new());
+        output.push(0, &plain("one\ntw"), Vec::new());
+        output.push(2, &plain("two\nthr"), Vec::new());
         assert_eq!(
             (output.replace, output.text.as_str(), output.chars),
             (0, "one\ntwo\nthr", 11)
         );
         let taken = output.take_front(64);
         assert_eq!(taken.text, "one\ntwo\nthr");
-        output.push(3, "thrëe\n", vec![locus(0)]);
+        output.push(3, &plain("thrëe\n"), vec![locus(0)]);
         assert_eq!(
             (output.replace, output.text.as_str(), output.chars),
             (3, "thrëe\n", 6)
         );
         assert_eq!(output.loci, [locus(0)]);
         // A batch carries what it replaces, the rest none.
-        output.push(0, "four\n", Vec::new());
+        output.push(0, &plain("four\n"), Vec::new());
         let first = output.take_front(1);
         assert_eq!((first.replace, first.text.as_str()), (3, "thrëe\n"));
         assert_eq!((output.replace, output.text.as_str()), (0, "four\n"));

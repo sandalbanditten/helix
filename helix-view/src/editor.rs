@@ -292,11 +292,22 @@ impl Default for DiredConfig {
 }
 
 /// The compilation buffer, which shows the output of `:compile` and the like.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CompilationConfig {
     /// Where `gf` and `gd` open a locus of the output. Defaults to `beside`.
     pub open: CompilationOpen,
+    /// Whether the output keeps its colors, which commands are asked for. Defaults to `true`.
+    pub colors: bool,
+}
+
+impl Default for CompilationConfig {
+    fn default() -> Self {
+        Self {
+            open: CompilationOpen::default(),
+            colors: true,
+        }
+    }
 }
 
 /// Where a locus of the compilation buffer opens.

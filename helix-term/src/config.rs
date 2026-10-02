@@ -335,11 +335,13 @@ mod tests {
         let compilation = |config: &str| Config::load_test(config).editor.compilation;
         assert_eq!(compilation("").open, CompilationOpen::Beside);
         assert_eq!(
-            compilation("[editor.compilation]\nopen = \"replace\""),
+            compilation("[editor.compilation]\nopen = \"replace\"\ncolors = false"),
             CompilationConfig {
                 open: CompilationOpen::Replace,
+                colors: false,
             }
         );
+        assert!(compilation("").colors);
         for invalid in [
             "[editor.compilation]\nopen = \"split\"",
             "[editor.compilation]\nfollow = true",

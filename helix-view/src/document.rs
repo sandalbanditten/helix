@@ -1725,6 +1725,10 @@ impl Document {
             };
             Some((&mut diagnostic.range.end, assoc))
         }));
+        if let Some(compilation) = self.compilation.as_mut() {
+            compilation.map(changes);
+        }
+
         // The text before the first change keeps its lines, so the diagnostics there keep theirs,
         // like the loci a compilation buffer holds above the output appended to it.
         let first_change = changes

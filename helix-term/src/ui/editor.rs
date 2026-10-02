@@ -34,7 +34,7 @@ use helix_view::{
     keyboard::{KeyCode, KeyModifiers},
     Document, Editor, Theme, View,
 };
-use std::{mem::take, num::NonZeroUsize, ops, rc::Rc};
+use std::{borrow::Cow, mem::take, num::NonZeroUsize, ops, rc::Rc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
@@ -135,13 +135,22 @@ impl EditorView {
         let folds = text_annotations.folds();
         let syntax_highlighting =
             Self::doc_syntax_highlighting(doc, folds, view_offset.anchor, inner.height, &loader);
+        let text = doc.text().slice(..);
+        let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
         let style_spans = if doc.dired.is_some() {
-            let text = doc.text().slice(..);
-            let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
-            self.dired
-                .spans(doc, first..first + inner.height as usize, editor)
+            let spans = self
+                .dired
+                .spans(doc, first..first + inner.height as usize, editor);
+            Cow::Owned(spans)
+        } else if let Some(compilation) = &doc.compilation {
+            // The colors of the output on the lines shown.
+            let end = text.line_to_char((first + inner.height as usize + 1).min(text.len_lines()));
+            let styles = &compilation.styles;
+            let shown = styles.partition_point(|(range, _)| range.end <= view_offset.anchor)
+                ..styles.partition_point(|(range, _)| range.start < end);
+            Cow::Borrowed(&styles[shown])
         } else {
-            Vec::new()
+            Cow::Owned(Vec::new())
         };
         let mut overlays = Vec::new();
 
@@ -244,7 +253,7 @@ impl EditorView {
             view_offset,
             &text_annotations,
             syntax_highlighting,
-            &style_spans,
+            &style_spans[..],
             overlays,
             theme,
             decorations,

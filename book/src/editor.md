@@ -400,6 +400,7 @@ The [compilation buffer](./compilation.md) shows the output of `:compile`, `:com
 | Key | Description | Default |
 | --- | --- | --- |
 | `open` | Where `gf` and `gd` open a locus of the output: `"beside"` it, in the split the command was run from, or `"replace"` in the output's own split, like `gf` anywhere; `]q` and `[q` show a hidden output the same way | `"beside"` |
+| `colors` | Whether the output keeps its colors, which commands are asked for, rather than leaving them out | `true` |
 
 ### `[editor.buffer-picker]` Section
 

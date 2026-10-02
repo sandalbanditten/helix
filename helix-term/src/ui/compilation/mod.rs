@@ -144,7 +144,8 @@ pub fn start(editor: &mut Editor, run: Run) {
         Some(old) => (old.run + 1, Some(focused)),
         None => (0, Some(focused)),
     };
-    let spawned = run::spawn(&shell, &run.command, &run.dir, finder, doc_id, id);
+    let colors = editor.config().compilation.colors;
+    let spawned = run::spawn(&shell, &run.command, &run.dir, colors, finder, doc_id, id);
     let (process, text) = match spawned {
         Ok(process) => (Some(process), header),
         Err(err) => {
@@ -162,6 +163,7 @@ pub fn start(editor: &mut Editor, run: Run) {
         process,
         origin,
         visited: None,
+        styles: Vec::new(),
     }));
     replace(editor, doc_id, &text);
 }
@@ -273,6 +275,17 @@ fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output
     let diagnostics = diagnostics(doc.text().slice(..), from, output.loci);
     let appended = from..doc.text().len_chars();
     doc.splice_diagnostics(diagnostics, &[appended], &DiagnosticProvider::Compilation);
+    if let Some(compilation) = doc.compilation.as_mut() {
+        // Those of the unfinished line replaced go, whatever mapping them over its removal left.
+        let kept = compilation
+            .styles
+            .partition_point(|(range, _)| range.end <= from);
+        compilation.styles.truncate(kept);
+        let styles = output.styles.into_iter();
+        compilation
+            .styles
+            .extend(styles.map(|(range, style)| (range.start + from..range.end + from, style)));
+    }
 
     let scrolloff = editor.config().scrolloff;
     for view_id in followers {

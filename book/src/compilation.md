@@ -66,9 +66,12 @@ that arrives later than two seconds after is left out.
 
 The output follows the command and the directory and time it started in, and ends with how it
 ended, like `Exited with code 101 at 14:03:15 after 2.81 s`, which the statusline shows too. A line
-that hasn't ended yet, like a prompt or a progress bar, shows as it is so far. Colors and other
-escape sequences are left out, and a carriage return lets the rest of a line overwrite it, as in a
-terminal. With the cursor on the last line, the cursor stays
+that hasn't ended yet, like a prompt or a progress bar, shows as it is so far. The output keeps
+its colors, in the colors of the terminal: commands are asked for them with `CARGO_TERM_COLOR=always`,
+`CLICOLOR_FORCE=1` and `FORCE_COLOR=1`, unless these are set already, which makes cargo, rustc,
+Typst and many other tools color their output; gcc and clang color it with
+`-fdiagnostics-color=always`. Other escape sequences are left out, and a carriage return lets the
+rest of a line overwrite it, as in a terminal. With the cursor on the last line, the cursor stays
 on it as output arrives; elsewhere, it stays put.
 
 The buffer can be edited, but not written, and never counts as modified: it closes and quits

@@ -16,7 +16,13 @@ mod test {
 
     use helix_core::diagnostic::Severity;
     use helix_term::{application::Application, config::Config};
-    use helix_view::{current_ref, editor::CompilationOpen, input::parse_macro, Document};
+    use helix_view::{
+        current_ref,
+        editor::CompilationOpen,
+        graphics::{Color, Modifier, Style},
+        input::parse_macro,
+        Document,
+    };
     use tempfile::TempDir;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
     use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -560,6 +566,68 @@ mod test {
         session.quit().await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn output_keeps_its_colors() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        session
+            .keys(&typed(
+                "compile-any printf '\\033[1;31mred\\033[0m plain\\n'; echo \"$CARGO_TERM_COLOR $FORCE_COLOR\"",
+            ))
+            .await?;
+        session.finished().await;
+        let doc = buffer(&session.app).unwrap();
+        let output = doc.text().to_string();
+        let red = output.find("red plain").unwrap();
+        let red = doc.text().byte_to_char(red);
+        let style = Style::default()
+            .fg(Color::Indexed(1))
+            .add_modifier(Modifier::BOLD);
+        let styles = &doc.compilation.as_ref().unwrap().styles;
+        assert_eq!(styles, &[(red..red + 3, style)]);
+        let forced = |name, value: &str| std::env::var(name).unwrap_or(value.to_owned());
+        let env = format!(
+            "{} {}",
+            forced("CARGO_TERM_COLOR", "always"),
+            forced("FORCE_COLOR", "1")
+        );
+        assert!(output.contains(&format!("\n{env}\n")), "{output}");
+        // The screen shows them.
+        let screen = session.app.screen();
+        let width = screen.area.width as usize;
+        let cell = screen
+            .content
+            .chunks(width)
+            .find_map(|row| {
+                let line: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+                let column = line.find("red plain")?;
+                Some(row[line[..column].chars().count()].clone())
+            })
+            .unwrap();
+        assert_eq!(cell.fg, Color::Indexed(1));
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn colors_can_be_left_out() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut config = helpers::test_config();
+        config.editor.compilation.colors = false;
+        let mut session = workspace.session_with("src/lib.rs", config)?;
+        // None are kept or asked for.
+        session
+            .keys(&typed(
+                "compile-any printf '\\033[31mred\\033[0m\\n'; echo \"[$CLICOLOR_FORCE]\"",
+            ))
+            .await?;
+        session.finished().await;
+        let doc = buffer(&session.app).unwrap();
+        assert!(doc.compilation.as_ref().unwrap().styles.is_empty());
+        let unset = std::env::var("CLICOLOR_FORCE").unwrap_or_default();
+        assert!(text(&session.app).contains(&format!("\nred\n[{unset}]\n")));
+        session.quit().await
+    }
+
     /// Times how fast output arrives in the buffer, and how fast keys are handled meanwhile, in
     /// release: `cargo test --release --features integration --test compilation measure -- --ignored --nocapture`
     #[tokio::test(flavor = "multi_thread")]
@@ -570,6 +638,10 @@ mod test {
         for (what, command) in [
             ("1M lines", "seq 1 1000000"),
             (
+                "1M colored lines",
+                "seq 1 1000000 | sed 's/.*/\\x1b[1;31m&\\x1b[0m/'",
+            ),
+            (
                 "100k loci",
                 "seq 1 100000 | sed 's/.*/src\\/lib.rs:&:1: error: bad/'",
             ),
@@ -579,9 +651,11 @@ mod test {
                 .keys(&typed(&format!("compile-any {command}")))
                 .await?;
             session.finished().await;
-            let loci = buffer(&session.app).unwrap().diagnostics().len();
+            let doc = buffer(&session.app).unwrap();
+            let loci = doc.diagnostics().len();
+            let styles = doc.compilation.as_ref().unwrap().styles.len();
             println!(
-                "{what}: {:?} until the footer, {loci} loci",
+                "{what}: {:?} until the footer, {loci} loci, {styles} styles",
                 start.elapsed()
             );
         }
