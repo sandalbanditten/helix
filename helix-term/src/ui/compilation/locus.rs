@@ -374,6 +374,15 @@ impl Finder {
         }
         loci
     }
+
+    /// The loci in `text`, output that may still change: the output after it goes on from the
+    /// output before it.
+    pub fn peek(&mut self, text: &str) -> Vec<Locus> {
+        let above = self.above.clone();
+        let loci = self.find(text);
+        self.above = above;
+        loci
+    }
 }
 
 #[cfg(test)]

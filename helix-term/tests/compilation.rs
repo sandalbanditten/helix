@@ -566,13 +566,15 @@ mod test {
         session.quit().await
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn output_keeps_its_colors() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/lib.rs"])?;
         let mut session = workspace.session("src/lib.rs", None)?;
         session
             .keys(&typed(
-                "compile-any printf '\\033[1;31mred\\033[0m plain\\n'; echo \"$CARGO_TERM_COLOR $FORCE_COLOR\"",
+                "compile-any printf '\\033[1;31mred\\033[0m plain\\n'; \
+                 test -t 1 && test -t 2 && echo \"terminal $TERM $PAGER $GIT_PAGER $MANPAGER\"",
             ))
             .await?;
         session.finished().await;
@@ -585,13 +587,11 @@ mod test {
             .add_modifier(Modifier::BOLD);
         let styles = &doc.compilation.as_ref().unwrap().styles;
         assert_eq!(styles, &[(red..red + 3, style)]);
-        let forced = |name, value: &str| std::env::var(name).unwrap_or(value.to_owned());
-        let env = format!(
-            "{} {}",
-            forced("CARGO_TERM_COLOR", "always"),
-            forced("FORCE_COLOR", "1")
+        // Commands write to a terminal that shows colors, with no one to page their output for.
+        assert!(
+            output.contains("\nterminal xterm-256color cat cat cat\n"),
+            "{output}"
         );
-        assert!(output.contains(&format!("\n{env}\n")), "{output}");
         // The screen shows them.
         let screen = session.app.screen();
         let width = screen.area.width as usize;
@@ -629,6 +629,68 @@ mod test {
     }
 
     /// Whether a row of the screen as last drawn holds `text`.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn commands_draw_on_a_terminal() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        // A tool coloring on its own, rows redrawn, and a prompt with no one to answer it.
+        session
+            .keys(&typed(
+                "compile-any echo src | GREP_COLORS='ms=01;31' grep --color=auto src; \
+                 printf 'one\\ntwo\\n'; sleep 1; printf '\\033[2A\\033[2Kuno\\n\\033[2Kdos\\n'; \
+                 cat /dev/tty 2>/dev/null || echo no input",
+            ))
+            .await?;
+        session
+            .until("the rows to show", |app| text(app).contains("\none\ntwo\n"))
+            .await;
+        session.finished().await;
+        let text = text(&session.app);
+        let lines: Vec<_> = text.lines().skip(3).collect();
+        assert_eq!(lines[..4], ["src", "uno", "dos", "no input"], "{text}");
+        let doc = buffer(&session.app).unwrap();
+        let src = doc.text().line_to_char(3);
+        let red = Style::default()
+            .fg(Color::Indexed(1))
+            .add_modifier(Modifier::BOLD);
+        let styles = &doc.compilation.as_ref().unwrap().styles;
+        assert_eq!(styles, &[(src..src + 3, red)]);
+        session.quit().await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_terminal_is_as_large_as_the_output_split() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        let size = |app: &Application| {
+            let (view, doc) = current_ref!(app.editor);
+            format!("{} {}", view.inner_height(), view.inner_width(doc))
+        };
+        let output = |app: &Application| -> Vec<String> {
+            text(app).lines().skip(3).map(str::to_owned).collect()
+        };
+        session
+            .keys(&typed(
+                "compile-any trap 'stty size <&1; exit' WINCH; stty size <&1; \
+                 while :; do sleep 0.01; done",
+            ))
+            .await?;
+        session
+            .until("the size", |app| !output(app).is_empty())
+            .await;
+        let covering = size(&session.app);
+        assert_eq!(output(&session.app), [covering.clone()]);
+        // In a split of its own, the output is narrower, which the command is told.
+        session.keys(":vsplit<ret>").await?;
+        session.finished().await;
+        let split = size(&session.app);
+        assert_ne!(split, covering);
+        assert_eq!(output(&session.app)[..2], [covering, split]);
+        session.quit().await
+    }
+
     fn shows(app: &Application, text: &str) -> bool {
         let screen = app.screen();
         screen
@@ -681,9 +743,12 @@ mod test {
         let mut session = workspace.session("src/lib.rs", None)?;
         for (what, command) in [
             ("1M lines", "seq 1 1000000"),
+            // On a terminal, commands like sed write a line at a time, which costs them more
+            // than it costs the buffer; cat writes what it reads in blocks.
+            ("1M lines, a line at a time", "seq 1 1000000 | sed 's/^/x/'"),
             (
                 "1M colored lines",
-                "seq 1 1000000 | sed 's/.*/\\x1b[1;31m&\\x1b[0m/'",
+                "seq 1 1000000 | sed 's/.*/\\x1b[1;31m&\\x1b[0m/' | cat",
             ),
             (
                 "100k loci",

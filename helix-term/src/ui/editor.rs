@@ -1827,6 +1827,7 @@ impl Component for EditorView {
 
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
+        super::compilation::follow_size(cx.editor);
         cx.editor.update_smooth_scroll();
 
         if use_bufferline {

@@ -802,27 +802,14 @@ mod test {
                 language.test_command.as_deref(),
             )
         };
-        // With what makes them color their output into a pipe.
-        assert_eq!(
-            commands("rust"),
-            (
-                Some("cargo build --color=always"),
-                Some("cargo test --color=always -- --color=always")
-            )
-        );
+        assert_eq!(commands("rust"), (Some("cargo build"), Some("cargo test")));
         assert_eq!(
             commands("kotlin"),
-            (
-                Some("gradle build --console=colored"),
-                Some("gradle test --console=colored")
-            )
+            (Some("gradle build"), Some("gradle test"))
         );
         assert_eq!(
             commands("typst"),
-            (
-                Some("typst --color always compile %{file_path_absolute}"),
-                None
-            )
+            (Some("typst compile %{file_path_absolute}"), None)
         );
         assert_eq!(commands("python"), (None, None));
     }

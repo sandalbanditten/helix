@@ -43,13 +43,13 @@ Helix comes with these:
 
 | Languages | `compile-command` | `test-command` |
 | --- | --- | --- |
-| `rust` | `cargo build --color=always` | `cargo test --color=always -- --color=always` |
+| `rust` | `cargo build` | `cargo test` |
 | `go` | `go build ./...` | `go test ./...` |
-| `zig` | `zig build --color on` | `zig build test --color on` |
-| `typst` | `typst --color always compile %{file_path_absolute}` | |
-| `java`, `kotlin` | `gradle build --console=colored` | `gradle test --console=colored` |
-| `scala` | `sbt -Dsbt.color=always compile` | `sbt -Dsbt.color=always test` |
-| `haskell` | `cabal build --ghc-options=-fdiagnostics-color=always` | `cabal test --ghc-options=-fdiagnostics-color=always` |
+| `zig` | `zig build` | `zig build test` |
+| `typst` | `typst compile %{file_path_absolute}` | |
+| `java`, `kotlin` | `gradle build` | `gradle test` |
+| `scala` | `sbt compile` | `sbt test` |
+| `haskell` | `cabal build` | `cabal test` |
 | `c`, `cpp` | `make` | `make test` |
 
 A workspace's own `.helix/languages.toml` is only read in a
@@ -66,18 +66,29 @@ exits, what it left running in the background is stopped as well, so that the ru
 that arrives later than two seconds after is left out.
 
 The output follows the command and the directory and time it started in, and ends with how it
-ended, like `Exited with code 101 at 14:03:15 after 2.81 s`, which the statusline shows too. A line
-that hasn't ended yet, like a prompt or a progress bar, shows as it is so far. The output keeps
-its colors, in the colors of the terminal. Most tools only color output going to a terminal, so
-commands are asked for them with `CARGO_TERM_COLOR=always`, `CLICOLOR_FORCE=1` and `FORCE_COLOR=1`,
-unless these are set already, and the shipped commands pass the flags that make their tools color
-anyway, like Typst's `--color always`; give them in your own commands too, like
-`:compile-any typst --color always c main.typ`. gcc and clang color with
-`-fdiagnostics-color=always` among the flags of the project, which `make` cannot add. cabal keeps
-the GHC options a package was built with, so its colors may only show once `dist-newstyle` is
-built anew ([haskell/cabal#6177](https://github.com/haskell/cabal/issues/6177)). Other escape sequences are left out, and a carriage return lets the
-rest of a line overwrite it, as in a terminal. With the cursor on the last line, the cursor stays
-on it as output arrives; elsewhere, it stays put.
+ended, like `Exited with code 101 at 14:03:15 after 2.81 s`, which the statusline shows too. With
+the cursor on the last line, the cursor stays on it as output arrives; elsewhere, it stays put.
+
+On Unix, commands write to a terminal, as in a shell, so they color their output, show their
+progress and lay it out as they do in a shell: `rg` puts the file of its matches on a line of its
+own, unless told `--no-heading`, say. The terminal is as large as the split showing the output,
+and commands are told when that changes. It is an `xterm-256color` (`TERM`) without input:
+commands that ask for some, like `sudo` for a password, fail instead of waiting, and the pagers
+are `cat` (`PAGER`, `GIT_PAGER` and `MANPAGER`).
+
+The last rows of the output are the screen of the terminal: what commands draw there, like the
+progress bars of `cargo build` and `cargo nextest run`, shows as they redraw it, and rows that
+scroll off the screen stay as they were. A line wider than the terminal is one line again, unless
+its rows are filled up with spaces to their end, as some commands write lines. Full-screen
+programs, like `htop`, don't work there, and what they draw goes when they end.
+
+Where Helix has no terminal to give them, as on Windows, commands write to a pipe instead, which
+most tools don't color, so they are asked for colors with `CARGO_TERM_COLOR=always`,
+`CLICOLOR_FORCE=1` and `FORCE_COLOR=1`, unless these are set already. Others take a flag, like
+Typst's `--color always`.
+
+The output keeps its colors, in the colors of the terminal Helix runs in, unless
+[`colors = false`](./editor.md#editorcompilation-section) leaves them out.
 
 The buffer can be edited, but not written, and never counts as modified: it closes and quits
 without asking. Undo doesn't go back past the output that arrived.

@@ -13,20 +13,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-use helix_stdx::process::{self, Leader, ProcessGroup};
+use helix_stdx::{
+    process::{self, Leader, ProcessGroup},
+    pty::Pty,
+};
 use helix_view::{graphics::Style, DocumentId, Editor};
 use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
-    output::{End, Lines, Shown},
+    output::{End, Shown},
+    screen::Screen,
 };
 use crate::{compositor::Compositor, job};
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
 pub struct Output {
-    /// The chars at the end of the buffer that `text` replaces: the line shown unfinished.
+    /// The chars at the end of the buffer that `text` replaces: the rows of the screen shown
+    /// before that changed since.
     pub replace: usize,
     pub text: String,
     /// The chars of `text`.
@@ -85,7 +90,7 @@ impl Output {
     }
 
     /// Adds `shown` with the `loci` in it, in place of the last `replace` chars of the output:
-    /// the line shown unfinished, which is either still pending here or in the buffer already.
+    /// rows of the screen, which are either still pending here or in the buffer already.
     fn push(&mut self, replace: usize, shown: &Shown, loci: Vec<Locus>) {
         let pending = replace.min(self.chars);
         if pending > 0 {
@@ -101,6 +106,8 @@ impl Output {
                 .styles
                 .partition_point(|(range, _)| range.start < self.chars);
             self.styles.truncate(kept);
+            let kept = self.loci.partition_point(|locus| locus.start < self.chars);
+            self.loci.truncate(kept);
         }
         self.replace += replace - pending;
         let start = self.chars;
@@ -143,11 +150,20 @@ const BATCH: usize = 256 * 1024;
 const PENDING: usize = 4 * 1024 * 1024;
 /// How often the reader looks at the leader when no output arrives.
 const TICK: Duration = Duration::from_millis(50);
-/// A line shows unfinished, like a prompt or a progress bar, at most this often.
-const UNFINISHED: Duration = Duration::from_millis(100);
+/// The screen shows anew at most this often, as a progress bar is redrawn say.
+const REFRESH: Duration = Duration::from_millis(100);
 /// How long what keeps running has before it is stopped by force: after a kill, or after the
 /// leader exited. Output that comes later than twice this after the leader exited is dropped.
 const GRACE: Duration = Duration::from_secs(1);
+
+/// What commands writing to a terminal are told: that it shows colors and moves the cursor, and
+/// that there's no one to page their output for.
+const TERMINAL: [(&str, &str); 4] = [
+    ("TERM", "xterm-256color"),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+    ("MANPAGER", "cat"),
+];
 
 /// What makes tools color their output into a pipe, unless the environment says otherwise.
 const FORCE_COLORS: [(&str, &str); 3] = [
@@ -156,61 +172,81 @@ const FORCE_COLORS: [(&str, &str); 3] = [
     ("FORCE_COLOR", "1"),
 ];
 
-/// Runs `command` with `shell` in `dir`, stdout and stderr both into one pipe, and appends what
-/// it writes to the compilation buffer `doc` as run `run`, with the loci `finder` finds in it,
-/// and its `colors`, which tools are asked for. The returned group stops it.
+/// Runs `command` with `shell` in `dir`, and appends what it writes to the compilation buffer
+/// `doc` as run `run`, with the loci `finder` finds in it, and with its `colors`.
+///
+/// Its stdout and stderr are a terminal of `size`, columns and rows, where there are
+/// pseudo-terminals, else one pipe, into which tools are asked for colors. Returns the group
+/// that stops it, and the terminal, to resize.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     shell: &[String],
     command: &str,
     dir: &Path,
+    (cols, rows): (u16, u16),
     colors: bool,
     finder: Finder,
     doc: DocumentId,
     run: u64,
-) -> io::Result<ProcessGroup> {
+) -> io::Result<(ProcessGroup, Option<Pty>)> {
     let Some((program, args)) = shell.split_first() else {
         return Err(io::Error::other("No shell set"));
     };
-    let (reader, writer) = io::pipe()?;
     let mut process = Command::new(program);
     process
         .args(args)
         .arg(command)
         .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(writer.try_clone()?)
-        .stderr(writer);
-    if colors {
-        for (name, value) in FORCE_COLORS {
-            if std::env::var_os(name).is_none() {
-                process.env(name, value);
-            }
+        .stdin(Stdio::null());
+    let (output, terminal, screen): (Box<dyn Read + Send>, _, _) = match Pty::open(cols, rows) {
+        Ok((terminal, end)) => {
+            process.stdout(end.try_clone()?).stderr(end).envs(TERMINAL);
+            let output = terminal.reader()?;
+            (
+                Box::new(output),
+                Some(terminal),
+                Screen::new(cols, rows, colors),
+            )
         }
-    }
+        Err(err) => {
+            if err.kind() != io::ErrorKind::Unsupported {
+                log::warn!("cannot open a pseudo-terminal, running on a pipe: {err}");
+            }
+            let (output, end) = io::pipe()?;
+            process.stdout(end.try_clone()?).stderr(end);
+            if colors {
+                for (name, value) in FORCE_COLORS {
+                    if std::env::var_os(name).is_none() {
+                        process.env(name, value);
+                    }
+                }
+            }
+            // Nothing redraws output on a pipe, so the screen is one row.
+            (Box::new(output), None, Screen::new(u16::MAX, 1, colors))
+        }
+    };
     let (leader, group) = process::spawn_group(&mut process)?;
-    // The command keeps the write end, which must close for the output to end.
+    // The command keeps the end it writes to, which must close for the output to end.
     drop(process);
 
     // A few chunks in flight at most, so that a busy editor makes the command wait.
     let (chunks, received) = mpsc::sync_channel(16);
     std::thread::Builder::new()
         .name("compilation output".to_owned())
-        .spawn(move || read(reader, &chunks))?;
+        .spawn(move || read(output, &chunks))?;
+    let size = terminal.as_ref().map(Pty::try_clone).transpose()?;
     let handle = Handle::current();
     std::thread::Builder::new()
         .name("compilation".to_owned())
-        .spawn(move || {
-            let lines = Lines::new(colors);
-            follow(&received, leader, lines, finder, &handle, doc, run)
-        })?;
-    Ok(group)
+        .spawn(move || follow(&received, leader, screen, size, finder, &handle, doc, run))?;
+    Ok((group, terminal))
 }
 
-/// Reads `pipe` until it ends, sending what it reads to `chunks`.
-fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
+/// Reads `output` until it ends, sending what it reads to `chunks`.
+fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
     let mut buf = vec![0; 64 * 1024];
     loop {
-        match pipe.read(&mut buf) {
+        match output.read(&mut buf) {
             Ok(0) => return,
             // The run stopped following its output.
             Ok(read) if chunks.send(buf[..read].to_vec()).is_err() => return,
@@ -225,11 +261,14 @@ fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
 }
 
 /// Hands over the output in `chunks` as it arrives, until it ends and the leader exited. Stops
-/// what the leader leaves behind, and by force what a kill didn't stop.
+/// what the leader leaves behind, and by force what a kill didn't stop. The screen takes the
+/// `size` of the terminal, when there is one.
+#[allow(clippy::too_many_arguments)]
 fn follow(
     chunks: &Receiver<Vec<u8>>,
     mut leader: Leader,
-    mut lines: Lines,
+    mut screen: Screen,
+    size: Option<Pty>,
     mut finder: Finder,
     handle: &Handle,
     doc: DocumentId,
@@ -237,23 +276,28 @@ fn follow(
 ) {
     let shared = Arc::new(Shared::default());
     let hand_over = |add: &mut dyn FnMut(&mut Output)| hand_over(&shared, handle, doc, run, add);
-    // The unfinished last line as the buffer shows it, and when it was shown.
+    // The screen as the buffer shows it at its end, and when it showed.
     let mut shown = Shown::default();
-    let mut shown_at = Instant::now();
+    let mut shown_at: Option<Instant> = None;
+    let mut changed = false;
     let mut open = true;
     let mut exited: Option<Instant> = None;
     let mut killed: Option<Instant> = None;
     let mut forced = false;
     loop {
         if open {
-            match chunks.recv_timeout(TICK) {
+            // Until the screen is due to show again, once it changed.
+            let wait = match shown_at {
+                Some(at) if changed => REFRESH.saturating_sub(at.elapsed()).min(TICK),
+                _ => TICK,
+            };
+            match chunks.recv_timeout(wait) {
                 Ok(chunk) => {
-                    let text = lines.push(&chunk);
-                    if !text.text.is_empty() {
-                        let mut loci = finder.find(&text.text);
-                        let replace = mem::take(&mut shown).chars;
-                        hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
+                    if let Some((cols, rows)) = size.as_ref().and_then(|pty| pty.size().ok()) {
+                        screen.resize(cols, rows);
                     }
+                    screen.push(&chunk);
+                    changed = true;
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => open = false,
@@ -262,14 +306,19 @@ fn follow(
             std::thread::sleep(TICK / 5);
         }
 
-        if shown_at.elapsed() >= UNFINISHED {
-            let unfinished = lines.partial();
-            if unfinished != shown {
-                let replace = shown.chars;
-                hand_over(&mut |output| output.push(replace, &unfinished, Vec::new()));
-                shown = unfinished;
+        let due = shown_at.is_none_or(|at| at.elapsed() >= REFRESH);
+        if changed && (due || screen.scrolled_len() >= BATCH) {
+            let (replace, text, mut loci) = change(
+                &mut shown,
+                screen.take_scrolled(),
+                screen.shown(),
+                &mut finder,
+            );
+            if replace > 0 || !text.text.is_empty() {
+                hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
             }
-            shown_at = Instant::now();
+            shown_at = Some(Instant::now());
+            changed = false;
         }
 
         if exited.is_none() && leader.has_exited().unwrap_or(true) {
@@ -292,9 +341,8 @@ fn follow(
         }
     }
 
-    let rest = lines.finish();
-    let mut rest_loci = finder.find(&rest.text);
-    let replace = shown.chars;
+    let (replace, text, mut loci) =
+        change(&mut shown, screen.finish(), Shown::default(), &mut finder);
     let killed = leader.killed();
     let end = match leader.reap() {
         _ if killed => End::Killed,
@@ -305,9 +353,38 @@ fn follow(
         }
     };
     hand_over(&mut |output| {
-        output.push(replace, &rest, mem::take(&mut rest_loci));
+        output.push(replace, &text, mem::take(&mut loci));
         output.end = Some(end);
     });
+}
+
+/// How the end of the buffer changes from the screen it shows, `shown`, once the lines
+/// `scrolled` scrolled away and the screen shows `screen`: the chars of `shown` that change,
+/// from the first line that does, and what replaces them, with the loci in it. `shown` becomes
+/// `screen`.
+fn change(
+    shown: &mut Shown,
+    scrolled: Shown,
+    screen: Shown,
+    finder: &mut Finder,
+) -> (usize, Shown, Vec<Locus>) {
+    let mut loci = finder.find(&scrolled.text);
+    let start = scrolled.chars;
+    loci.extend(finder.peek(&screen.text).into_iter().map(|mut locus| {
+        locus.start += start;
+        locus
+    }));
+    let mut text = scrolled;
+    text.append(&screen);
+    let (chars, bytes) = shown.common_lines(&text);
+    let text = text.split_off(chars, bytes);
+    loci.retain(|locus| locus.start >= chars);
+    for locus in &mut loci {
+        locus.start -= chars;
+    }
+    let replace = shown.chars - chars;
+    *shown = screen;
+    (replace, text, loci)
 }
 
 #[cfg(unix)]
