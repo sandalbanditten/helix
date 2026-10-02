@@ -20,5 +20,5 @@ Should syntax highlight the code, also show unchanged code.
 Should also be callable for current buffer in helix.
 In this view `]g`, `[g` and their upper case friends should jump hunks.
 Much like `difftastic.nvim`, with changes highlighting line the _background_ red or green, actually changes text a slightly brighter red or green, and "empty" lines (present in one but not the other) given a gray background.
-On the left should be a docked, repurposed file tree with just the diff'd files, exactly like the file tree, but with a trailing `+nnn -mmm` with additions in green and removals in red.
+On the right should be a docked, repurposed file tree with just the diff'd files, exactly like the file tree, but with a trailing `+nnn -mmm` with additions in green and removals in red.
 See `difftastic.nvim/assets/header.png`.
