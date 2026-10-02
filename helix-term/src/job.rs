@@ -33,6 +33,26 @@ pub fn dispatch_blocking(job: impl FnOnce(&mut Editor, &mut Compositor) + Send +
     send_blocking(jobs, Callback::EditorCompositor(Box::new(job)))
 }
 
+/// Runs `work` in the background, then `apply` with its result on the main thread.
+///
+/// The work gets a thread of its own rather than one of tokio's blocking threads, as the file
+/// picker's walk does: quitting waits for those, and a git status can take seconds.
+pub fn in_background<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut Editor, &mut Compositor, T) + Send + 'static,
+) {
+    let (sender, result) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    tokio::spawn(async move {
+        let Ok(result) = result.await else {
+            return;
+        };
+        dispatch(move |editor, compositor| apply(editor, compositor, result)).await;
+    });
+}
+
 pub enum Callback {
     EditorCompositor(EditorCompositorCallback),
     Editor(EditorCallback),

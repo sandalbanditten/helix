@@ -16,27 +16,14 @@ use super::{
 use crate::job;
 
 /// Runs `work` in the background, then `apply` with its result on the file tree.
-///
-/// The work gets a thread of its own rather than one of tokio's blocking threads, as the file
-/// picker's walk does: quitting waits for those, and a git status can take seconds.
 pub(super) fn in_background<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     apply: impl FnOnce(&mut FileTree, T, &mut Editor) + Send + 'static,
 ) {
-    let (sender, result) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(work());
-    });
-    tokio::spawn(async move {
-        let Ok(result) = result.await else {
-            return;
-        };
-        job::dispatch(move |editor, compositor| {
-            if let Some(file_tree) = file_tree(compositor) {
-                apply(file_tree, result, editor);
-            }
-        })
-        .await;
+    job::in_background(work, move |editor, compositor, result| {
+        if let Some(file_tree) = file_tree(compositor) {
+            apply(file_tree, result, editor);
+        }
     });
 }
 

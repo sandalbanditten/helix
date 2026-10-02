@@ -108,9 +108,9 @@ impl Dired {
             .collect();
         for (doc_id, version, source) in affected {
             let options = listing_options(editor, source.root());
-            in_background(
+            job::in_background(
                 move || read(&source, &options),
-                move |editor, listing| {
+                move |editor, _, listing| {
                     let unchanged = editor
                         .document(doc_id)
                         .is_some_and(|doc| doc.version() == version && !doc.is_modified());
@@ -224,9 +224,9 @@ fn listing_options(editor: &Editor, root: &Path) -> listing::Options {
 /// entry at `select` (relative to the listing's root) if there is one.
 pub fn open(editor: &Editor, source: Source, select: Option<PathBuf>) {
     let options = listing_options(editor, source.root());
-    in_background(
+    job::in_background(
         move || read(&source, &options),
-        move |editor, listing| show(editor, listing, select),
+        move |editor, _, listing| show(editor, listing, select),
     );
 }
 
@@ -235,23 +235,6 @@ fn read(source: &Source, options: &listing::Options) -> Listing {
     let mut listing = listing::read(source, options);
     listing.text = Rope::from(format::text(&listing, &Clock::system()));
     listing
-}
-
-/// Runs `work` on a thread of its own, then `apply` with its result on the main thread.
-fn in_background<T: Send + 'static>(
-    work: impl FnOnce() -> T + Send + 'static,
-    apply: impl FnOnce(&mut Editor, T) + Send + 'static,
-) {
-    let (sender, result) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(work());
-    });
-    tokio::spawn(async move {
-        let Ok(result) = result.await else {
-            return;
-        };
-        job::dispatch(move |editor, _compositor| apply(editor, result)).await;
-    });
 }
 
 /// Shows a listing in a zoomed split: in the buffer already showing the same source (listed
