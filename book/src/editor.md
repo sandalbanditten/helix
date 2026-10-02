@@ -400,7 +400,7 @@ The [compilation buffer](./compilation.md) shows the output of `:compile`, `:com
 | Key | Description | Default |
 | --- | --- | --- |
 | `open` | Where `gf` and `gd` open a locus of the output: `"return"`, where the output has no split of its own but covers the editor from the one it is shown in: the file opens in a split already showing it, that split showing again what it showed before, else in it, normally; `"beside"` the output, in the split the command was run from; or `"replace"` in the output's own split, like `gf` anywhere. `]q` and `[q` show a hidden output in the focused split, or beside it | `"return"` |
-| `colors` | Whether the output keeps its colors, which commands are asked for, rather than leaving them out | `true` |
+| `colors` | Whether the output keeps its colors, rather than leaving them out | `true` |
 | `hide-file-tree` | Whether the output, covering the editor, covers the [file tree](#editorfile-tree-section) too | `true` |
 
 ### `[editor.buffer-picker]` Section
