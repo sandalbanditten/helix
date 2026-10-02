@@ -355,6 +355,80 @@ async fn the_known_text_back_on_disk_asks_nothing() -> anyhow::Result<()> {
     session.quit().await
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=helix", "-c", "user.email=helix@helix"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+/// The diff base of the buffer and its number of hunks.
+fn diff(app: &Application) -> Option<(String, u32)> {
+    let handle = doc!(app.editor).diff_handle()?;
+    let diff = handle.load();
+    Some((diff.diff_base().to_string(), diff.len()))
+}
+
+fn head(app: &Application) -> Option<String> {
+    Some(doc!(app.editor).version_control_head()?.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_head_refreshes_the_diff_and_the_branch() -> anyhow::Result<()> {
+    let (dir, path) = file("one\n")?;
+    git(dir.path(), &["init"]);
+    git(dir.path(), &["add", "file.txt"]);
+    git(dir.path(), &["commit", "-m", "one"]);
+    let mut session = session(&path)?;
+    session.keys("").await?;
+    assert_eq!(head(&session.app).as_deref(), Some("main"));
+
+    fs::write(&path, "two\n")?;
+    session
+        .until("the reload against HEAD", |app| {
+            diff(app) == Some(("one\n".into(), 1))
+        })
+        .await;
+
+    // A commit moves HEAD without touching the file.
+    git(dir.path(), &["commit", "-am", "two"]);
+    session
+        .until("the diff against the new HEAD", |app| {
+            diff(app) == Some(("two\n".into(), 0))
+        })
+        .await;
+
+    git(dir.path(), &["switch", "-c", "topic/new"]);
+    session
+        .until("the new branch", |app| {
+            head(app).as_deref() == Some("topic/new")
+        })
+        .await;
+    // The ref of the new branch, in a directory that didn't exist, is followed too.
+    fs::write(&path, "three\n")?;
+    session
+        .until("the reload", |app| text(app) == "three\n")
+        .await;
+    git(dir.path(), &["commit", "-am", "three"]);
+    session
+        .until("the diff against the commit on the new branch", |app| {
+            diff(app) == Some(("three\n".into(), 0))
+        })
+        .await;
+    session.quit().await
+}
+
 /// Measurements of how fast changes are followed and what following costs. Run them with
 /// `cargo test --release --features integration -p helix-term --test integration --
 /// auto_reload::measure --ignored --nocapture --test-threads 1`.
@@ -593,6 +667,55 @@ mod measure {
             start.elapsed()
         );
         session.quit().await
+    }
+
+    /// Opens 500 files in 50 directories of a repository, then moves HEAD.
+    async fn open_a_repository(auto_reload: bool) -> anyhow::Result<()> {
+        const DIRS: usize = 50;
+        const FILES: usize = 10;
+        let dir = tempfile::tempdir()?;
+        git(dir.path(), &["init"]);
+        let mut config = test_config();
+        config.editor.auto_reload = auto_reload;
+        let mut builder = AppBuilder::new().with_config(config);
+        for d in 0..DIRS {
+            let sub = dir.path().join(format!("dir-{d:02}"));
+            fs::create_dir(&sub)?;
+            for f in 0..FILES {
+                let path = sub.join(format!("file-{f}.txt"));
+                fs::write(&path, "one\n")?;
+                builder = builder.with_file(path, None);
+            }
+        }
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "one"]);
+        let start = Instant::now();
+        let mut session = Session::new(builder.build()?);
+        session.keys("").await?;
+        println!(
+            "opening {} files in {DIRS} directories of a repository with auto-reload {auto_reload}: {:?}",
+            DIRS * FILES,
+            start.elapsed()
+        );
+        if auto_reload {
+            let probe = Probe::start();
+            git(dir.path(), &["commit", "--allow-empty", "-m", "two"]);
+            session.wait(Duration::from_millis(500)).await;
+            println!("a commit: longest stall {:?}", probe.longest_stall());
+        }
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "a measurement, not a check"]
+    async fn measure_a_repository_with_auto_reload() -> anyhow::Result<()> {
+        open_a_repository(true).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "a measurement, not a check"]
+    async fn measure_a_repository_without_auto_reload() -> anyhow::Result<()> {
+        open_a_repository(false).await
     }
 
     async fn open_many(auto_reload: bool) -> anyhow::Result<()> {

@@ -85,6 +85,27 @@ pub fn get_current_head_name(file: &Path, trust_full: bool) -> Result<Arc<ArcSwa
     Ok(Arc::new(ArcSwap::from_pointee(name.into_boxed_str())))
 }
 
+/// The files whose changes move HEAD of the repository holding `file`: HEAD itself, the packed
+/// refs, and the loose ref of the branch HEAD is on, which need not exist.
+pub fn head_files(file: &Path) -> Result<Vec<PathBuf>> {
+    debug_assert!(file.is_absolute());
+    let file = gix::path::realpath(file).context("resolve symlinks")?;
+
+    let repo_dir = get_repo_dir(&file)?;
+    // Only paths are read, so the repository's own configuration needs no trust.
+    let repo = open_repo(repo_dir, false)
+        .context("failed to open git repo")?
+        .to_thread_local();
+    // A worktree's common directory comes as `.git/worktrees/<name>/../..`.
+    let git_dir = gix::path::realpath(repo.git_dir())?;
+    let common_dir = gix::path::realpath(repo.common_dir())?;
+    let mut files = vec![git_dir.join("HEAD"), common_dir.join("packed-refs")];
+    if let Some(name) = repo.head_name()? {
+        files.push(common_dir.join(gix::path::from_bstr(name.as_bstr())));
+    }
+    Ok(files)
+}
+
 pub fn for_each_status_entry(
     cwd: &Path,
     trust_full: bool,

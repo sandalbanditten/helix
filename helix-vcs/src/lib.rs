@@ -61,6 +61,22 @@ impl DiffProviderRegistry {
         })
     }
 
+    /// The files whose changes move HEAD of the repository holding `file`, and so the diff base
+    /// and the name of HEAD.
+    pub fn head_files(&self, file: &Path) -> Vec<PathBuf> {
+        self.providers
+            .iter()
+            .find_map(|provider| match provider.head_files(file) {
+                Ok(files) => Some(files),
+                Err(err) => {
+                    log::debug!("{err:#?}");
+                    log::debug!("failed to find the HEAD files for {}", file.display());
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
     /// Fire-and-forget changed file iteration. Runs everything in a background task. Keeps
     /// iteration until `on_change` returns `false`.
     pub fn for_each_changed_file(
@@ -155,6 +171,14 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::get_current_head_name(file, trust_full),
+            Self::None => bail!("No diff support compiled in"),
+        }
+    }
+
+    fn head_files(&self, file: &Path) -> Result<Vec<PathBuf>> {
+        match self {
+            #[cfg(feature = "git")]
+            Self::Git => git::head_files(file),
             Self::None => bail!("No diff support compiled in"),
         }
     }

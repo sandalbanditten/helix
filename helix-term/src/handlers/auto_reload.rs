@@ -1,14 +1,15 @@
-//! Reloads the buffers whose files change on disk.
+//! Reloads the buffers whose files change on disk, and refreshes their diff bases and HEAD names
+//! when HEAD of their repository moves.
 //!
-//! Only the directories of the open files are watched, each without its subdirectories, so the
-//! cost grows with the open files, not with the project. Files are read and compared in the
-//! background; the main thread only applies what came of it.
+//! Only the directories of the open files are watched, each without its subdirectories, and the
+//! few files that move HEAD, so the cost grows with the open files, not with the project. Files
+//! are read and compared in the background; the main thread only applies what came of it.
 
 use std::{
     collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, SystemTime},
 };
 
@@ -28,13 +29,32 @@ use parking_lot::Mutex;
 
 use crate::{compositor::Compositor, job, ui::EditorView, watch::Watcher};
 
+mod head;
+
 /// How long a check waits while the editor writes files itself: its own writes look like changes
 /// from outside until they are done, and an atomic save even moves the file away first.
 const RETRY: Duration = Duration::from_millis(100);
 
-/// The watched files, each with the path of the document it is the file of: the document's own
-/// path and, for a symlink, the file it links to, which is where writes go.
-type Files = HashMap<PathBuf, PathBuf>;
+/// The watched files, by what they are to the editor.
+type Files = HashMap<PathBuf, Watched>;
+
+/// What a watched file is to the editor.
+enum Watched {
+    /// The file of the document at this path, by the document's own path or, for a symlink, by
+    /// the path of the file it links to, which is where writes go.
+    Document(PathBuf),
+    /// A file whose change moves HEAD of a repository, or the closest directory to it that is
+    /// missing.
+    Head(Arc<Repository>),
+}
+
+/// A repository holding documents.
+struct Repository {
+    /// The files whose changes move its HEAD, its HEAD file first.
+    head_files: Vec<PathBuf>,
+    /// The paths of the documents it holds.
+    docs: Vec<PathBuf>,
+}
 
 /// What watches the files of the open documents.
 #[derive(Default)]
@@ -44,42 +64,93 @@ struct Watching {
     files: Arc<ArcSwap<Files>>,
     /// The names of the file of each document path, looked up once.
     names: HashMap<PathBuf, Vec<PathBuf>>,
+    /// The files moving HEAD of the repository holding each directory with documents, looked
+    /// up once and again after HEAD moved, its HEAD file first.
+    heads: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 impl Watching {
-    /// Watches the files of the open documents, or none when auto-reload is off.
-    fn follow(&mut self, editor: &Editor) {
+    /// Watches the files of the open documents and what moves HEAD of their repositories, or
+    /// nothing when auto-reload is off.
+    fn follow(this: &Arc<Mutex<Self>>, editor: &Editor) {
+        let mut watching = this.lock();
         if !editor.config().auto_reload {
-            *self = Self::default();
+            *watching = Self::default();
             return;
         }
+        let watching = &mut *watching;
         let paths: HashSet<&Path> = editor.documents().filter_map(followed_path).collect();
-        self.names.retain(|path, _| paths.contains(path.as_path()));
+        watching
+            .names
+            .retain(|path, _| paths.contains(path.as_path()));
+        let doc_dirs: HashSet<&Path> = paths.iter().filter_map(|path| path.parent()).collect();
+        watching
+            .heads
+            .retain(|dir, _| doc_dirs.contains(dir.as_path()));
+
         let mut files = Files::new();
+        let mut dirs = HashSet::new();
+        // By their HEAD files.
+        let mut repositories: HashMap<PathBuf, Repository> = HashMap::new();
         for path in paths {
-            let names = self
+            let names = watching
                 .names
                 .entry(path.to_path_buf())
                 .or_insert_with(|| names(path));
-            files.extend(names.iter().map(|name| (name.clone(), path.to_path_buf())));
+            for name in names.iter() {
+                dirs.extend(name.parent().map(Path::to_path_buf));
+                files.insert(name.clone(), Watched::Document(path.to_path_buf()));
+            }
+            let Some(dir) = path.parent() else {
+                continue;
+            };
+            let head_files = watching
+                .heads
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| editor.diff_providers.head_files(path));
+            let Some(head) = head_files.first() else {
+                continue;
+            };
+            repositories
+                .entry(head.clone())
+                .or_insert_with(|| Repository {
+                    head_files: head_files.clone(),
+                    docs: Vec::new(),
+                })
+                .docs
+                .push(path.to_path_buf());
         }
-        let dirs = files
-            .keys()
-            .filter_map(|file| file.parent())
-            .map(Path::to_path_buf)
-            .collect();
-        let start = self.watcher.is_none() && !files.is_empty();
-        self.files.store(Arc::new(files));
+        for repository in repositories.into_values() {
+            let repository = Arc::new(repository);
+            for head in &repository.head_files {
+                // A loose ref of a branch whose refs are all packed doesn't exist, nor maybe its
+                // directory: what shows it coming is its closest directory that exists.
+                let mut file = head.clone();
+                while let Some(dir) = file.parent().filter(|dir| !dir.is_dir()) {
+                    let dir = dir.to_path_buf();
+                    files.insert(
+                        std::mem::replace(&mut file, dir),
+                        Watched::Head(repository.clone()),
+                    );
+                }
+                dirs.extend(file.parent().map(Path::to_path_buf));
+                files.insert(file, Watched::Head(repository.clone()));
+            }
+        }
+
+        let start = watching.watcher.is_none() && !files.is_empty();
+        watching.files.store(Arc::new(files));
         if start {
-            let (accepted, files) = (self.files.clone(), self.files.clone());
-            self.watcher = Watcher::filtered(
+            let accepted = watching.files.clone();
+            let this = Arc::downgrade(this);
+            watching.watcher = Watcher::filtered(
                 move |path| accepted.load().contains_key(path),
-                move |paths, editor, _| changed(&files.load(), paths, editor),
+                move |paths, editor, _| changed(&this, paths, editor),
             )
             .inspect_err(|err| log::warn!("cannot watch the open files: {err}"))
             .ok();
         }
-        if let Some(watcher) = &mut self.watcher {
+        if let Some(watcher) = &mut watching.watcher {
             watcher.watch(dirs);
         }
     }
@@ -110,13 +181,48 @@ enum Trigger {
     Focus,
 }
 
-/// Checks the documents of the files that the watcher saw change.
-fn changed(files: &Files, paths: HashSet<PathBuf>, editor: &mut Editor) {
-    let docs = paths
-        .iter()
-        .filter_map(|path| editor.document_id_by_path(files.get(path)?))
-        .collect();
+/// Handles the files that the watcher saw change: checks their documents, and when HEAD moved,
+/// refreshes the diff bases and HEAD names of the documents in its repository.
+fn changed(watching: &Weak<Mutex<Watching>>, paths: HashSet<PathBuf>, editor: &mut Editor) {
+    let Some(watching) = watching.upgrade() else {
+        return;
+    };
+    let files = watching.lock().files.load_full();
+    let mut docs = HashSet::new();
+    // By their HEAD files.
+    let mut moved = HashMap::new();
+    for path in &paths {
+        match files.get(path) {
+            Some(Watched::Document(path)) => docs.extend(editor.document_id_by_path(path)),
+            Some(Watched::Head(repository)) => {
+                moved.insert(&repository.head_files[0], repository);
+            }
+            None => {}
+        }
+    }
     check(docs, Trigger::Watcher, editor);
+    if moved.is_empty() {
+        return;
+    }
+    // HEAD may be on another branch now, whose ref is another file: one lookup does for all the
+    // directories of a repository.
+    {
+        let mut watching = watching.lock();
+        for (head, repository) in &moved {
+            let head_files = editor.diff_providers.head_files(&repository.docs[0]);
+            for files in watching.heads.values_mut() {
+                if files.first() == Some(head) {
+                    files.clone_from(&head_files);
+                }
+            }
+        }
+    }
+    Watching::follow(&watching, editor);
+    let paths = moved
+        .values()
+        .flat_map(|repository| repository.docs.iter().cloned())
+        .collect();
+    head::refresh(paths, editor);
 }
 
 /// Checks every followed document, as files may change unseen, like those on a network drive.
@@ -350,24 +456,24 @@ pub(super) fn register_hooks(_handlers: &Handlers) {
 
     let watching_ = watching.clone();
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
-        watching_.lock().follow(event.editor);
+        Watching::follow(&watching_, event.editor);
         Ok(())
     });
 
     let watching_ = watching.clone();
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
-        watching_.lock().follow(event.editor);
+        Watching::follow(&watching_, event.editor);
         Ok(())
     });
 
     let watching_ = watching.clone();
     register_hook!(move |event: &mut DocumentPathDidChange<'_>| {
-        watching_.lock().follow(event.editor);
+        Watching::follow(&watching_, event.editor);
         Ok(())
     });
 
     register_hook!(move |event: &mut ConfigDidChange<'_>| {
-        watching.lock().follow(event.editor);
+        Watching::follow(&watching, event.editor);
         Ok(())
     });
 }

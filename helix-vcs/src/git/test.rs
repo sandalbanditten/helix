@@ -319,3 +319,57 @@ fn status_by_side_reports_type_changes() {
     let status = git::status_by_side(repo, true, &[]).unwrap();
     assert_eq!(side_changes(&status), [change('i', 'T', "file.txt")]);
 }
+
+#[test]
+fn head_files_follow_the_branch() {
+    let temp_git = empty_git_repo();
+    let file = temp_git.path().join("file.txt");
+    File::create(&file).unwrap().write_all(b"foo").unwrap();
+    create_commit(temp_git.path(), true);
+
+    let git_dir = gix::path::realpath(temp_git.path().join(".git")).unwrap();
+    assert_eq!(
+        git::head_files(&file).unwrap(),
+        [
+            git_dir.join("HEAD"),
+            git_dir.join("packed-refs"),
+            git_dir.join("refs/heads/main"),
+        ]
+    );
+
+    exec_git_cmd("switch -c feature/x", temp_git.path());
+    assert_eq!(
+        git::head_files(&file).unwrap()[2],
+        git_dir.join("refs/heads/feature/x")
+    );
+
+    // A detached HEAD is on no branch.
+    exec_git_cmd("switch --detach", temp_git.path());
+    assert_eq!(
+        git::head_files(&file).unwrap(),
+        [git_dir.join("HEAD"), git_dir.join("packed-refs")]
+    );
+}
+
+#[test]
+fn head_files_of_a_worktree() {
+    let temp_git = empty_git_repo();
+    let file = temp_git.path().join("file.txt");
+    File::create(&file).unwrap().write_all(b"foo").unwrap();
+    create_commit(temp_git.path(), true);
+    let worktree = temp_git.path().join("worktree");
+    exec_git_cmd(
+        &format!("worktree add -b other {}", worktree.display()),
+        temp_git.path(),
+    );
+
+    let git_dir = gix::path::realpath(temp_git.path().join(".git")).unwrap();
+    assert_eq!(
+        git::head_files(&worktree.join("file.txt")).unwrap(),
+        [
+            git_dir.join("worktrees/worktree/HEAD"),
+            git_dir.join("packed-refs"),
+            git_dir.join("refs/heads/other"),
+        ]
+    );
+}
