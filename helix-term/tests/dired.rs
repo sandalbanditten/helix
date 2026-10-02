@@ -156,6 +156,42 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn undo_files_follow_renamed_and_copied_entries() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt", "b.txt"])?;
+        let undo = tempfile::tempdir()?;
+        let undo = undo.path();
+        let text = helpers::write_undo_file(undo, &workspace.path("a.txt"));
+        helpers::write_undo_file(undo, &workspace.path("b.txt"));
+        let has = |path: &str| helpers::has_undo_file(undo, &workspace.path(path), &text);
+        let mut app = AppBuilder::new()
+            .with_config(helpers::undo_config(undo))
+            .with_file(workspace.path("a.txt"), None)
+            .build()?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired<ret>"), None),
+                // `a.txt` moves away and `b.txt` takes its name.
+                (
+                    Some("/a\\.txt<ret>cc.txt<esc>/b\\.txt<ret>ca.txt<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 2 changes");
+                        assert!(has("c.txt") && has("a.txt") && !has("b.txt"));
+                    }),
+                ),
+                // A pasted line copies, and so does its undo file.
+                (
+                    Some("/a\\.txt<ret>xypsa\\.txt<ret>cd.txt<esc>:w<ret>"),
+                    Some(&|_| assert!(has("d.txt") && has("a.txt"))),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn deletions_and_discards_take_force() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["keep.txt", "gone/inside.txt"])?;
         let mut app = workspace.app("keep.txt")?;

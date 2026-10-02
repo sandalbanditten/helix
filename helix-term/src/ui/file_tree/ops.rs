@@ -8,8 +8,8 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use helix_stdx::path::get_relative_path;
-use helix_view::{editor::Action, Editor};
+use helix_stdx::path::{canonicalize, get_relative_path};
+use helix_view::{editor::Action, undo_file, Editor};
 
 use crate::job::{Callback, Job};
 
@@ -77,6 +77,7 @@ pub fn copy_in_background(
             (from, to, is_dir)
         })
         .collect();
+    let undo_dir = editor.config().undo.persisted();
     let copy = move || {
         let mut copied = Vec::new();
         for (from, to, is_dir) in copies {
@@ -86,6 +87,12 @@ pub fn copy_in_background(
                 .and_then(|()| helix_stdx::fs::copy_path(&from, &to));
             if let Err(err) = made {
                 return (copied, Err(err));
+            }
+            if let Some(dir) = &undo_dir {
+                let (from, to) = (canonicalize(&from), canonicalize(&to));
+                if let Err(err) = undo_file::copied(dir, &from, &to) {
+                    log::error!("cannot copy the undo files of {}: {err}", from.display());
+                }
             }
             copied.push((to, is_dir));
         }

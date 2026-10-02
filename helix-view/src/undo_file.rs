@@ -5,6 +5,10 @@
 //! A write appends the revisions made since the last one, unless the undo file changed in
 //! between, which another Helix writing the same file does: then it is written anew, from this
 //! history, so the last write wins.
+//!
+//! Undo files follow their files when Helix moves or copies them. Each one records its file's
+//! path, which tells the ones of the files in a directory apart from others whose names happen to
+//! begin alike, and finds the files whose names are hashes.
 
 use std::{
     ffi::OsString,
@@ -89,8 +93,19 @@ fn temporary_dirs() -> Vec<PathBuf> {
 /// The name of the undo file of `path`: the path with its separators turned into `%`, like
 /// Vim's, or `#` and a hash of the path where that is too long a name.
 pub fn name(path: &Path) -> Option<OsString> {
-    let path = path.to_str()?;
-    let escaped: String = path
+    let escaped = escape(path)?;
+    let name = if escaped.len() <= MAX_NAME {
+        escaped
+    } else {
+        format!("#{}", hex(&Sha256::digest(path.to_str()?.as_bytes())))
+    };
+    Some(name.into())
+}
+
+/// `path` with its separators turned into `%`.
+fn escape(path: &Path) -> Option<String> {
+    let escaped = path
+        .to_str()?
         .chars()
         .map(|c| {
             if std::path::is_separator(c) || (cfg!(windows) && c == ':') {
@@ -100,12 +115,7 @@ pub fn name(path: &Path) -> Option<OsString> {
             }
         })
         .collect();
-    let name = if escaped.len() <= MAX_NAME {
-        escaped
-    } else {
-        format!("#{}", hex(&Sha256::digest(path.as_bytes())))
-    };
-    Some(name.into())
+    Some(escaped)
 }
 
 /// The undo file of `path` in `dir`.
@@ -174,6 +184,86 @@ pub fn read(
         stamp: Arc::new(Mutex::new(stamp.filter(|_| !pruned))),
     };
     Some((history, state))
+}
+
+/// Takes the undo files in `dir` of the file or directory moved from `from` to `to` along: of
+/// the file, or of the files below the directory.
+pub fn moved(dir: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    carry(dir, from, to, |from, to| fs::rename(from, to))
+}
+
+/// Copies the undo files in `dir` of the file or directory copied from `from` to `to`, for the
+/// copies.
+pub fn copied(dir: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    carry(dir, from, to, |from, to| fs::copy(from, to).map(drop))
+}
+
+/// Carries the undo files of `from` over to `to` with `carry`, each recording its new path.
+fn carry(
+    dir: &Path,
+    from: &Path,
+    to: &Path,
+    carry: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    for (file, path) in undo_files(dir, from)? {
+        let relative = path
+            .strip_prefix(from)
+            .expect("undo files are below `from`");
+        // `join("")` would append a separator.
+        let path = if relative.as_os_str().is_empty() {
+            to.to_path_buf()
+        } else {
+            to.join(relative)
+        };
+        let mut bytes = Vec::new();
+        let (Some(target), Some(())) =
+            (file_of(dir, &path), undo_file::put_path(&mut bytes, &path))
+        else {
+            continue;
+        };
+        carry(&file, &target)?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&target)?
+            .write_all(&bytes)?;
+    }
+    Ok(())
+}
+
+/// The undo files in `dir` of the file at `path` or of the files below it, with their files.
+fn undo_files(dir: &Path, path: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
+    let Some(escaped) = escape(path) else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // A name only begins like it; the path recorded in the file tells.
+        let candidate = name.starts_with('#')
+            || name
+                .strip_prefix(escaped.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('%'));
+        if !candidate {
+            continue;
+        }
+        let file = entry.path();
+        let recorded = fs::read(&file)
+            .ok()
+            .and_then(|bytes| undo_file::read_path(&bytes));
+        if let Some(recorded) = recorded.filter(|recorded| recorded.starts_with(path)) {
+            files.push((file, recorded));
+        }
+    }
+    Ok(files)
 }
 
 /// A write of an undo file, prepared along with the write of its file and made after it.
@@ -380,6 +470,56 @@ mod tests {
         pending.write(&text).unwrap();
         let (read, _) = read(dir.path(), path, &text, 0).unwrap();
         assert_eq!(read.len(), 3);
+    }
+
+    /// Writes undo files for the files at `paths`, each with one revision.
+    fn undo_files_for(dir: &Path, paths: &[&Path]) -> Rope {
+        let (mut text, mut history) = (Rope::from("a\n"), History::default());
+        edited(&mut text, &mut history, 1);
+        for path in paths {
+            prepare(&mut None, &history, dir, path)
+                .unwrap()
+                .write(&text)
+                .unwrap();
+        }
+        text
+    }
+
+    #[test]
+    fn undo_files_follow_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let long = format!("/p/src/{}.rs", "n".repeat(300));
+        let text = undo_files_for(
+            dir,
+            &[
+                Path::new("/p/src/main.rs"),
+                Path::new("/p/src/a/lib.rs"),
+                Path::new(&long),
+                // Begins like a file in `/p/src`, but is none.
+                Path::new("/p/src%x.rs"),
+                Path::new("/p/srcs/main.rs"),
+            ],
+        );
+        let has = |path: &str| read(dir, Path::new(path), &text, 0).is_some();
+
+        moved(dir, Path::new("/p/src/main.rs"), Path::new("/p/main.rs")).unwrap();
+        assert!(has("/p/main.rs") && !has("/p/src/main.rs"));
+
+        moved(dir, Path::new("/p/src"), Path::new("/q/code")).unwrap();
+        assert!(has("/q/code/a/lib.rs") && !has("/p/src/a/lib.rs"));
+        assert!(has(&long.replace("/p/src", "/q/code")) && !has(&long));
+        assert!(has("/p/src%x.rs") && has("/p/srcs/main.rs"));
+        assert!(!has("/q/code%x.rs"));
+
+        copied(dir, Path::new("/q/code"), Path::new("/r")).unwrap();
+        assert!(has("/r/a/lib.rs") && has("/q/code/a/lib.rs"));
+        // A move onto a file replaces its undo file.
+        moved(dir, Path::new("/r/a/lib.rs"), Path::new("/p/main.rs")).unwrap();
+        assert!(has("/p/main.rs") && !has("/r/a/lib.rs"));
+        // Nothing to carry, or no undo directory at all.
+        moved(dir, Path::new("/nowhere"), Path::new("/else")).unwrap();
+        moved(&dir.join("missing"), Path::new("/p"), Path::new("/q")).unwrap();
     }
 
     #[test]

@@ -258,6 +258,43 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn undo_files_follow_renamed_and_pasted_entries() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["dir/x.txt", "dir/sub/y.txt"])?;
+        let undo = tempfile::tempdir()?;
+        let undo = undo.path();
+        let text = helpers::write_undo_file(undo, &workspace.path("dir/x.txt"));
+        helpers::write_undo_file(undo, &workspace.path("dir/sub/y.txt"));
+        let has = |path: &str| helpers::has_undo_file(undo, &workspace.path(path), &text);
+        let mut config = helpers::undo_config(undo);
+        config.editor.clipboard_provider = ClipboardProvider::None;
+        let mut app = AppBuilder::new()
+            .with_config(config)
+            .with_file(workspace.path("dir/x.txt"), None)
+            .build()?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("<space>e"), None),
+                // Up from `x.txt` past `sub` to its directory.
+                (
+                    Some("kkr<C-u>moved<ret>"),
+                    Some(&|_| {
+                        assert!(has("moved/x.txt") && has("moved/sub/y.txt"));
+                        assert!(!has("dir/x.txt") && !has("dir/sub/y.txt"));
+                    }),
+                ),
+                // Pasted into the root, next to it.
+                (
+                    Some("yggp<ret>"),
+                    Some(&|_| assert!(has("moved-1/sub/y.txt") && has("moved/sub/y.txt"))),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn creating_opens_new_files() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/a.txt"])?;
         let mut app = workspace.app("src/a.txt")?;

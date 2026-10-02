@@ -164,3 +164,29 @@ async fn undo_files_are_kept_only_when_asked_for() -> anyhow::Result<()> {
     assert!(!Path::new(&project.undo_dir).exists());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_a_file_takes_its_undo_file() -> anyhow::Result<()> {
+    let project = Project::new("start\n")?;
+    let mut app = project.app(0)?;
+    let moved = project.file.with_file_name("moved.rs");
+    let keys = format!(
+        "ione <esc>:w<ret>:move {}<ret>:bc<ret>:o {}<ret>",
+        moved.display(),
+        moved.display()
+    );
+    test_key_sequences(
+        &mut app,
+        vec![
+            (
+                Some(&keys),
+                Some(&|app| assert_eq!(text(app), "one start\n")),
+            ),
+            (Some("u"), Some(&|app| assert_eq!(text(app), "start\n"))),
+        ],
+        false,
+    )
+    .await?;
+    assert!(project.revisions("one start\n").is_none());
+    Ok(())
+}

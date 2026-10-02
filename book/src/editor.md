@@ -409,7 +409,8 @@ The [compilation buffer](./compilation.md) shows the output of `:compile`, `:com
 
 Undo files keep the undo history of written files between sessions, like Vim's `undofile`. A
 file's undo file is written along with it and read when it is opened again, unless the file
-changed in between. Files in the temporary directory and the messages git asks for, like
+changed in between. Moving or copying files with the file tree, dired or `:move` takes their undo
+files along. Files in the temporary directory and the messages git asks for, like
 `COMMIT_EDITMSG`, get none. When another Helix writes the same file, the last write wins.
 
 | Key | Description | Default |

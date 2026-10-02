@@ -16,7 +16,7 @@ use crate::{
     register::Registers,
     theme::{self, Theme},
     tree::{self, Tree},
-    Document, DocumentId, View, ViewId,
+    undo_file, Document, DocumentId, View, ViewId,
 };
 use helix_event::dispatch;
 use helix_loader::workspace_trust::{ImplicitTrustLevel, TrustQuery, WorkspaceTrust};
@@ -2120,6 +2120,14 @@ impl Editor {
 
         if old_path.exists() {
             helix_stdx::fs::move_path(old_path, &new_path)?;
+            if let Some(dir) = self.config().undo.persisted() {
+                if let Err(err) = undo_file::moved(&dir, &canonicalize(old_path), &new_path) {
+                    log::error!(
+                        "cannot move the undo files of {}: {err}",
+                        old_path.display()
+                    );
+                }
+            }
         }
 
         let moved_documents: Vec<_> = self
@@ -2170,7 +2178,16 @@ impl Editor {
     /// the files it creates.
     pub fn copy_path(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         let is_dir = fs::symlink_metadata(from)?.is_dir();
-        self.create_path_with(to, is_dir, |to| helix_stdx::fs::copy_path(from, to))
+        let undo_dir = self.config().undo.persisted();
+        self.create_path_with(to, is_dir, |to| {
+            helix_stdx::fs::copy_path(from, to)?;
+            if let Some(dir) = undo_dir {
+                if let Err(err) = undo_file::copied(&dir, &canonicalize(from), to) {
+                    log::error!("cannot copy the undo files of {}: {err}", from.display());
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Creates `path` with `create`, in a directory created first if needed.

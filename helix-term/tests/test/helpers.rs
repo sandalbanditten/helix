@@ -330,6 +330,50 @@ pub fn test_editor_config() -> helix_view::editor::Config {
     }
 }
 
+/// A config keeping undo files in `dir`.
+#[allow(dead_code)] // the test binaries of the file tree and dired use it
+pub fn undo_config(dir: &std::path::Path) -> Config {
+    let mut config = test_config();
+    config.editor.undo = helix_view::editor::UndoConfig {
+        persist: true,
+        dir: Some(dir.to_path_buf()),
+        max_revisions: 0,
+    };
+    config
+}
+
+/// Writes an undo file in `dir` for the file at `path`, of a history with one revision. Returns
+/// the text it records.
+#[allow(dead_code)] // the test binaries of the file tree and dired use it
+pub fn write_undo_file(dir: &std::path::Path, path: &std::path::Path) -> helix_core::Rope {
+    use helix_core::history::{History, State};
+
+    let mut history = History::default();
+    let mut text = helix_core::Rope::from("undone\n");
+    let state = State {
+        doc: text.clone(),
+        selection: Selection::point(0),
+    };
+    let transaction = Transaction::change(&text, [(0, 0, Some("x".into()))].into_iter());
+    history.commit_revision(&transaction, &state);
+    transaction.apply(&mut text);
+    helix_view::undo_file::prepare(&mut None, &history, dir, path)
+        .unwrap()
+        .write(&text)
+        .unwrap();
+    text
+}
+
+/// Whether `dir` holds an undo file of the file at `path` with the text `text`.
+#[allow(dead_code)] // the test binaries of the file tree and dired use it
+pub fn has_undo_file(
+    dir: &std::path::Path,
+    path: &std::path::Path,
+    text: &helix_core::Rope,
+) -> bool {
+    helix_view::undo_file::read(dir, path, text, 0).is_some()
+}
+
 /// Creates a new temporary file that is set to read only. Useful for
 /// testing write failures.
 pub fn new_readonly_tempfile() -> anyhow::Result<NamedTempFile> {
