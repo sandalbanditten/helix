@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::time::{Duration, SystemTime};
 
+pub mod undo_file;
+
 #[derive(Debug, Clone)]
 pub struct State {
     pub doc: Rope,
