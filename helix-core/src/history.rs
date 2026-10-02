@@ -1,8 +1,9 @@
 use crate::{Assoc, ChangeSet, Range, Rope, Selection, Transaction};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct State {
@@ -36,7 +37,8 @@ pub struct State {
 /// to jump to the closest revision to a moment in time relative to the timestamp
 /// of the current revision plus (:later) or minus (:earlier) the duration
 /// given to the command. If a single integer is given, the editor will instead
-/// jump the given number of revisions in the vector.
+/// jump the given number of revisions in the vector. With a number of file writes
+/// like `2f`, they jump to the revision written that many writes before or after.
 ///
 /// Limitations:
 ///  * Changes in selections currently don't commit history changes. The selection
@@ -52,6 +54,8 @@ pub struct State {
 pub struct History {
     revisions: Vec<Revision>,
     current: usize,
+    /// The revisions written to the file, in the order of the writes.
+    saves: Vec<usize>,
 }
 
 /// A single point in history. See [History] for more information.
@@ -63,7 +67,7 @@ struct Revision {
     // We need an inversion for undos because delete transactions don't store
     // the deleted text.
     inversion: Transaction,
-    timestamp: Instant,
+    timestamp: SystemTime,
 }
 
 impl Default for History {
@@ -75,23 +79,24 @@ impl Default for History {
                 last_child: None,
                 transaction: Transaction::from(ChangeSet::new("".into())),
                 inversion: Transaction::from(ChangeSet::new("".into())),
-                timestamp: Instant::now(),
+                timestamp: SystemTime::now(),
             }],
             current: 0,
+            saves: Vec::new(),
         }
     }
 }
 
 impl History {
     pub fn commit_revision(&mut self, transaction: &Transaction, original: &State) {
-        self.commit_revision_at_timestamp(transaction, original, Instant::now());
+        self.commit_revision_at_timestamp(transaction, original, SystemTime::now());
     }
 
     pub fn commit_revision_at_timestamp(
         &mut self,
         transaction: &Transaction,
         original: &State,
-        timestamp: Instant,
+        timestamp: SystemTime,
     ) {
         let inversion = transaction
             .invert(&original.doc)
@@ -118,6 +123,19 @@ impl History {
     #[inline]
     pub const fn at_root(&self) -> bool {
         self.current == 0
+    }
+
+    /// Notes that `revision` was written to the file. Writing the same revision again right
+    /// after counts as one write.
+    pub fn record_save(&mut self, revision: usize) {
+        if self.saves.last() != Some(&revision) {
+            self.saves.push(revision);
+        }
+    }
+
+    /// The revisions written to the file, in the order of the writes.
+    pub fn saves(&self) -> &[usize] {
+        &self.saves
     }
 
     /// Returns the changes since the given revision composed into a transaction.
@@ -201,7 +219,6 @@ impl History {
     }
 
     fn lowest_common_ancestor(&self, mut a: usize, mut b: usize) -> usize {
-        use std::collections::HashSet;
         let mut a_path_set = HashSet::new();
         let mut b_path_set = HashSet::new();
         loop {
@@ -263,9 +280,14 @@ impl History {
     }
 
     /// Helper for a binary search case below.
-    fn revision_closer_to_instant(&self, i: usize, instant: Instant) -> usize {
-        let dur_im1 = instant.duration_since(self.revisions[i - 1].timestamp);
-        let dur_i = self.revisions[i].timestamp.duration_since(instant);
+    fn revision_closer_to_instant(&self, i: usize, instant: SystemTime) -> usize {
+        let dur_im1 = instant
+            .duration_since(self.revisions[i - 1].timestamp)
+            .unwrap_or_default();
+        let dur_i = self.revisions[i]
+            .timestamp
+            .duration_since(instant)
+            .unwrap_or_default();
         use std::cmp::Ordering::*;
         match dur_im1.cmp(&dur_i) {
             Less => i - 1,
@@ -275,7 +297,7 @@ impl History {
 
     /// Creates a [`Transaction`] that will match a revision created at around
     /// `instant`.
-    fn jump_instant(&mut self, instant: Instant) -> Vec<Transaction> {
+    fn jump_instant(&mut self, instant: SystemTime) -> Vec<Transaction> {
         let search_result = self
             .revisions
             .binary_search_by(|rev| rev.timestamp.cmp(&instant));
@@ -308,12 +330,54 @@ impl History {
         }
     }
 
+    /// The number of the write the current revision is at or after, counting from 1 (0 before
+    /// the first), and whether the current revision is that write's: no changes were made
+    /// since. A revision is after the last write of one of its ancestors.
+    fn current_write(&self) -> (usize, bool) {
+        let mut ancestors: HashSet<usize> = self.path_up(self.current, 0).into_iter().collect();
+        ancestors.insert(0);
+        let number = self
+            .saves
+            .iter()
+            .rposition(|revision| ancestors.contains(revision))
+            .map_or(0, |index| index + 1);
+        let written = number > 0 && self.saves[number - 1] == self.current;
+        (number, written)
+    }
+
+    /// Creates the [`Transaction`]s that go back `writes` file writes, like Vim's `:earlier
+    /// {N}f`: with changes since the last write, one write back is that write. Before the
+    /// first write is the root.
+    fn jump_writes_backward(&mut self, writes: usize) -> Vec<Transaction> {
+        let (current, written) = self.current_write();
+        let target = if written { current } else { current + 1 };
+        match target.checked_sub(writes).filter(|&target| target > 0) {
+            Some(target) => self.jump_to(self.saves[target - 1]),
+            None => self.jump_to(0),
+        }
+    }
+
+    /// Creates the [`Transaction`]s that go forward `writes` file writes, like Vim's `:later
+    /// {N}f`. After the last write is the newest revision.
+    fn jump_writes_forward(&mut self, writes: usize) -> Vec<Transaction> {
+        let target = self.current_write().0.saturating_add(writes);
+        // Writes count from 1.
+        match target
+            .checked_sub(1)
+            .and_then(|index| self.saves.get(index))
+        {
+            Some(&revision) => self.jump_to(revision),
+            None => self.jump_to(self.revisions.len() - 1),
+        }
+    }
+
     /// Creates an undo [`Transaction`].
     pub fn earlier(&mut self, uk: UndoKind) -> Vec<Transaction> {
         use UndoKind::*;
         match uk {
             Steps(n) => self.jump_backward(n),
             TimePeriod(d) => self.jump_duration_backward(d),
+            FileWrites(n) => self.jump_writes_backward(n),
         }
     }
 
@@ -323,15 +387,17 @@ impl History {
         match uk {
             Steps(n) => self.jump_forward(n),
             TimePeriod(d) => self.jump_duration_forward(d),
+            FileWrites(n) => self.jump_writes_forward(n),
         }
     }
 }
 
-/// Whether to undo by a number of edits or a duration of time.
+/// Whether to undo by a number of edits, a duration of time or a number of file writes.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UndoKind {
     Steps(usize),
     TimePeriod(std::time::Duration),
+    FileWrites(usize),
 }
 
 /// A subset of systemd.time time span syntax units.
@@ -351,6 +417,9 @@ const TIME_UNITS: &[(&[&str], &str, u64)] = &[
 ///  * `5 days`
 static DURATION_VALIDATION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(?:\d+\s*[a-z]+\s*)+$").unwrap());
+
+/// A number of file writes, like `2f`.
+static FILE_WRITES_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)\s*f$").unwrap());
 
 /// Captures both the number and unit as separate capture groups.
 static NUMBER_UNIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*([a-z]+)").unwrap());
@@ -403,6 +472,11 @@ impl std::str::FromStr for UndoKind {
             Ok(Self::Steps(1usize))
         } else if let Ok(n) = s.parse::<usize>() {
             Ok(UndoKind::Steps(n))
+        } else if let Some(writes) = FILE_WRITES_REGEX.captures(s) {
+            let n = &writes[1];
+            n.parse()
+                .map(UndoKind::FileWrites)
+                .map_err(|_| format!("integer too large: {n}"))
         } else {
             Ok(Self::TimePeriod(parse_human_duration(s)?))
         }
@@ -627,14 +701,14 @@ mod test {
             history: &mut History,
             state: &mut State,
             change: crate::transaction::Change,
-            instant: Instant,
+            instant: SystemTime,
         ) {
             let txn = Transaction::change(&state.doc, vec![change].into_iter());
             history.commit_revision_at_timestamp(&txn, state, instant);
             txn.apply(&mut state.doc);
         }
 
-        let t0 = Instant::now();
+        let t0 = SystemTime::now();
         let t = |n| t0.checked_add(Duration::from_secs(n)).unwrap();
 
         commit_change(&mut history, &mut state, (1, 1, Some(" b".into())), t(0));
@@ -699,12 +773,76 @@ mod test {
         assert_eq!("a\n", state.doc);
     }
 
+    /// Vim's `:earlier {N}f` and `:later {N}f`, across writes in two branches.
+    #[test]
+    fn earlier_and_later_go_by_file_writes() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from("abcdef"),
+            selection: Selection::point(0),
+        };
+        let t0 = SystemTime::now();
+        let t = |n| t0 + Duration::from_secs(n);
+        let delete = |history: &mut History, state: &mut State, at: u64| {
+            let transaction = Transaction::change(&state.doc, [(0, 1, None)].into_iter());
+            history.commit_revision_at_timestamp(&transaction, state, t(at));
+            transaction.apply(&mut state.doc);
+        };
+        let jump = |history: &mut History, state: &mut State, earlier: bool, writes: usize| {
+            let kind = UndoKind::FileWrites(writes);
+            let transactions = if earlier {
+                history.earlier(kind)
+            } else {
+                history.later(kind)
+            };
+            apply(state, &transactions);
+            state.doc.to_string()
+        };
+
+        delete(&mut history, &mut state, 1); // 1 "bcdef"
+        history.record_save(1);
+        delete(&mut history, &mut state, 3); // 2 "cdef"
+        delete(&mut history, &mut state, 4); // 3 "def"
+        history.record_save(3);
+        history.record_save(3); // the same write
+        undo(&mut history, &mut state);
+        undo(&mut history, &mut state);
+        delete(&mut history, &mut state, 7); // 4 "cdef" from 1
+        history.record_save(4);
+        delete(&mut history, &mut state, 9); // 5 "def" from 4, unsaved
+        assert_eq!(history.saves().len(), 3);
+
+        // Changes since the last write: one write back is that write.
+        assert_eq!(jump(&mut history, &mut state, true, 1), "cdef");
+        assert_eq!(history.current_revision(), 4);
+        assert_eq!(jump(&mut history, &mut state, true, 1), "def");
+        assert_eq!(history.current_revision(), 3);
+        assert_eq!(jump(&mut history, &mut state, true, 1), "bcdef");
+        // Before the first write is the root.
+        assert_eq!(jump(&mut history, &mut state, true, 1), "abcdef");
+        assert_eq!(jump(&mut history, &mut state, false, 2), "def");
+        assert_eq!(history.current_revision(), 3);
+        // After the last write is the newest revision.
+        assert_eq!(jump(&mut history, &mut state, false, 2), "def");
+        assert_eq!(history.current_revision(), 5);
+        assert_eq!(jump(&mut history, &mut state, true, 3), "bcdef");
+
+        // A revision is after the writes of its ancestors, not of another branch.
+        apply(&mut state, &history.jump_to(2));
+        assert_eq!(state.doc, "cdef");
+        assert_eq!(jump(&mut history, &mut state, true, 1), "bcdef");
+    }
+
     #[test]
     fn test_parse_undo_kind() {
         use UndoKind::*;
 
         // Default is one step.
         assert_eq!("".parse(), Ok(Steps(1)));
+
+        // A number with `f` counts file writes.
+        assert_eq!("2f".parse(), Ok(FileWrites(2)));
+        assert_eq!(" 1 f".parse(), Ok(FileWrites(1)));
 
         // An integer means the number of steps.
         assert_eq!("1".parse(), Ok(Steps(1)));

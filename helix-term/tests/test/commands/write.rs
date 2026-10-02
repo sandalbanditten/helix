@@ -308,6 +308,38 @@ async fn test_write_concurrent() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn earlier_and_later_go_by_writes() -> anyhow::Result<()> {
+    let file = tempfile::NamedTempFile::new()?;
+    let mut app = helpers::AppBuilder::new()
+        .with_file(file.path(), None)
+        .build()?;
+    let text = |app: &Application| doc!(app.editor).text().to_string();
+    // The text at the start, after each of two writes, and after an unwritten change.
+    let texts = &std::cell::RefCell::new(vec![text(&app)]);
+    let keep = |app: &Application| texts.borrow_mut().push(text(app));
+    let is = |index: usize| move |app: &Application| assert_eq!(text(app), texts.borrow()[index]);
+    let (start, one, two, three) = (is(0), is(1), is(2), is(3));
+
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some("ione <esc>:w<ret>"), Some(&keep)),
+            (Some("itwo <esc>:w<ret>"), Some(&keep)),
+            (Some("ithree <esc>"), Some(&keep)),
+            (Some(":earlier 1f<ret>"), Some(&two)),
+            (Some(":earlier 1f<ret>"), Some(&one)),
+            (Some(":earlier 1f<ret>"), Some(&start)),
+            (Some(":later 2f<ret>"), Some(&two)),
+            (Some(":later 1f<ret>"), Some(&three)),
+        ],
+        false,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_write_fail_mod_flag() -> anyhow::Result<()> {
     let file = helpers::new_readonly_tempfile()?;
     let mut app = helpers::AppBuilder::new()

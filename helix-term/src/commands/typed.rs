@@ -3496,7 +3496,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "earlier",
         aliases: &["ear"],
-        doc: "Jump back to an earlier point in edit history. Accepts a number of steps or a time span.",
+        doc: "Jump back to an earlier point in edit history. Accepts a number of steps, a time span or file writes (`2f`).",
         fun: earlier,
         completer: CommandCompleter::none(),
         signature: Signature {
@@ -3507,7 +3507,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "later",
         aliases: &["lat"],
-        doc: "Jump to a later point in edit history. Accepts a number of steps or a time span.",
+        doc: "Jump to a later point in edit history. Accepts a number of steps, a time span or file writes (`2f`).",
         fun: later,
         completer: CommandCompleter::none(),
         signature: Signature {

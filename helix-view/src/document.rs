@@ -2068,6 +2068,7 @@ impl Document {
             self.last_saved_revision,
             rev
         );
+        self.history.get_mut().record_save(rev);
         self.last_saved_revision = rev;
         self.last_saved_time = save_time;
         self.disk_text = text;
