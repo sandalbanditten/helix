@@ -122,6 +122,13 @@ impl History {
         self.current
     }
 
+    /// The number of revisions, the root included.
+    #[allow(clippy::len_without_is_empty)] // a history always has its root
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.revisions.len()
+    }
+
     #[inline]
     pub const fn at_root(&self) -> bool {
         self.current == 0

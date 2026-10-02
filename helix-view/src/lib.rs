@@ -20,6 +20,7 @@ pub mod register;
 pub mod smooth_scroll;
 pub mod theme;
 pub mod tree;
+pub mod undo_file;
 pub mod view;
 
 use std::num::NonZeroUsize;

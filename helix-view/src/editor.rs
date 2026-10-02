@@ -318,6 +318,45 @@ impl Default for CompilationConfig {
     }
 }
 
+/// The undo history: undo files, which keep it between sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct UndoConfig {
+    /// Whether written files keep their undo history in undo files, read when they are opened
+    /// again. Defaults to `false`.
+    pub persist: bool,
+    /// The directory of the undo files. Defaults to `undo` in Helix's state directory.
+    pub dir: Option<PathBuf>,
+    /// The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps
+    /// all. Defaults to `1000`.
+    pub max_revisions: usize,
+}
+
+impl Default for UndoConfig {
+    fn default() -> Self {
+        Self {
+            persist: false,
+            dir: None,
+            max_revisions: 1000,
+        }
+    }
+}
+
+impl UndoConfig {
+    /// The directory of the undo files.
+    pub fn directory(&self) -> PathBuf {
+        match &self.dir {
+            Some(dir) => helix_stdx::path::expand_tilde(dir).into_owned(),
+            None => helix_loader::state_dir().join("undo"),
+        }
+    }
+
+    /// The directory of the undo files, if they are kept.
+    pub fn persisted(&self) -> Option<PathBuf> {
+        self.persist.then(|| self.directory())
+    }
+}
+
 /// Where a locus of the compilation buffer opens.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -583,6 +622,8 @@ pub struct Config {
     pub dired: DiredConfig,
     /// The compilation buffer, which shows the output of `:compile` and the like.
     pub compilation: CompilationConfig,
+    /// The undo history: undo files, which keep it between sessions.
+    pub undo: UndoConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1588,6 +1629,7 @@ impl Default for Config {
             file_tree: FileTreeConfig::default(),
             dired: DiredConfig::default(),
             compilation: CompilationConfig::default(),
+            undo: UndoConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,
@@ -2594,6 +2636,7 @@ impl Editor {
                 self.config.clone(),
                 self.syn_loader.clone(),
             )?;
+            doc.restore_undo_file();
 
             let diagnostics =
                 Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, &doc);
@@ -3053,6 +3096,12 @@ impl Editor {
                     }
                 };
 
+                if let Some(err) = &save_event.undo_file_error {
+                    log::error!(
+                        "undo file of {} not written: {err}",
+                        save_event.path.display()
+                    );
+                }
                 let doc = doc_mut!(self, &save_event.doc_id);
                 doc.set_last_saved_revision(
                     save_event.revision,

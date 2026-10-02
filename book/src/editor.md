@@ -11,6 +11,7 @@
 - [`[editor.file-tree]` Section](#editorfile-tree-section)
 - [`[editor.dired]` Section](#editordired-section)
 - [`[editor.compilation]` Section](#editorcompilation-section)
+- [`[editor.undo]` Section](#editorundo-section)
 - [`[editor.buffer-picker]` Section](#editorbuffer-picker-section)
 - [`[editor.auto-pairs]` Section](#editorauto-pairs-section)
 - [`[editor.auto-save]` Section](#editorauto-save-section)
@@ -403,6 +404,19 @@ The [compilation buffer](./compilation.md) shows the output of `:compile`, `:com
 | `open` | Where `gf` and `gd` open a locus of the output: `"return"`, where the output has no split of its own but covers the editor from the one it is shown in: the file opens in a split already showing it, that split showing again what it showed before, else in it, normally; `"beside"` the output, in the split the command was run from; or `"replace"` in the output's own split, like `gf` anywhere. `]q` and `[q` show a hidden output in the focused split, or beside it | `"return"` |
 | `colors` | Whether the output keeps its colors, rather than leaving them out | `true` |
 | `hide-file-tree` | Whether the output, covering the editor, covers the [file tree](#editorfile-tree-section) too | `true` |
+
+### `[editor.undo]` Section
+
+Undo files keep the undo history of written files between sessions, like Vim's `undofile`. A
+file's undo file is written along with it and read when it is opened again, unless the file
+changed in between. Files in the temporary directory and the messages git asks for, like
+`COMMIT_EDITMSG`, get none. When another Helix writes the same file, the last write wins.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `persist` | Whether written files keep their undo history in undo files | `false` |
+| `dir` | The directory of the undo files, one per file, named after its path with `%` for each `/` | `undo` in the state directory, `~/.local/state/helix/undo` on Linux |
+| `max-revisions` | The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps all | `1000` |
 
 ### `[editor.buffer-picker]` Section
 

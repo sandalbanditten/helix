@@ -26,4 +26,5 @@ mod test {
     mod smooth_scroll;
     mod spelling;
     mod splits;
+    mod undo_files;
 }

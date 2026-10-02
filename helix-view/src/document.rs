@@ -54,6 +54,7 @@ use crate::{
     editor::Config,
     events::{DocumentDidChange, SelectionDidChange},
     expansion,
+    undo_file::{self, UndoFileState},
     view::ViewPosition,
     DocumentId, Editor, Theme, View, ViewId,
 };
@@ -125,6 +126,8 @@ pub struct DocumentSavedEvent {
     pub doc_id: DocumentId,
     pub path: PathBuf,
     pub text: Rope,
+    /// Why the undo file was not written, if it was to be.
+    pub undo_file_error: Option<String>,
 }
 
 pub type DocumentSavedEventResult = Result<DocumentSavedEvent, anyhow::Error>;
@@ -242,6 +245,8 @@ pub struct Document {
     disk_text: Rope,
 
     last_saved_revision: usize,
+    /// What the document knows of its undo file, once it was read or written.
+    undo_file: Option<UndoFileState>,
     version: i32, // should be usize?
     pub(crate) modified_since_accessed: bool,
 
@@ -811,6 +816,7 @@ impl Document {
             last_saved_time: SystemTime::now(),
             disk_text,
             last_saved_revision: 0,
+            undo_file: None,
             modified_since_accessed: false,
             language_servers: HashMap::new(),
             diff_handle: None,
@@ -1091,6 +1097,7 @@ impl Document {
 
         let encoding_with_bom_info = (self.encoding, self.has_bom);
         let last_saved_time = self.last_saved_time;
+        let undo_write = self.prepare_undo_file(&path);
 
         // We encode the file according to the `Document`'s encoding.
         let future = async move {
@@ -1239,12 +1246,26 @@ impl Document {
 
             write_result?;
 
+            let undo_file_error = match undo_write {
+                Some(undo_write) => {
+                    let text = text.clone();
+                    tokio::task::spawn_blocking(move || undo_write.write(&text))
+                        .await
+                        .map_err(io::Error::other)
+                        .and_then(|result| result)
+                        .err()
+                        .map(|err| err.to_string())
+                }
+                None => None,
+            };
+
             let event = DocumentSavedEvent {
                 revision: current_rev,
                 save_time,
                 doc_id,
                 path,
                 text: text.clone(),
+                undo_file_error,
             };
 
             for language_server in language_servers {
@@ -1426,6 +1447,37 @@ impl Document {
             None => self.diff_handle = None,
         }
         self.version_control_head = head;
+    }
+
+    /// Takes the history of the document's file from its undo file, when undo files are kept and
+    /// the file has one that holds this text. Only for a document just opened.
+    pub fn restore_undo_file(&mut self) {
+        debug_assert!(self.history.get_mut().at_root() && self.changes.is_empty());
+        let config = self.config.load();
+        let (Some(dir), Some(path)) = (config.undo.persisted(), self.path.as_deref()) else {
+            return;
+        };
+        if !undo_file::is_kept(path) {
+            return;
+        }
+        if let Some((history, state)) =
+            undo_file::read(&dir, path, &self.text, config.undo.max_revisions)
+        {
+            self.last_saved_revision = history.current_revision();
+            self.history.set(history);
+            self.undo_file = Some(state);
+        }
+    }
+
+    /// Prepares writing the undo file along with the document's text to `path`, when undo files
+    /// are kept: of a file, with every change in the history.
+    fn prepare_undo_file(&mut self, path: &Path) -> Option<undo_file::PendingWrite> {
+        let dir = self.config.load().undo.persisted()?;
+        let special = self.dired.is_some() || self.compilation.is_some();
+        if special || !self.changes.is_empty() || !undo_file::is_kept(path) {
+            return None;
+        }
+        undo_file::prepare(&mut self.undo_file, self.history.get_mut(), &dir, path)
     }
 
     /// Sets the [`Document`]'s encoding with the encoding correspondent to `label`.
