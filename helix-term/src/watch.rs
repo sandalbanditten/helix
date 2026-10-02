@@ -1,7 +1,12 @@
-//! Watching directories, so that the file tree and dired buffers follow changes made outside of
-//! them: in another program, by `git`, or by a build.
+//! Watching directories, so that the file tree, dired buffers and other buffers follow changes
+//! made outside of them: in another program, by `git`, or by a build.
 
-use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use helix_event::{send_blocking, AsyncHook};
 use helix_view::Editor;
@@ -30,6 +35,15 @@ impl Watcher {
     pub fn new(
         handle: impl Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync + 'static,
     ) -> notify::Result<Self> {
+        Self::filtered(|_| true, handle)
+    }
+
+    /// A watcher handing the paths that changed to `handle`, of those it `accept`s. `accept` runs
+    /// on the watcher's own thread, so that changes of no interest never wake the editor.
+    pub fn filtered(
+        accept: impl Fn(&Path) -> bool + Send + 'static,
+        handle: impl Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync + 'static,
+    ) -> notify::Result<Self> {
         let changes = Changes {
             handle: Arc::new(handle),
             paths: HashSet::new(),
@@ -43,13 +57,13 @@ impl Watcher {
                 return;
             };
             let _runtime = runtime.enter();
-            // Listing a directory opens it; only a finished write is a change.
+            // Listing a directory or reading a file opens it; only a finished write is a change.
             if let EventKind::Access(kind) = event.kind {
                 if kind != AccessKind::Close(AccessMode::Write) {
                     return;
                 }
             }
-            for path in event.paths {
+            for path in event.paths.into_iter().filter(|path| accept(path)) {
                 send_blocking(&changes, path);
             }
         })?;

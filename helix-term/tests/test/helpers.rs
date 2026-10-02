@@ -2,7 +2,7 @@ use std::{
     io::{Read, Write},
     mem::replace,
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::bail;
@@ -16,6 +16,7 @@ use helix_view::{
     Editor,
 };
 use tempfile::NamedTempFile;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 #[cfg(windows)]
@@ -322,6 +323,9 @@ pub fn test_editor_config() -> helix_view::editor::Config {
             level: ImplicitTrustLevelConfig::Insecure,
             ..Default::default()
         },
+        // Tests that write files behind the editor's back are about something else; those of
+        // auto-reload turn it on.
+        auto_reload: false,
         ..Default::default()
     }
 }
@@ -465,4 +469,73 @@ pub fn reload_file(file: &mut NamedTempFile) -> anyhow::Result<()> {
         .open(&path)?;
     *file.as_file_mut() = f;
     Ok(())
+}
+
+/// An editor fed keys, whose event loop runs until what is asked for happened.
+pub struct Session {
+    pub app: Application,
+    keys: UnboundedSender<std::io::Result<Event>>,
+    input: UnboundedReceiverStream<std::io::Result<Event>>,
+}
+
+impl Session {
+    pub fn new(app: Application) -> Self {
+        let (keys, input) = unbounded_channel();
+        Self {
+            app,
+            keys,
+            input: UnboundedReceiverStream::new(input),
+        }
+    }
+
+    /// Types `keys` and runs the event loop until it idles.
+    pub async fn keys(&mut self, keys: &str) -> anyhow::Result<()> {
+        self.send(keys)?;
+        self.app.event_loop_until_idle(&mut self.input).await;
+        Ok(())
+    }
+
+    /// Types `keys` without running the event loop.
+    pub fn send(&self, keys: &str) -> anyhow::Result<()> {
+        for key in parse_macro(keys)? {
+            self.keys.send(Ok(Event::Key(KeyEvent::from(key))))?;
+        }
+        Ok(())
+    }
+
+    /// Sends `event` without running the event loop.
+    pub fn send_event(&self, event: Event) -> anyhow::Result<()> {
+        self.keys.send(Ok(event))?;
+        Ok(())
+    }
+
+    /// Runs the event loop until `done` holds.
+    pub async fn until(&mut self, what: &str, done: impl Fn(&Application) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done(&self.app) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            self.run_for(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Runs the event loop for at most `duration`, or until it idles.
+    pub async fn run_for(&mut self, duration: Duration) {
+        let idle = self.app.event_loop_until_idle(&mut self.input);
+        let _ = tokio::time::timeout(duration, idle).await;
+    }
+
+    /// Runs the event loop for `duration`, for what should not happen meanwhile.
+    pub async fn wait(&mut self, duration: Duration) {
+        let deadline = Instant::now() + duration;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            self.run_for(left).await;
+        }
+    }
+
+    pub async fn quit(mut self) -> anyhow::Result<()> {
+        self.keys("<esc>:qa!<ret>").await?;
+        let errors = self.app.close().await;
+        anyhow::ensure!(errors.is_empty(), "errors closing: {errors:?}");
+        Ok(())
+    }
 }

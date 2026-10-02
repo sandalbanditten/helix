@@ -20,19 +20,11 @@ mod test {
         current_ref,
         editor::CompilationOpen,
         graphics::{Color, Modifier, Style},
-        input::parse_macro,
         Document,
     };
     use tempfile::TempDir;
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-    use tokio_stream::wrappers::UnboundedReceiverStream;
 
-    #[cfg(windows)]
-    use crossterm::event::{Event, KeyEvent};
-    #[cfg(not(windows))]
-    use termina::event::{Event, KeyEvent};
-
-    use self::helpers::{test_syntax_loader, AppBuilder};
+    use self::helpers::{test_syntax_loader, AppBuilder, Session};
 
     static WORKING_DIRECTORY: Mutex<()> = Mutex::new(());
 
@@ -85,53 +77,11 @@ mod test {
         }
     }
 
-    /// An editor fed keys, whose event loop runs until what is asked for happened.
-    struct Session {
-        app: Application,
-        keys: UnboundedSender<std::io::Result<Event>>,
-        input: UnboundedReceiverStream<std::io::Result<Event>>,
-    }
-
     impl Session {
-        fn new(app: Application) -> Self {
-            let (keys, input) = unbounded_channel();
-            Self {
-                app,
-                keys,
-                input: UnboundedReceiverStream::new(input),
-            }
-        }
-
-        /// Types `keys` and runs the event loop until it idles.
-        async fn keys(&mut self, keys: &str) -> anyhow::Result<()> {
-            self.send(keys)?;
-            self.app.event_loop_until_idle(&mut self.input).await;
-            Ok(())
-        }
-
-        /// Types `keys` without running the event loop.
-        fn send(&self, keys: &str) -> anyhow::Result<()> {
-            for key in parse_macro(keys)? {
-                self.keys.send(Ok(Event::Key(KeyEvent::from(key))))?;
-            }
-            Ok(())
-        }
-
         /// Runs the event loop in slices of a millisecond until `done` holds.
         async fn pump_until(&mut self, done: impl Fn(&Application) -> bool) {
             while !done(&self.app) {
-                let idle = self.app.event_loop_until_idle(&mut self.input);
-                let _ = tokio::time::timeout(Duration::from_millis(1), idle).await;
-            }
-        }
-
-        /// Runs the event loop until `done` holds.
-        async fn until(&mut self, what: &str, done: impl Fn(&Application) -> bool) {
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while !done(&self.app) {
-                assert!(Instant::now() < deadline, "timed out waiting for {what}");
-                let idle = self.app.event_loop_until_idle(&mut self.input);
-                let _ = tokio::time::timeout(Duration::from_millis(50), idle).await;
+                self.run_for(Duration::from_millis(1)).await;
             }
         }
 
@@ -144,13 +94,6 @@ mod test {
                 })
             })
             .await;
-        }
-
-        async fn quit(mut self) -> anyhow::Result<()> {
-            self.keys("<esc>:qa!<ret>").await?;
-            let errors = self.app.close().await;
-            anyhow::ensure!(errors.is_empty(), "errors closing: {errors:?}");
-            Ok(())
         }
     }
 

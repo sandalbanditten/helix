@@ -1742,6 +1742,7 @@ impl Component for EditorView {
                 self.terminal_focused = true;
                 // Other programs may have changed files meanwhile.
                 self.file_tree.refresh(context.editor);
+                crate::handlers::auto_reload::check_all(context.editor);
                 EventResult::Consumed(None)
             }
             Event::FocusLost => {

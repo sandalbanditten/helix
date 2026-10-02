@@ -26,6 +26,8 @@ events! {
     DocumentFocusLost<'a> { editor: &'a mut Editor, doc: DocumentId }
     // called **after** a document has been written to disk
     DocumentDidSave<'a> { editor: &'a mut Editor, doc: DocumentId }
+    // called **after** the path of a document changed, when it was written elsewhere or moved
+    DocumentPathDidChange<'a> { editor: &'a mut Editor, doc: DocumentId }
     // called **after** the current working directory changed
     WorkingDirectoryDidChange<'a> { editor: &'a mut Editor }
 

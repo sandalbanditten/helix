@@ -5,7 +5,10 @@ use crate::{
         DiskText, DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode,
         SavePoint,
     },
-    events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost, WorkingDirectoryDidChange},
+    events::{
+        DocumentDidClose, DocumentDidOpen, DocumentFocusLost, DocumentPathDidChange,
+        WorkingDirectoryDidChange,
+    },
     graphics::{CursorKind, Rect},
     handlers::Handlers,
     info::Info,
@@ -614,6 +617,9 @@ pub struct Config {
     /// This prevents data loss if the editor is interrupted while writing the file, but may
     /// confuse some file watching/hot reloading programs. Defaults to `true`.
     pub atomic_save: bool,
+    /// Whether to reload buffers whose files change on disk, asking first when they have unsaved
+    /// changes. Defaults to `true`.
+    pub auto_reload: bool,
     /// Whether to automatically remove all trailing line-endings after the final one on write.
     /// Defaults to `false`.
     pub trim_final_newlines: bool,
@@ -1605,6 +1611,7 @@ impl Default for Config {
             default_line_ending: LineEndingConfig::default(),
             insert_final_newline: true,
             atomic_save: true,
+            auto_reload: true,
             trim_final_newlines: false,
             trim_trailing_whitespace: false,
             smart_tab: Some(SmartTabConfig::default()),
@@ -2249,7 +2256,11 @@ impl Editor {
         doc.language_servers.clear();
         doc.set_path(Some(path));
         doc.detect_editor_config();
-        self.refresh_doc_language(doc_id)
+        self.refresh_doc_language(doc_id);
+        dispatch(DocumentPathDidChange {
+            editor: self,
+            doc: doc_id,
+        });
     }
 
     pub fn refresh_doc_language(&mut self, doc_id: DocumentId) {
