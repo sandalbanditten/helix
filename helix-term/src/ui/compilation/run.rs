@@ -19,14 +19,16 @@ use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
-    output::{End, Lines, Shown},
+    output::{End, Shown},
+    screen::Screen,
 };
 use crate::{compositor::Compositor, job};
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
 pub struct Output {
-    /// The chars at the end of the buffer that `text` replaces: the line shown unfinished.
+    /// The chars at the end of the buffer that `text` replaces: the rows of the screen shown
+    /// before that changed since.
     pub replace: usize,
     pub text: String,
     /// The chars of `text`.
@@ -85,7 +87,7 @@ impl Output {
     }
 
     /// Adds `shown` with the `loci` in it, in place of the last `replace` chars of the output:
-    /// the line shown unfinished, which is either still pending here or in the buffer already.
+    /// rows of the screen, which are either still pending here or in the buffer already.
     fn push(&mut self, replace: usize, shown: &Shown, loci: Vec<Locus>) {
         let pending = replace.min(self.chars);
         if pending > 0 {
@@ -101,6 +103,8 @@ impl Output {
                 .styles
                 .partition_point(|(range, _)| range.start < self.chars);
             self.styles.truncate(kept);
+            let kept = self.loci.partition_point(|locus| locus.start < self.chars);
+            self.loci.truncate(kept);
         }
         self.replace += replace - pending;
         let start = self.chars;
@@ -143,8 +147,8 @@ const BATCH: usize = 256 * 1024;
 const PENDING: usize = 4 * 1024 * 1024;
 /// How often the reader looks at the leader when no output arrives.
 const TICK: Duration = Duration::from_millis(50);
-/// A line shows unfinished, like a prompt or a progress bar, at most this often.
-const UNFINISHED: Duration = Duration::from_millis(100);
+/// The screen shows anew at most this often, as a progress bar is redrawn say.
+const REFRESH: Duration = Duration::from_millis(100);
 /// How long what keeps running has before it is stopped by force: after a kill, or after the
 /// leader exited. Output that comes later than twice this after the leader exited is dropped.
 const GRACE: Duration = Duration::from_secs(1);
@@ -200,8 +204,9 @@ pub fn spawn(
     std::thread::Builder::new()
         .name("compilation".to_owned())
         .spawn(move || {
-            let lines = Lines::new(colors);
-            follow(&received, leader, lines, finder, &handle, doc, run)
+            // Nothing redraws output on a pipe, so the screen is one row.
+            let screen = Screen::new(u16::MAX, 1, colors);
+            follow(&received, leader, screen, finder, &handle, doc, run)
         })?;
     Ok(group)
 }
@@ -229,7 +234,7 @@ fn read(mut pipe: io::PipeReader, chunks: &SyncSender<Vec<u8>>) {
 fn follow(
     chunks: &Receiver<Vec<u8>>,
     mut leader: Leader,
-    mut lines: Lines,
+    mut screen: Screen,
     mut finder: Finder,
     handle: &Handle,
     doc: DocumentId,
@@ -237,23 +242,25 @@ fn follow(
 ) {
     let shared = Arc::new(Shared::default());
     let hand_over = |add: &mut dyn FnMut(&mut Output)| hand_over(&shared, handle, doc, run, add);
-    // The unfinished last line as the buffer shows it, and when it was shown.
+    // The screen as the buffer shows it at its end, and when it showed.
     let mut shown = Shown::default();
-    let mut shown_at = Instant::now();
+    let mut shown_at: Option<Instant> = None;
+    let mut changed = false;
     let mut open = true;
     let mut exited: Option<Instant> = None;
     let mut killed: Option<Instant> = None;
     let mut forced = false;
     loop {
         if open {
-            match chunks.recv_timeout(TICK) {
+            // Until the screen is due to show again, once it changed.
+            let wait = match shown_at {
+                Some(at) if changed => REFRESH.saturating_sub(at.elapsed()).min(TICK),
+                _ => TICK,
+            };
+            match chunks.recv_timeout(wait) {
                 Ok(chunk) => {
-                    let text = lines.push(&chunk);
-                    if !text.text.is_empty() {
-                        let mut loci = finder.find(&text.text);
-                        let replace = mem::take(&mut shown).chars;
-                        hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
-                    }
+                    screen.push(&chunk);
+                    changed = true;
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => open = false,
@@ -262,14 +269,19 @@ fn follow(
             std::thread::sleep(TICK / 5);
         }
 
-        if shown_at.elapsed() >= UNFINISHED {
-            let unfinished = lines.partial();
-            if unfinished != shown {
-                let replace = shown.chars;
-                hand_over(&mut |output| output.push(replace, &unfinished, Vec::new()));
-                shown = unfinished;
+        let due = shown_at.is_none_or(|at| at.elapsed() >= REFRESH);
+        if changed && (due || screen.scrolled_len() >= BATCH) {
+            let (replace, text, mut loci) = change(
+                &mut shown,
+                screen.take_scrolled(),
+                screen.shown(),
+                &mut finder,
+            );
+            if replace > 0 || !text.text.is_empty() {
+                hand_over(&mut |output| output.push(replace, &text, mem::take(&mut loci)));
             }
-            shown_at = Instant::now();
+            shown_at = Some(Instant::now());
+            changed = false;
         }
 
         if exited.is_none() && leader.has_exited().unwrap_or(true) {
@@ -292,9 +304,8 @@ fn follow(
         }
     }
 
-    let rest = lines.finish();
-    let mut rest_loci = finder.find(&rest.text);
-    let replace = shown.chars;
+    let (replace, text, mut loci) =
+        change(&mut shown, screen.finish(), Shown::default(), &mut finder);
     let killed = leader.killed();
     let end = match leader.reap() {
         _ if killed => End::Killed,
@@ -305,9 +316,38 @@ fn follow(
         }
     };
     hand_over(&mut |output| {
-        output.push(replace, &rest, mem::take(&mut rest_loci));
+        output.push(replace, &text, mem::take(&mut loci));
         output.end = Some(end);
     });
+}
+
+/// How the end of the buffer changes from the screen it shows, `shown`, once the lines
+/// `scrolled` scrolled away and the screen shows `screen`: the chars of `shown` that change,
+/// from the first line that does, and what replaces them, with the loci in it. `shown` becomes
+/// `screen`.
+fn change(
+    shown: &mut Shown,
+    scrolled: Shown,
+    screen: Shown,
+    finder: &mut Finder,
+) -> (usize, Shown, Vec<Locus>) {
+    let mut loci = finder.find(&scrolled.text);
+    let start = scrolled.chars;
+    loci.extend(finder.peek(&screen.text).into_iter().map(|mut locus| {
+        locus.start += start;
+        locus
+    }));
+    let mut text = scrolled;
+    text.append(&screen);
+    let (chars, bytes) = shown.common_lines(&text);
+    let text = text.split_off(chars, bytes);
+    loci.retain(|locus| locus.start >= chars);
+    for locus in &mut loci {
+        locus.start -= chars;
+    }
+    let replace = shown.chars - chars;
+    *shown = screen;
+    (replace, text, loci)
 }
 
 #[cfg(unix)]

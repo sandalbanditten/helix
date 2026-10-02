@@ -7,6 +7,7 @@
 mod locus;
 mod output;
 mod run;
+mod screen;
 
 use std::{path::PathBuf, time::Instant};
 
