@@ -333,6 +333,61 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn loci_return_to_the_layout_when_configured() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs", "src/main.rs"])?;
+        let mut config = helpers::test_config();
+        config.editor.compilation.open = CompilationOpen::Return;
+        let mut session = workspace.session_with("src/main.rs", config)?;
+        let views = |app: &Application| app.editor.tree.views().count();
+        let run = typed("compile-any printf ' --> src/lib.rs:2:3\\n --> src/main.rs:3:1\\n'");
+        // The output shows in the split it is run from, not in one of its own.
+        session.keys(&run).await?;
+        session.finished().await;
+        assert_eq!(views(&session.app), 1);
+        assert!(session.app.editor.tree.zoomed().is_some());
+        // A file shown nowhere opens in that split, normally.
+        session.keys("]dgf").await?;
+        assert_eq!(cursor(&session.app), ("src/lib.rs".to_owned(), 2, 3));
+        assert_eq!(views(&session.app), 1);
+        assert!(buffer(&session.app).is_some());
+        // `]q` brings the output back in the split, and `gf` goes to the next locus there.
+        session.keys("]q").await?;
+        assert_eq!(selected(&session.app), "src/main.rs:3:1");
+        assert_eq!(views(&session.app), 1);
+        session.keys("gf").await?;
+        assert_eq!(cursor(&session.app), ("src/main.rs".to_owned(), 3, 1));
+
+        // A file shown in another split is gone back to, and the output's split shows again
+        // what it showed.
+        session.keys(":vsplit src/lib.rs<ret><C-w>w").await?;
+        assert_eq!(cursor(&session.app).0, "src/main.rs");
+        session.keys(&run).await?;
+        session.finished().await;
+        assert_eq!(views(&session.app), 2);
+        session.keys("]dgf").await?;
+        assert_eq!(cursor(&session.app), ("src/lib.rs".to_owned(), 2, 3));
+        assert_eq!(views(&session.app), 2);
+        let shown: Vec<_> = session
+            .app
+            .editor
+            .tree
+            .views()
+            .map(|(view, _)| {
+                session
+                    .app
+                    .editor
+                    .document(view.doc)
+                    .unwrap()
+                    .display_name()
+                    .into_owned()
+            })
+            .collect();
+        assert!(shown.contains(&"src/main.rs".to_owned()), "{shown:?}");
+        assert!(buffer(&session.app).is_some());
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn loci_open_in_the_output_split_when_configured() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/lib.rs", "src/main.rs"])?;
         let mut config = helpers::test_config();

@@ -104,7 +104,7 @@ exception like `AssertionFailedError at AppTest.java:6`), or the line above it
 
 | Key | Description |
 | --- | --- |
-| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one; with [`open = "replace"`](./editor.md#editorcompilation-section), in the buffer's own split |
+| `gf`, `gd` | In the compilation buffer, open the locus on the cursor's line beside the buffer: in the split the command was run from, else in another split, else in a new one; with [`open = "replace"`](./editor.md#editorcompilation-section), in the buffer's own split; with `open = "return"`, back in your layout: in a split already showing the file, else in the split the buffer is shown in, which it has no split of its own but covers the editor from |
 | `]q`, `[q` | Select the next or previous locus in the compilation buffer, which gets the focus. A hidden buffer shows where `gf` would open a file, and goes on from the locus selected or opened last |
 
 Columns are counted in characters, as with `:open file:7:5`, except on lines with tabs when the

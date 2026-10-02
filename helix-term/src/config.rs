@@ -342,6 +342,10 @@ mod tests {
             }
         );
         assert!(compilation("").colors);
+        assert_eq!(
+            compilation("[editor.compilation]\nopen = \"return\"").open,
+            CompilationOpen::Return
+        );
         for invalid in [
             "[editor.compilation]\nopen = \"split\"",
             "[editor.compilation]\nfollow = true",

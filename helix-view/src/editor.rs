@@ -319,6 +319,9 @@ pub enum CompilationOpen {
     Beside,
     /// In the output's split, like `gf` anywhere.
     Replace,
+    /// Back in the layout the output covered, whose split closes: in a split showing the file,
+    /// else in the one the command was run from.
+    Return,
 }
 
 /// The file tree docked beside the editor.

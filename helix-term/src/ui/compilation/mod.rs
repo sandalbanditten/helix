@@ -168,8 +168,19 @@ pub fn start(editor: &mut Editor, run: Run) {
     replace(editor, doc_id, &text);
 }
 
+/// How a hidden compilation buffer shows over the whole editor: in a split of its own, or, when
+/// loci open to `return`, in the focused one, which gets back what it showed when they open.
+fn covering(editor: &Editor) -> Action {
+    if editor.config().compilation.open == CompilationOpen::Return {
+        Action::Replace
+    } else {
+        Action::VerticalSplit
+    }
+}
+
 /// Shows the compilation buffer over the whole editor, made if there is none, and returns it.
 fn show(editor: &mut Editor) -> DocumentId {
+    let action = covering(editor);
     let doc_id = match buffer(editor) {
         Some(doc_id) => {
             let view = editor
@@ -179,7 +190,7 @@ fn show(editor: &mut Editor) -> DocumentId {
                 .map(|(view, _)| view.id);
             match view {
                 Some(view) => editor.focus(view),
-                None => editor.switch(doc_id, Action::VerticalSplit),
+                None => editor.switch(doc_id, action),
             }
             doc_id
         }
@@ -192,7 +203,7 @@ fn show(editor: &mut Editor) -> DocumentId {
             );
             doc.set_spelling_language_override(Some(Vec::new()));
             doc.detect_spelling();
-            editor.new_file_from_document(Action::VerticalSplit, doc)
+            editor.new_file_from_document(action, doc)
         }
     };
     let focus = editor.tree.focus;
@@ -436,13 +447,15 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
 
     match shown {
         Some(view) => editor.focus(view),
-        None => {
-            let action = match editor.config().compilation.open {
-                CompilationOpen::Beside => Action::VerticalSplit,
-                CompilationOpen::Replace => Action::Replace,
-            };
-            editor.switch(doc_id, action);
-        }
+        None => match editor.config().compilation.open {
+            CompilationOpen::Beside => editor.switch(doc_id, Action::VerticalSplit),
+            CompilationOpen::Replace => editor.switch(doc_id, Action::Replace),
+            CompilationOpen::Return => {
+                editor.switch(doc_id, covering(editor));
+                let focus = editor.tree.focus;
+                editor.tree.set_zoom(Some(focus));
+            }
+        },
     }
     let scrolloff = editor.config().scrolloff;
     let (view, doc) = current!(editor);
@@ -459,7 +472,8 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
 
 /// Opens the locus starting at `start` in the compilation buffer `doc_id`, which has the focus:
 /// in its split, or, opening `beside` it, in the split the command was run from, else in
-/// another, else in a new one.
+/// another, else in a new one. To `return`, the file opens in a split showing it, the output's
+/// getting back what it showed before (or closing), else in the output's split.
 fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     let doc = doc_mut!(editor, &doc_id);
     let locus = loci(doc).find(|locus| locus.range.start == start);
@@ -472,17 +486,32 @@ fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     let origin = compilation.origin;
 
     let focused = editor.tree.focus;
+    // Another split: the one the command was run from, or any.
+    let other = origin
+        .filter(|&origin| origin != focused && editor.tree.contains(origin))
+        .or_else(|| {
+            let mut views = editor.tree.views().map(|(view, _)| view.id);
+            views.find(|&view| view != focused)
+        });
     let mut action = Action::Replace;
-    if editor.config().compilation.open == CompilationOpen::Beside {
-        let beside = origin
-            .filter(|&origin| origin != focused && editor.tree.contains(origin))
-            .or_else(|| {
-                let mut views = editor.tree.views().map(|(view, _)| view.id);
-                views.find(|&view| view != focused)
-            });
-        match beside {
+    match editor.config().compilation.open {
+        CompilationOpen::Beside => match other {
             Some(view) => editor.focus(view),
             None => action = Action::VerticalSplit,
+        },
+        CompilationOpen::Replace => {}
+        CompilationOpen::Return => {
+            let path = helix_stdx::path::canonicalize(&path);
+            let showing = editor.document_by_path(&path).and_then(|doc| {
+                let mut views = editor.tree.views();
+                views
+                    .find(|(view, _)| view.doc == doc.id() && view.id != focused)
+                    .map(|(view, _)| view.id)
+            });
+            if let Some(view) = showing {
+                give_back(editor, doc_id);
+                editor.focus(view);
+            }
         }
     }
     match editor.open(&path, action) {
@@ -494,6 +523,21 @@ fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
             crate::commands::goto_position(editor, position);
         }
         Err(err) => editor.set_error(format!("Open file failed: {err}")),
+    }
+}
+
+/// Shows again in the focused split, which shows the compilation buffer `doc_id`, what it showed
+/// before; or closes the split when it showed nothing else.
+fn give_back(editor: &mut Editor, doc_id: DocumentId) {
+    let view = view_mut!(editor);
+    let previous = std::iter::from_fn(|| view.docs_access_history.pop())
+        .find(|&doc| doc != doc_id && editor.documents.contains_key(&doc));
+    match previous {
+        Some(previous) => editor.switch(previous, Action::Replace),
+        None => {
+            let view = editor.tree.focus;
+            editor.close(view);
+        }
     }
 }
 
