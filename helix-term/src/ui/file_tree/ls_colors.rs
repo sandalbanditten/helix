@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use helix_view::graphics::{Color, Modifier, Style, UnderlineStyle};
+use helix_view::graphics::{Modifier, Style};
 
 /// What kind of entry a name belongs to, in the terms of `LS_COLORS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,48 +179,21 @@ pub fn eza_environment() -> Option<String> {
 
 /// Parses SGR parameters like `01;38;2;255;0;0`, keeping the foreground and the safe modifiers.
 pub fn parse_style(value: &str) -> Style {
-    let mut style = Style::default();
-    let mut codes = value.split(';').map(|code| code.trim().parse::<u8>().ok());
-    while let Some(code) = codes.next() {
-        match code {
-            Some(0) => style = Style::default(),
-            Some(1) => style = style.add_modifier(Modifier::BOLD),
-            Some(2) => style = style.add_modifier(Modifier::DIM),
-            Some(3) => style = style.add_modifier(Modifier::ITALIC),
-            Some(4) => style = style.underline_style(UnderlineStyle::Line),
-            Some(9) => style = style.add_modifier(Modifier::CROSSED_OUT),
-            Some(code @ 30..=37) => style = style.fg(Color::Indexed(code - 30)),
-            Some(code @ 90..=97) => style = style.fg(Color::Indexed(code - 82)),
-            Some(39) => style.fg = None,
-            Some(38) => {
-                if let Some(color) = extended_color(&mut codes) {
-                    style = style.fg(color);
-                }
-            }
-            // Backgrounds are consumed whole so their arguments are not taken for codes.
-            Some(48) => {
-                extended_color(&mut codes);
-            }
-            _ => {}
-        }
-    }
-    style
-}
-
-/// Reads the arguments of `38`/`48`: `5;index` or `2;red;green;blue`.
-fn extended_color(codes: &mut impl Iterator<Item = Option<u8>>) -> Option<Color> {
-    match codes.next()?? {
-        5 => Some(Color::Indexed(codes.next()??)),
-        2 => {
-            let (red, green, blue) = (codes.next()??, codes.next()??, codes.next()??);
-            Some(Color::Rgb(red, green, blue))
-        }
-        _ => None,
+    let style = crate::ui::sgr::apply(Style::default(), value);
+    let unsafe_modifiers =
+        Modifier::REVERSED | Modifier::HIDDEN | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
+    Style {
+        bg: None,
+        underline_color: None,
+        add_modifier: style.add_modifier - unsafe_modifiers,
+        ..style
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use helix_view::graphics::Color;
+
     use super::*;
 
     #[test]

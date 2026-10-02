@@ -14,6 +14,7 @@ pub mod popup;
 pub mod prompt;
 mod scrollbar;
 mod select;
+mod sgr;
 mod spinner;
 mod statusline;
 mod text;
