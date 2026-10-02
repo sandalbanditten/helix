@@ -299,6 +299,8 @@ pub struct CompilationConfig {
     pub open: CompilationOpen,
     /// Whether the output keeps its colors, which commands are asked for. Defaults to `true`.
     pub colors: bool,
+    /// Whether the output, covering the editor, covers the file tree too. Defaults to `true`.
+    pub hide_file_tree: bool,
 }
 
 impl Default for CompilationConfig {
@@ -306,6 +308,7 @@ impl Default for CompilationConfig {
         Self {
             open: CompilationOpen::default(),
             colors: true,
+            hide_file_tree: true,
         }
     }
 }

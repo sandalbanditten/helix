@@ -58,8 +58,9 @@ run.
 
 ## The compilation buffer
 
-There is one compilation buffer, named after its command, like `[compilation] cargo build`. A new
-run replaces its output and stops the run before it. Closing the buffer, or quitting Helix, stops
+There is one compilation buffer, named after its command, like `[compilation] cargo build`. It
+covers the editor, the file tree too unless [`hide-file-tree = false`](./editor.md#editorcompilation-section).
+A new run replaces its output and stops the run before it. Closing the buffer, or quitting Helix, stops
 its run too; closing its split leaves the buffer, and its run, in the background. When the command
 exits, what it left running in the background is stopped as well, so that the run ends; output
 that arrives later than two seconds after is left out.

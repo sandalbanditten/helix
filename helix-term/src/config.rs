@@ -335,10 +335,13 @@ mod tests {
         let compilation = |config: &str| Config::load_test(config).editor.compilation;
         assert_eq!(compilation("").open, CompilationOpen::Return);
         assert_eq!(
-            compilation("[editor.compilation]\nopen = \"replace\"\ncolors = false"),
+            compilation(
+                "[editor.compilation]\nopen = \"replace\"\ncolors = false\nhide-file-tree = false"
+            ),
             CompilationConfig {
                 open: CompilationOpen::Replace,
                 colors: false,
+                hide_file_tree: false,
             }
         );
         assert!(compilation("").colors);

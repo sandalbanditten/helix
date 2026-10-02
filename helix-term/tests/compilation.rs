@@ -685,6 +685,50 @@ mod test {
         session.quit().await
     }
 
+    /// Whether a row of the screen as last drawn holds `text`.
+    fn shows(app: &Application, text: &str) -> bool {
+        let screen = app.screen();
+        screen
+            .content
+            .chunks(screen.area.width as usize)
+            .any(|row| {
+                let row: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+                row.contains(text)
+            })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_output_covers_the_file_tree() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs", "notes.md"])?;
+        let mut session = workspace.session("src/lib.rs", None)?;
+        session.keys("<space>E").await?;
+        session
+            .until("the file tree", |app| shows(app, "notes.md"))
+            .await;
+        session.keys(&typed("compile-any true")).await?;
+        session.finished().await;
+        assert!(!shows(&session.app, "notes.md"));
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_file_tree_can_stay_beside_the_output() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["src/lib.rs", "notes.md"])?;
+        let mut config = helpers::test_config();
+        config.editor.compilation.hide_file_tree = false;
+        let mut session = workspace.session_with("src/lib.rs", config)?;
+        session.keys("<space>E").await?;
+        session
+            .until("the file tree", |app| shows(app, "notes.md"))
+            .await;
+        session.keys(&typed("compile-any true")).await?;
+        session.finished().await;
+        assert!(session.app.editor.tree.zoomed().is_some());
+        assert!(shows(&session.app, "notes.md"));
+        assert!(shows(&session.app, "[compilation] true"));
+        session.quit().await
+    }
+
     /// Times how fast output arrives in the buffer, and how fast keys are handled meanwhile, in
     /// release: `cargo test --release --features integration --test compilation measure -- --ignored --nocapture`
     #[tokio::test(flavor = "multi_thread")]

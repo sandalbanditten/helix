@@ -299,10 +299,14 @@ impl FileTree {
         if !self.is_presented() {
             return None;
         }
-        // A zoomed view covers the panel too.
-        if editor.tree.zoomed().is_some() {
-            self.focused = false;
-            return None;
+        // A zoomed view covers the panel too, unless the compilation buffer is set not to.
+        if let Some(zoomed) = editor.tree.zoomed() {
+            let doc = editor.document(editor.tree.get(zoomed).doc);
+            let compilation = doc.is_some_and(|doc| doc.compilation.is_some());
+            if !compilation || editor.config().compilation.hide_file_tree {
+                self.focused = false;
+                return None;
+            }
         }
         if !self
             .workspace
