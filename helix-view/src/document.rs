@@ -17,7 +17,7 @@ use helix_core::text_annotations::{InlineAnnotation, Overlay};
 use helix_event::TaskController;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
-use helix_vcs::{DiffHandle, DiffProviderRegistry};
+use helix_vcs::DiffHandle;
 use once_cell::sync::OnceCell;
 use thiserror;
 
@@ -130,6 +130,27 @@ pub struct DocumentSavedEvent {
 pub type DocumentSavedEventResult = Result<DocumentSavedEvent, anyhow::Error>;
 pub type DocumentSavedEventFuture = BoxFuture<'static, DocumentSavedEventResult>;
 
+/// A document's file as read from disk, for a reload.
+#[derive(Debug, Clone)]
+pub struct DiskText {
+    pub text: Rope,
+    /// When the file was modified, as of before its text was read: a write in between still
+    /// shows as a change later.
+    pub mtime: SystemTime,
+}
+
+impl DiskText {
+    /// Reads the file at `path`, decoding it as `encoding`.
+    pub fn read(path: &Path, encoding: &'static Encoding) -> Result<Self, Error> {
+        let mtime = std::fs::metadata(path)?
+            .modified()
+            .unwrap_or_else(|_| SystemTime::now());
+        let mut file = std::fs::File::open(path)?;
+        let (text, ..) = from_reader(&mut file, Some(encoding))?;
+        Ok(Self { text, mtime })
+    }
+}
+
 #[derive(Debug)]
 pub struct SavePoint {
     /// The view this savepoint is associated with
@@ -216,6 +237,9 @@ pub struct Document {
     // Last time we wrote to the file. This will carry the time the file was last opened if there
     // were no saves.
     last_saved_time: SystemTime,
+    /// The text of the file as last read or written, which tells a change on disk from a rewrite
+    /// of the same text.
+    disk_text: Rope,
 
     last_saved_revision: usize,
     version: i32, // should be usize?
@@ -368,6 +392,7 @@ impl fmt::Debug for Document {
             .field("old_state", &self.old_state)
             // .field("history", &self.history)
             .field("last_saved_time", &self.last_saved_time)
+            .field("disk_text", &self.disk_text)
             .field("last_saved_revision", &self.last_saved_revision)
             .field("version", &self.version)
             .field("modified_since_accessed", &self.modified_since_accessed)
@@ -753,6 +778,7 @@ impl Document {
         let line_ending = config.load().default_line_ending.into();
         let changes = ChangeSet::new(text.slice(..));
         let old_state = None;
+        let disk_text = text.clone();
 
         let mut doc = Self {
             id: DocumentId::default(),
@@ -783,6 +809,7 @@ impl Document {
             history: Cell::new(History::default()),
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
+            disk_text,
             last_saved_revision: 0,
             modified_since_accessed: false,
             language_servers: HashMap::new(),
@@ -1367,46 +1394,38 @@ impl Document {
         };
     }
 
-    /// Reload the document from its path.
-    pub fn reload(
-        &mut self,
-        view: &mut View,
-        provider_registry: &DiffProviderRegistry,
-        trust_full: bool,
-    ) -> Result<(), Error> {
-        let encoding = self.encoding;
-        let path = match self.path() {
-            None => return Ok(()),
-            Some(path) => match path.exists() {
-                true => path.to_owned(),
-                false => bail!("can't find file to reload from {:?}", self.display_name()),
-            },
-        };
-
-        // Once we have a valid path we check if its readonly status has changed
+    /// Turns the text into the file's, `disk`, by `changes`, made against the current text by
+    /// [`compare_ropes`](helix_core::diff::compare_ropes). The reload is a step of the history,
+    /// which undo takes back, and the text counts as saved.
+    pub fn apply_reload(&mut self, view: &mut View, disk: DiskText, changes: &Transaction) {
+        // The file's permissions may have changed too.
         self.detect_readonly();
 
-        let mut file = std::fs::File::open(&path)?;
-        let (rope, ..) = from_reader(&mut file, Some(encoding))?;
-
-        // Calculate the difference between the buffer and source text, and apply it.
         // This is not considered a modification of the contents of the file regardless
         // of the encoding.
-        let transaction = helix_core::diff::compare_ropes(self.text(), &rope);
-        self.apply(&transaction, view.id);
+        self.apply(changes, view.id);
         self.append_changes_to_history(view);
         self.reset_modified();
-        self.pickup_last_saved_time();
+        self.last_saved_time = disk.mtime;
+        // The same text as the file's, sharing the buffer's nodes.
+        self.disk_text = self.text.clone();
         self.detect_indent_and_line_ending();
+    }
 
-        match provider_registry.get_diff_base(&path, trust_full) {
+    /// Takes `disk` as what the file holds while the text stays, so that a plain write
+    /// overwrites the file.
+    pub fn ignore_disk_change(&mut self, disk: DiskText) {
+        self.last_saved_time = disk.mtime;
+        self.disk_text = disk.text;
+    }
+
+    /// Diffs the text against `diff_base`, or against nothing, and shows `head` as the branch.
+    pub fn set_vcs(&mut self, diff_base: Option<Vec<u8>>, head: Option<Arc<ArcSwap<Box<str>>>>) {
+        match diff_base {
             Some(diff_base) => self.set_diff_base(diff_base),
             None => self.diff_handle = None,
         }
-
-        self.version_control_head = provider_registry.get_current_head_name(&path, trust_full);
-
-        Ok(())
+        self.version_control_head = head;
     }
 
     /// Sets the [`Document`]'s encoding with the encoding correspondent to `label`.
@@ -2040,8 +2059,9 @@ impl Document {
         self.last_saved_revision = 0;
     }
 
-    /// Set the document's latest saved revision to the given one.
-    pub fn set_last_saved_revision(&mut self, rev: usize, save_time: SystemTime) {
+    /// Set the document's latest saved revision to the given one, whose `text` was written at
+    /// `save_time`.
+    pub fn set_last_saved_revision(&mut self, rev: usize, save_time: SystemTime, text: Rope) {
         log::debug!(
             "doc {} revision updated {} -> {}",
             self.id,
@@ -2050,6 +2070,18 @@ impl Document {
         );
         self.last_saved_revision = rev;
         self.last_saved_time = save_time;
+        self.disk_text = text;
+    }
+
+    /// When the file was last modified as far as the document knows: when it was opened, last
+    /// written or reloaded.
+    pub fn last_saved_time(&self) -> SystemTime {
+        self.last_saved_time
+    }
+
+    /// The text of the file as last read or written.
+    pub fn disk_text(&self) -> &Rope {
+        &self.disk_text
     }
 
     /// Get the document's latest saved revision.
@@ -2740,6 +2772,85 @@ mod test {
     use arc_swap::ArcSwap;
 
     use super::*;
+
+    fn doc_in_view(text: &str) -> (Document, View) {
+        let mut doc = Document::from(
+            Rope::from(text),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view = View::new(doc.id(), crate::editor::GutterConfig::default());
+        doc.ensure_view_init(view.id);
+        (doc, view)
+    }
+
+    fn some_time() -> SystemTime {
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30)
+    }
+
+    /// Types `text` at the start of the document, as a step of its history.
+    fn type_at_start(doc: &mut Document, view: &mut View, text: &str) {
+        let transaction = Transaction::insert(doc.text(), &Selection::point(0), text.into());
+        doc.apply(&transaction, view.id);
+        doc.append_changes_to_history(view);
+    }
+
+    #[test]
+    fn a_reload_counts_as_saved_and_undo_takes_it_back() {
+        let (mut doc, mut view) = doc_in_view("one\ntwo\n");
+        let disk = DiskText {
+            text: Rope::from("one\n2\n"),
+            mtime: some_time(),
+        };
+        let changes = helix_core::diff::compare_ropes(doc.text(), &disk.text);
+        doc.apply_reload(&mut view, disk, &changes);
+        assert_eq!(doc.text().to_string(), "one\n2\n");
+        assert!(!doc.is_modified());
+        assert_eq!(doc.last_saved_time(), some_time());
+        assert_eq!(doc.disk_text().to_string(), "one\n2\n");
+
+        assert!(doc.undo(&mut view));
+        assert_eq!(doc.text().to_string(), "one\ntwo\n");
+        assert!(doc.is_modified());
+    }
+
+    #[test]
+    fn ignoring_a_change_on_disk_keeps_the_text() {
+        let (mut doc, mut view) = doc_in_view("one\n");
+        type_at_start(&mut doc, &mut view, "zero ");
+        doc.ignore_disk_change(DiskText {
+            text: Rope::from("uno\n"),
+            mtime: some_time(),
+        });
+        assert_eq!(doc.text().to_string(), "zero one\n");
+        assert!(doc.is_modified());
+        assert_eq!(doc.last_saved_time(), some_time());
+        assert_eq!(doc.disk_text().to_string(), "uno\n");
+    }
+
+    #[test]
+    fn the_disk_text_follows_writes() {
+        let (mut doc, mut view) = doc_in_view("one\n");
+        assert_eq!(doc.disk_text().to_string(), "one\n");
+        type_at_start(&mut doc, &mut view, "zero ");
+        assert_eq!(doc.disk_text().to_string(), "one\n");
+        let revision = doc.get_current_revision();
+        doc.set_last_saved_revision(revision, some_time(), doc.text().clone());
+        assert!(!doc.is_modified());
+        assert_eq!(doc.disk_text().to_string(), "zero one\n");
+    }
+
+    #[test]
+    fn disk_texts_are_read_in_the_encoding_of_the_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("latin1.txt");
+        std::fs::write(&path, b"caf\xe9\n").unwrap();
+        let disk = DiskText::read(&path, encoding::WINDOWS_1252).unwrap();
+        assert_eq!(disk.text.to_string(), "caf\u{e9}\n");
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(disk.mtime, mtime);
+    }
 
     fn folded_doc() -> (Document, ViewId) {
         let text = Rope::from("fn f() {\n    1\n}\nx\n");

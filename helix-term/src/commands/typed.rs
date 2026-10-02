@@ -1765,30 +1765,17 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
         return Ok(());
     }
 
-    let scrolloff = cx.editor.config().scrolloff;
-    let trust_full = doc_trust_full(cx.editor);
-    let (view, doc) = current!(cx.editor);
+    let doc = doc!(cx.editor);
+    let doc_id = doc.id();
     if doc.dired.is_some() {
-        let doc_id = doc.id();
         ui::dired::reload(cx.editor, doc_id);
         return Ok(());
     }
     // The compilation buffer runs its command again.
     if doc.compilation.is_some() {
-        let doc_id = doc.id();
         return ui::compilation::rerun(cx.editor, doc_id);
     }
-    doc.reload(view, &cx.editor.diff_providers, trust_full)
-        .map(|_| {
-            view.ensure_cursor_in_view(doc, scrolloff);
-        })?;
-    if let Some(path) = doc.path().map(ToOwned::to_owned) {
-        cx.editor
-            .language_servers
-            .file_event_handler
-            .file_changed(path);
-    }
-    Ok(())
+    cx.editor.reload(doc_id)
 }
 
 fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
@@ -1796,74 +1783,19 @@ fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
         return Ok(());
     }
 
-    let scrolloff = cx.editor.config().scrolloff;
-    let view_id = view!(cx.editor).id;
-
-    let docs_view_ids: Vec<(DocumentId, Vec<ViewId>)> = cx
-        .editor
-        .documents_mut()
-        .map(|doc| {
-            let mut view_ids: Vec<_> = doc.selections().keys().cloned().collect();
-
-            if view_ids.is_empty() {
-                doc.ensure_view_init(view_id);
-                view_ids.push(view_id);
-            };
-
-            (doc.id(), view_ids)
-        })
-        .collect();
-
-    for (doc_id, view_ids) in docs_view_ids {
-        if doc!(cx.editor, &doc_id).dired.is_some() {
+    let doc_ids: Vec<DocumentId> = cx.editor.documents().map(|doc| doc.id()).collect();
+    for doc_id in doc_ids {
+        let doc = doc!(cx.editor, &doc_id);
+        if doc.dired.is_some() {
             ui::dired::reload(cx.editor, doc_id);
             continue;
         }
         // Reloading everything doesn't build again.
-        if doc!(cx.editor, &doc_id).compilation.is_some() {
+        if doc.compilation.is_some() {
             continue;
         }
-        let doc = doc_mut!(cx.editor, &doc_id);
-
-        // Every doc is guaranteed to have at least 1 view at this point.
-        let view = view_mut!(cx.editor, view_ids[0]);
-
-        // Ensure that the view is synced with the document's history.
-        view.sync_changes(doc);
-
-        // Per-document trust: each doc's workspace may differ.
-        let trust_full = cx
-            .editor
-            .workspace_trust
-            .query(
-                doc.workspace_root(),
-                helix_loader::workspace_trust::TrustQuery::Git,
-            )
-            .is_trusted();
-        if let Err(error) = doc.reload(view, &cx.editor.diff_providers, trust_full) {
+        if let Err(error) = cx.editor.reload(doc_id) {
             cx.editor.set_error(format!("{}", error));
-            continue;
-        }
-
-        if let Some(path) = doc.path().map(ToOwned::to_owned) {
-            cx.editor
-                .language_servers
-                .file_event_handler
-                .file_changed(path);
-        }
-
-        for view_id in view_ids {
-            let view = view_mut!(cx.editor, view_id);
-            if view.doc.eq(&doc_id) {
-                // Reloading commits the diff against disk through the first view
-                // only (above). Any other view onto this document is left
-                // pointing at the pre-reload revision, so sync it now; otherwise
-                // its jumplist entries keep referencing the old (e.g. larger)
-                // text and a later commit panics when mapping them through a
-                // changeset whose pre-image no longer contains them.
-                view.sync_changes(doc);
-                view.ensure_cursor_in_view(doc, scrolloff);
-            }
         }
     }
 
@@ -4880,17 +4812,6 @@ fn current_workspace(cx: &compositor::Context) -> std::path::PathBuf {
 
 /// Whether the currently focused document's workspace is trusted for git operations (gix
 /// `Trust::Full`).
-fn doc_trust_full(editor: &helix_view::Editor) -> bool {
-    let (_, doc) = current_ref!(editor);
-    editor
-        .workspace_trust
-        .query(
-            doc.workspace_root(),
-            helix_loader::workspace_trust::TrustQuery::Git,
-        )
-        .is_trusted()
-}
-
 fn trust_workspace(
     cx: &mut compositor::Context,
     args: Args<'_>,

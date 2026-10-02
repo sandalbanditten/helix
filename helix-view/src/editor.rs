@@ -2,7 +2,8 @@ use crate::{
     annotations::diagnostics::{DiagnosticFilter, InlineDiagnosticsConfig},
     clipboard::ClipboardProvider,
     document::{
-        DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode, SavePoint,
+        DiskText, DocumentOpenError, DocumentSavedEventFuture, DocumentSavedEventResult, Mode,
+        SavePoint,
     },
     events::{DocumentDidClose, DocumentDidOpen, DocumentFocusLost, WorkingDirectoryDidChange},
     graphics::{CursorKind, Rect},
@@ -47,13 +48,14 @@ use helix_core::{
     auto_pairs::AutoPairs,
     conceal::ConcealReveal,
     diagnostic::DiagnosticProvider,
+    diff::compare_ropes,
     syntax::{
         self,
         config::{
             AutoPairConfig, IndentationHeuristic, LanguageServerFeature, SoftWrap, SpellingConfig,
         },
     },
-    Change, LineEnding, Position, Range, Selection, SpellingLanguage, Tendril, Uri,
+    Change, LineEnding, Position, Range, Selection, SpellingLanguage, Tendril, Transaction, Uri,
     NATIVE_LINE_ENDING,
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
@@ -2743,6 +2745,52 @@ impl Editor {
         Ok(())
     }
 
+    /// Reloads the document from its file, if it has one.
+    pub fn reload(&mut self, doc_id: DocumentId) -> anyhow::Result<()> {
+        let doc = doc!(self, &doc_id);
+        let Some(path) = doc.path().map(Path::to_path_buf) else {
+            return Ok(());
+        };
+        if !path.exists() {
+            bail!("can't find file to reload from {:?}", doc.display_name());
+        }
+        let disk = DiskText::read(&path, doc.encoding())?;
+        let changes = compare_ropes(doc.text(), &disk.text);
+        let trust_full = self
+            .workspace_trust
+            .query(doc.workspace_root(), TrustQuery::Git)
+            .is_trusted();
+        let diff_base = self.diff_providers.get_diff_base(&path, trust_full);
+        let head = self.diff_providers.get_current_head_name(&path, trust_full);
+        self.apply_reload(doc_id, disk, &changes);
+        doc_mut!(self, &doc_id).set_vcs(diff_base, head);
+        Ok(())
+    }
+
+    /// Reloads the document with its file's text `disk`, read apart: see
+    /// [`Document::apply_reload`]. Its views follow, and language servers learn of the change.
+    pub fn apply_reload(&mut self, doc_id: DocumentId, disk: DiskText, changes: &Transaction) {
+        let scrolloff = self.config().scrolloff;
+        let view_id = self.get_synced_view_id(doc_id);
+        let doc = self.documents.get_mut(&doc_id).unwrap();
+        doc.apply_reload(self.tree.get_mut(view_id), disk, changes);
+        // The other views onto the document are left at the revision before the reload, so
+        // sync them now; otherwise their jumplist entries keep referencing the old (e.g.
+        // larger) text and a later commit panics when mapping them through a changeset whose
+        // pre-image no longer contains them.
+        for (view, _) in self.tree.views_mut() {
+            if view.doc == doc_id {
+                view.sync_changes(doc);
+                view.ensure_cursor_in_view(doc, scrolloff);
+            }
+        }
+        if let Some(path) = doc.path() {
+            self.language_servers
+                .file_event_handler
+                .file_changed(path.to_path_buf());
+        }
+    }
+
     pub fn resize(&mut self, area: Rect) {
         if self.tree.resize(area) {
             self._refresh();
@@ -2995,7 +3043,11 @@ impl Editor {
                 };
 
                 let doc = doc_mut!(self, &save_event.doc_id);
-                doc.set_last_saved_revision(save_event.revision, save_event.save_time);
+                doc.set_last_saved_revision(
+                    save_event.revision,
+                    save_event.save_time,
+                    save_event.text,
+                );
             }
         }
 
