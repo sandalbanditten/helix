@@ -2,6 +2,10 @@
 //!
 //! The process leading the group is only reaped once the group is done with, so that the group's
 //! id, which is the leader's pid, stays its own while it is signalled.
+//!
+//! On Unix, the group is the one of a session of its own, with no controlling terminal: commands
+//! opening `/dev/tty`, to prompt for a password say, fail instead of taking over the terminal
+//! that Helix runs in.
 
 use std::{
     io,
@@ -18,7 +22,13 @@ pub fn spawn_group(command: &mut Command) -> io::Result<(Leader, ProcessGroup)> 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        // SAFETY: `setsid` is async-signal-safe, and touches no memory of the parent.
+        unsafe {
+            command.pre_exec(|| match rustix::process::setsid() {
+                Ok(_) => Ok(()),
+                Err(err) => Err(err.into()),
+            });
+        }
     }
     let child = command.spawn()?;
     let status = Arc::new(GroupStatus::default());
@@ -53,6 +63,22 @@ impl ProcessGroup {
         }
         self.status.killed.store(true, Ordering::Release);
         kill_group(self.pid, false)
+    }
+
+    /// Tells the processes of the group that their terminal changed size, with `SIGWINCH` on
+    /// Unix, unless its leader was reaped.
+    pub fn notify_resize(&self) -> io::Result<()> {
+        if self.status.reaped.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            signal_group(self.pid, rustix::process::Signal::WINCH)
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(())
+        }
     }
 }
 
@@ -110,14 +136,19 @@ impl Leader {
 
 #[cfg(unix)]
 fn kill_group(pid: u32, force: bool) -> io::Result<()> {
-    use rustix::process::{kill_process_group, Pid, Signal};
+    use rustix::process::Signal;
+    signal_group(pid, if force { Signal::KILL } else { Signal::TERM })
+}
+
+#[cfg(unix)]
+fn signal_group(pid: u32, signal: rustix::process::Signal) -> io::Result<()> {
+    use rustix::process::{kill_process_group, Pid};
     // `kill(-1)` would signal every process we may signal.
     let pid = i32::try_from(pid)
         .ok()
         .filter(|&pid| pid > 1)
         .and_then(Pid::from_raw)
         .ok_or_else(|| io::Error::other("no such process group"))?;
-    let signal = if force { Signal::KILL } else { Signal::TERM };
     Ok(kill_process_group(pid, signal)?)
 }
 
@@ -207,6 +238,18 @@ mod tests {
         assert!(alive(sleep) && !leader.has_exited().unwrap());
         leader.stop(true).unwrap();
         until("the grandchild to stop", || !alive(sleep));
+        leader.reap().unwrap();
+    }
+
+    #[test]
+    fn the_command_leads_a_session_of_its_own() {
+        let (leader, group, sleep) = spawn("sleep 30 & echo $!; wait");
+        // The session and the process group, fields 6 and 5 of the grandchild's stat.
+        let stat = std::fs::read_to_string(format!("/proc/{sleep}/stat")).unwrap();
+        let fields: Vec<&str> = stat.rsplit(')').next().unwrap().split(' ').collect();
+        let leader_pid = group.pid.to_string();
+        assert_eq!(fields[3..5], [leader_pid.as_str(), leader_pid.as_str()]);
+        drop(group);
         leader.reap().unwrap();
     }
 

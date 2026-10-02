@@ -6,6 +6,7 @@ pub mod faccess;
 pub mod fs;
 pub mod path;
 pub mod process;
+pub mod pty;
 pub mod range;
 pub mod rope;
 pub mod uri;
