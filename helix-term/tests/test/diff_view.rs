@@ -324,3 +324,89 @@ async fn hunks_are_jumped_to_and_the_file_opened() -> anyhow::Result<()> {
     assert_eq!(selection(app), (4, 5));
     session.quit().await
 }
+
+/// A session started like `hx --diff` with `paths`, diffing with the builtin diff.
+fn diff_session(paths: &[&Path]) -> anyhow::Result<Session> {
+    let mut config = test_config();
+    config.editor.diff.tool = DiffTool::Builtin;
+    let mut builder = AppBuilder::new().with_config(config).with_diff();
+    for path in paths {
+        builder = builder.with_file(*path, None);
+    }
+    Ok(Session::new(builder.build()?))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_files_are_diffed_from_the_command_line() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old.rs"), dir.path().join("new.rs"));
+    fs::write(&old, "a\nb\n")?;
+    fs::write(&new, "a\nc\n")?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let app = &session.app;
+    // Only the panes are left: closing them quits, as git's diff tools do.
+    assert_eq!(app.editor.tree.views().count(), 2);
+    assert_eq!(app.editor.documents().count(), 2);
+    let rows: Vec<_> = rows(app).into_iter().take(2).collect();
+    assert_eq!(rows[1], ("2 b".to_owned(), "2 c".to_owned()));
+    let [(_, old_doc), (_, new_doc)] = panes(app).unwrap();
+    assert!(doc!(app.editor, &old_doc)
+        .display_name()
+        .ends_with("old.rs"));
+    let pane = doc!(app.editor, &new_doc).diff_view.as_ref().unwrap();
+    assert_eq!(pane.file.as_deref(), Some(new.as_path()));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn added_files_are_diffed_against_nothing() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let new = dir.path().join("new.rs");
+    fs::write(&new, "a\nb\n")?;
+    let mut session = diff_session(&[Path::new("/dev/null"), &new])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let rows: Vec<_> = rows(&session.app).into_iter().take(2).collect();
+    assert_eq!(
+        rows,
+        [
+            ("".to_owned(), "1 a".to_owned()),
+            ("".to_owned(), "2 b".to_owned())
+        ]
+    );
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_file_is_diffed_against_its_committed_version() -> anyhow::Result<()> {
+    let (_dir, path) = repository("a\nb\n")?;
+    fs::write(&path, "a\nc\n")?;
+    let mut session = diff_session(&[&path])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let [(_, old_doc), _] = panes(&session.app).unwrap();
+    assert!(doc!(session.app.editor, &old_doc)
+        .display_name()
+        .ends_with("file.rs (HEAD)"));
+    // Closing the diff leaves the file open.
+    session.keys(":q<ret>").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(doc!(app.editor).path(), Some(path.as_path()));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diffs_take_one_file_or_two() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+    fs::write(&a, "a\n")?;
+    fs::write(&b, "b\n")?;
+    let error = |paths: &[&Path]| diff_session(paths).err().map(|err| err.to_string());
+    let expected = Some("--diff takes one file or two".to_owned());
+    assert_eq!(error(&[&a, &b, Path::new("/dev/null")]), expected);
+    assert_eq!(error(&[dir.path()]), expected);
+    Ok(())
+}

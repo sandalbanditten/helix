@@ -47,6 +47,7 @@ FLAGS:
     -h, --help                     Print help information
     --strict                       Bail on error for commands that can fail.
     --tutor                        Load the tutorial
+    -d, --diff                     Diff two files, or a file against its committed version
     --health [CATEGORY]            Check for potential errors in editor setup
                                    CATEGORY can be a language or one of 'clipboard', 'languages',
                                    'all-languages' or 'all'. 'languages' is filtered according to

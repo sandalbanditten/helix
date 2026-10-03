@@ -442,6 +442,12 @@ impl AppBuilder {
         self
     }
 
+    /// Starts like `hx --diff` with the files given.
+    pub fn with_diff(mut self) -> Self {
+        self.args.diff = true;
+        self
+    }
+
     pub fn with_input_text<S: Into<String>>(mut self, input_text: S) -> Self {
         self.input = Some(test::print(&input_text.into()));
         self
@@ -457,7 +463,13 @@ impl AppBuilder {
             bail!("Changing the working directory to {path:?} is not yet supported for integration tests");
         }
 
-        if let Some((path, _)) = self.args.files.first().filter(|p| p.0.is_dir()) {
+        // A diff takes directories, not opening them.
+        if let Some((path, _)) = self
+            .args
+            .files
+            .first()
+            .filter(|p| p.0.is_dir() && !self.args.diff)
+        {
             bail!("Having the directory {path:?} in args.files[0] is not yet supported for integration tests");
         }
 

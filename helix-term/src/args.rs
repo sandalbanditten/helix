@@ -11,6 +11,8 @@ pub struct Args {
     pub health: bool,
     pub health_arg: Option<String>,
     pub load_tutor: bool,
+    /// Whether to show the diff of the files rather than the files.
+    pub diff: bool,
     pub fetch_grammars: bool,
     pub build_grammars: bool,
     pub strict: bool,
@@ -50,6 +52,7 @@ impl Args {
                 "--help" => args.display_help = true,
                 "--strict" => args.strict = true,
                 "--tutor" => args.load_tutor = true,
+                "--diff" => args.diff = true,
                 "--vsplit" => match args.split {
                     Some(_) => anyhow::bail!("can only set a split once of a specific type"),
                     None => args.split = Some(Layout::Vertical),
@@ -101,6 +104,7 @@ impl Args {
                             'v' => args.verbosity += 1,
                             'V' => args.display_version = true,
                             'h' => args.display_help = true,
+                            'd' => args.diff = true,
                             _ => anyhow::bail!("unexpected short arg {}", chr),
                         }
                     }

@@ -7,16 +7,22 @@
 mod run;
 pub(crate) mod styles;
 
-use std::{ops, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    ops,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as _};
 use helix_core::{movement::Direction, Position, Range, Rope, RopeSlice, Selection};
 use helix_loader::workspace_trust::TrustQuery;
+use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view, current, current_ref,
     diff_view::{Alignment, LineChange, Pane, Side},
     doc, doc_mut,
-    document::{from_reader, Mode},
+    document::{from_reader, read_to_string, Mode},
     editor::Action,
     graphics::{Rect, Style},
     view::ViewPosition,
@@ -53,6 +59,8 @@ pub struct Request {
     file: Option<PathBuf>,
     /// The view focused when the diff was asked for.
     origin: Option<ViewId>,
+    /// A buffer shown while the diff is worked out, closed once the panes show.
+    placeholder: Option<DocumentId>,
 }
 
 impl Request {
@@ -83,6 +91,25 @@ impl Request {
             buffer: Some((doc.id(), doc.version())),
             file: Some(path.to_path_buf()),
             origin: Some(view.id),
+            placeholder: None,
+        })
+    }
+
+    /// The diff of the file `old` and the file `new`, either of which may be `/dev/null`, as
+    /// when git runs a diff tool for a file added or deleted.
+    pub fn files(old: &Path, new: &Path, placeholder: Option<DocumentId>) -> anyhow::Result<Self> {
+        let null = Path::new("/dev/null");
+        let named = if new == null { old } else { new };
+        let name = |path: &Path| get_relative_path(path).display().to_string();
+        Ok(Self {
+            path: get_relative_path(named).into_owned(),
+            old: read(old)?,
+            new: read(new)?,
+            names: [name(old), name(new)],
+            buffer: None,
+            file: (new != null).then(|| new.to_path_buf()),
+            origin: None,
+            placeholder,
         })
     }
 
@@ -106,6 +133,41 @@ impl Request {
             ..self.clone()
         })
     }
+}
+
+/// The text of the file `path`, decoded like a buffer's.
+fn read(path: &Path) -> anyhow::Result<Rope> {
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let (text, ..) = read_to_string(&mut file, None)?;
+    if text.contains('\0') {
+        bail!("{} is not a text file", path.display());
+    }
+    Ok(Rope::from(text))
+}
+
+/// Opens the diff the command line asks for with `paths`: of two files, or of a file against its
+/// committed version.
+pub fn open_paths(
+    paths: &[PathBuf],
+    editor: &mut Editor,
+    view: &mut DiffView,
+) -> anyhow::Result<()> {
+    match paths {
+        [path] if !path.is_dir() => {
+            editor.open(path, Action::VerticalSplit)?;
+            let request = Request::buffer_against_head(editor)?;
+            view.open(request, editor);
+        }
+        [old, new] if !old.is_dir() && !new.is_dir() => {
+            // The editor quits without a view, so one waits for the panes.
+            let placeholder = editor.new_file(Action::VerticalSplit);
+            let request = Request::files(old, new, Some(placeholder))?;
+            view.open(request, editor);
+        }
+        _ => bail!("--diff takes one file or two"),
+    }
+    Ok(())
 }
 
 /// The two panes shown.
@@ -261,6 +323,9 @@ fn show(request: Request, alignment: Arc<Alignment>, editor: &mut Editor) -> Pai
         )));
     }
     editor.tree.set_zoom(&views);
+    if let Some(placeholder) = request.placeholder {
+        let _ = editor.close_document(placeholder, true);
+    }
 
     // The cursors go to the first hunk, the focus to the new side.
     let first = alignment.hunks().first().map_or(0, |hunk| hunk.start);
