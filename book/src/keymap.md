@@ -300,8 +300,8 @@ This layer is a kludge of mappings, mostly pickers.
 | -----   | -----------                                                             | -------                                    |
 | `f`     | Open file picker at LSP workspace root                                  | `file_picker`                              |
 | `F`     | Open file picker at current working directory                           | `file_picker_in_current_directory`         |
-| `e`     | Focus/unfocus the [file tree](#file-tree)                               | `focus_file_tree`                          |
-| `E`     | Toggle the [file tree](#file-tree)                                      | `toggle_file_tree`                         |
+| `e`     | Focus/unfocus the [file tree](#file-tree), or the [diff tree](./diff-view.md#diffs-of-many-files) | `focus_file_tree`                          |
+| `E`     | Toggle the [file tree](#file-tree), or the [diff tree](./diff-view.md#diffs-of-many-files)        | `toggle_file_tree`                         |
 | `u`     | Focus/unfocus the [undo tree](./undo-tree.md)                           | `focus_undo_tree`                          |
 | `U`     | Toggle the [undo tree](./undo-tree.md)                                  | `toggle_undo_tree`                         |
 | `.`     | Open file explorer at current buffer's directory                        | `file_explorer_in_current_buffer_directory`|
@@ -394,10 +394,10 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 | `[T`     | Go to previous test (**TS**)                 | `goto_prev_test`        |
 | `]p`     | Go to next paragraph                         | `goto_next_paragraph`   |
 | `[p`     | Go to previous paragraph                     | `goto_prev_paragraph`   |
-| `]g`     | Go to next change                            | `goto_next_change`      |
-| `[g`     | Go to previous change                        | `goto_prev_change`      |
-| `]G`     | Go to last change                            | `goto_last_change`      |
-| `[G`     | Go to first change                           | `goto_first_change`     |
+| `]g`     | Go to next change, or [diff](./diff-view.md) hunk | `goto_next_change`      |
+| `[g`     | Go to previous change, or diff hunk          | `goto_prev_change`      |
+| `]G`     | Go to last change, or diff hunk              | `goto_last_change`      |
+| `[G`     | Go to first change, or diff hunk             | `goto_first_change`     |
 | `[x`     | Go to next (X)HTML element                   | `goto_next_xml_element` |
 | `]x`     | Go to previous (X)HTML element               | `goto_prev_xml_element` |
 | `]Space` | Add newline below                            | `add_newline_below`     |

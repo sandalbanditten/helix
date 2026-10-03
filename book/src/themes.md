@@ -416,6 +416,11 @@ These scopes are used for theming the editor interface:
 | `diagnostic.deprecated`           | Diagnostics with deprecated tag (editing area)                                                 |
 | `diagnostic.spelling`             | Misspellings (editing area), defaults to `diagnostic.error`                                    |
 | `tabstop`                         | Snippet placeholder                                                                            |
+| `diff.plus.line`                  | Added lines in the [diff view](./diff-view.md), defaulting to a background of 19% `diff.plus` over `ui.background` |
+| `diff.plus.text`                  | The text that changed within added lines, defaulting to a background of 38% `diff.plus`         |
+| `diff.minus.line`                 | Removed lines in the diff view, defaulting to a background of 19% `diff.minus`                  |
+| `diff.minus.text`                 | The text that changed within removed lines, defaulting to a background of 38% `diff.minus`      |
+| `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text` |
 
 [editor-section]: ./configuration.md#editor-section
 [file-tree-section]: ./editor.md#editorfile-tree-section

@@ -20,6 +20,7 @@
   - [Compilation](./compilation.md)
   - [Auto-reload](./auto-reload.md)
   - [Undo tree](./undo-tree.md)
+  - [Diff view](./diff-view.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)

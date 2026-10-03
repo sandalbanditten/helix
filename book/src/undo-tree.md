@@ -77,10 +77,13 @@ over the right edge of the editor instead of making room beside it, so the text 
 With [`[editor.undo] diff`](./editor.md#editorundo-section), the bottom of the panel shows what the
 revision under the cursor changed, like vim-mundo's preview: the diff from its parent, under a row
 like `─ 1 → 2 ──`. `d` switches to the diff from the revision browsing started from to the one
-under the cursor, and back. `"difftastic"` runs [`difft`](https://difftastic.wilfred.me.uk/), which
-diffs the syntax of the file's language, named by the file's path; `"builtin"` shows a unified
-diff of the lines. The diff is worked out in the background a quarter of a second after the cursor
-stops, so moving through the tree stays fast.
+under the cursor, and back. The diff is shown inline, like `git diff`: three unchanged lines
+around each hunk, `┄┄┄` between hunks, and a hunk's removed lines before its added ones. Its lines
+are colored by the buffer's syntax and, like in the [diff view](./diff-view.md), by what changed.
+`"difftastic"` lines the revisions up with [`difft`](https://difftastic.wilfred.me.uk/), which
+diffs the syntax of the file's language, named by the file's path; `"builtin"` with a line diff of
+Helix's own, which highlights the words that changed. The diff is worked out in the background a
+quarter of a second after the cursor stops, so moving through the tree stays fast.
 
 The diff part takes the keys like a split below the tree: whatever moves to the split below in the
 editor, like `Ctrl-w j` or `Space w j`, moves there, and to the split above back to the tree. There

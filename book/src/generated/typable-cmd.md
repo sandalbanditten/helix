@@ -5,6 +5,8 @@
 | `:quit`, `:q` | Close the current view. |
 | `:quit!`, `:q!` | Force close the current view, ignoring unsaved changes. |
 | `:open`, `:o`, `:edit`, `:e` | Open a file from disk into the current view. |
+| `:diff` | Diff the buffer against HEAD. |
+| `:diff-changes` | Diff the changes since HEAD. |
 | `:dired` | Open a directory in dired. |
 | `:compile` | Run the compile command of the language in the compilation buffer. |
 | `:compile!` | Run the compile command of the language, even with unsaved buffers. |
