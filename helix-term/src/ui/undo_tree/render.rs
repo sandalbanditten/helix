@@ -20,11 +20,11 @@ use crate::ui::{
 
 /// The theme styles of the panel, resolved once per frame.
 pub struct Styles {
-    base: Style,
+    pub(super) base: Style,
     selected: Style,
     /// The color of the cursor's `>` mark.
     mark: Style,
-    guide: Style,
+    pub(super) guide: Style,
     /// The node of the revision browsing started from, or of the current one.
     current: Style,
     /// Revision numbers and ages.
@@ -32,8 +32,8 @@ pub struct Styles {
     saved: Style,
     deleted: Style,
     matched: Style,
-    track: Style,
-    thumb: Style,
+    pub(super) track: Style,
+    pub(super) thumb: Style,
 }
 
 impl Styles {

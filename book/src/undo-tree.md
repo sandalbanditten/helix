@@ -49,6 +49,8 @@ branch you went into.
 | `zt`, `zb`           | Align the cursor row to the top, bottom |
 | `/`                  | Search the text revisions inserted or deleted |
 | `n`, `N`             | Go to the next, previous match |
+| `d`                  | Toggle the diff against the start |
+| `J`, `K`             | Scroll the diff down, up |
 | `+`, `-`             | Widen, narrow the undo tree |
 | `=`                  | Fit the width to the widest row |
 | `?`                  | Show these keys |
@@ -62,9 +64,19 @@ highlights the matching changes; `Enter` keeps it and `Escape` goes back.
 The panel fits its width to the widest row when it appears, within limits; after `+` or `-` it
 keeps the width you set.
 
+## Diff
+
+With [`[editor.undo] diff`](./editor.md#editorundo-section), the bottom of the panel shows what the
+revision under the cursor changed, like vim-mundo's preview: the diff from its parent, under a row
+like `─ 1 → 2 ──`. `d` switches to the diff from the revision browsing started from to the one
+under the cursor, and back. `"difftastic"` runs [`difft`](https://difftastic.wilfred.me.uk/), which
+diffs the syntax of the file's language, named by the file's path; `"builtin"` shows a unified
+diff of the lines. The diff is worked out in the background a quarter of a second after the cursor
+stops, so moving through the tree stays fast; long lines wrap.
+
 ## Undo files
 
 With [`[editor.undo] persist`](./editor.md#editorundo-section), the history of a file outlives
 Helix: it is kept in an undo file when the file is written and comes back when the file is opened
 again, so `u` goes back past the session. Ages shown in the tree count from when each change was
-made; changes older than a week show their date (UTC).
+made; changes older than a week show their date.

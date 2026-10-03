@@ -330,6 +330,11 @@ pub struct UndoConfig {
     /// The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps
     /// all. Defaults to `1000`.
     pub max_revisions: usize,
+    /// What shows the diff of the revision under the cursor below the undo tree, if anything.
+    /// Defaults to `none`.
+    pub diff: UndoDiff,
+    /// The rows of the undo tree's diff. Defaults to `12`.
+    pub diff_height: u16,
 }
 
 impl Default for UndoConfig {
@@ -338,8 +343,23 @@ impl Default for UndoConfig {
             persist: false,
             dir: None,
             max_revisions: 1000,
+            diff: UndoDiff::default(),
+            diff_height: 12,
         }
     }
+}
+
+/// What shows the diff below the undo tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UndoDiff {
+    /// No diff.
+    #[default]
+    None,
+    /// A line diff of Helix's own.
+    Builtin,
+    /// `difft`, falling back to the builtin diff where it isn't installed.
+    Difftastic,
 }
 
 impl UndoConfig {

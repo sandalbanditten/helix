@@ -36,6 +36,7 @@ impl Project {
             persist: true,
             dir: Some(self.undo_dir.clone()),
             max_revisions,
+            ..Default::default()
         };
         AppBuilder::new()
             .with_file(&self.file, None)

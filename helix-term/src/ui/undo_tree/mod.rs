@@ -6,6 +6,7 @@
 //! revisions on the way, the diff gutter showing the changes against the revision browsing
 //! started from. `Enter` keeps the revision reached, `Esc` goes back.
 
+mod diff;
 mod graph;
 mod keys;
 mod render;
@@ -13,8 +14,10 @@ mod rows;
 
 use std::time::SystemTime;
 
-use helix_core::Position;
+use helix_core::{Position, Rope};
+use helix_stdx::path::get_relative_path;
 use helix_view::{
+    editor::UndoDiff,
     graphics::{CursorKind, Rect},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     smooth_scroll::SmoothOffset,
@@ -23,6 +26,7 @@ use helix_view::{
 use tui::buffer::Buffer as Surface;
 
 use self::{
+    diff::{Compare, DiffPane, Output, Request},
     keys::{Action, Lookup},
     render::{Columns, Scene, Styles},
     rows::Rows,
@@ -30,7 +34,10 @@ use self::{
 use crate::{
     compositor::{Component, Context, Event, EventResult},
     ctrl, key,
-    ui::{dock, Prompt},
+    ui::{
+        dock::{self, Side},
+        Prompt,
+    },
 };
 
 /// When the panel is shown.
@@ -48,6 +55,8 @@ struct Browse {
     view: ViewId,
     /// The revision the buffer was at, which `Esc` goes back to.
     start: usize,
+    /// The text at `start`.
+    start_text: Rope,
 }
 
 /// A search of the text revisions changed.
@@ -84,6 +93,7 @@ pub struct UndoTree {
     /// The buffer and revision of the cursor when it was last brought into view.
     revealed: Option<(DocumentId, usize)>,
     search: Search,
+    diff: DiffPane,
 }
 
 impl UndoTree {
@@ -120,11 +130,13 @@ impl UndoTree {
         let (view, doc) = helix_view::current!(editor);
         doc.append_changes_to_history(view);
         let start = doc.get_current_revision();
-        doc.set_diff_override(Some(doc.text().clone()));
+        let start_text = doc.text().clone();
+        doc.set_diff_override(Some(start_text.clone()));
         self.browse = Some(Browse {
             doc: doc.id(),
             view: view.id,
             start,
+            start_text,
         });
         self.revealed = None;
     }
@@ -136,6 +148,7 @@ impl UndoTree {
         };
         self.pending.clear();
         self.search.prompt = None;
+        self.diff.compare = Compare::Parent;
         if let Some(doc) = editor.document_mut(browse.doc) {
             doc.set_diff_override(None);
         }
@@ -225,6 +238,7 @@ impl UndoTree {
         let Some(rows) = &self.rows else {
             return;
         };
+        let (area, diff_area) = self.split(area, cx.editor);
         let height = area.height as usize;
         let cursor_row = rows.graph.row_of(current);
         // The cursor comes into view when it moves, or the buffer changes; scrolling keeps it
@@ -249,6 +263,85 @@ impl UndoTree {
             matches: &self.search.matches,
         }
         .render(area, surface);
+        if let Some(diff_area) = diff_area {
+            self.render_diff(diff_area, current, surface, cx.editor);
+        }
+    }
+
+    /// The area of the graph and the one of the diff below it, if one is shown.
+    fn split(&self, area: Rect, editor: &Editor) -> (Rect, Option<Rect>) {
+        let config = &editor.config().undo;
+        if config.diff == UndoDiff::None {
+            return (area, None);
+        }
+        // The graph keeps at least half the panel; the diff has a row naming it.
+        let height = config.diff_height.min(area.height / 2).saturating_add(1);
+        let diff = area.clip_top(area.height.saturating_sub(height));
+        (area.clip_bottom(diff.height), Some(diff))
+    }
+
+    /// Draws the diff of `current`, the revision under the cursor, asking for it first if it
+    /// hasn't been.
+    fn render_diff(
+        &mut self,
+        area: Rect,
+        current: usize,
+        surface: &mut Surface,
+        editor: &mut Editor,
+    ) {
+        let (content, _) = dock::split(area, Side::Right);
+        let Some((_, doc_id)) = self.target(editor) else {
+            return;
+        };
+        let doc = doc_mut(editor, doc_id);
+        // Changes still to commit make the text no revision's.
+        if doc.changes().is_empty() {
+            let compare = self.diff.compare;
+            let history = doc.history.get_mut();
+            let against = match (&self.browse, compare) {
+                (Some(browse), Compare::Start) => Some(browse.start),
+                _ => (current != 0).then(|| history.parent(current)),
+            };
+            let request = Request {
+                doc: doc_id,
+                revision: current,
+                against,
+                width: content.width,
+                tool: editor.config().undo.diff,
+            };
+            if !self.diff.is_asked(&request) {
+                let doc = doc_mut(editor, doc_id);
+                let new = doc.text().clone();
+                let old = match (&self.browse, compare) {
+                    (Some(browse), Compare::Start) => browse.start_text.clone(),
+                    _ => {
+                        let mut old = new.clone();
+                        let (_, inversion) = doc.history.get_mut().changes(current);
+                        inversion.apply(&mut old);
+                        old
+                    }
+                };
+                let path = doc.path().map_or_else(
+                    || "buffer".to_owned(),
+                    |path| get_relative_path(path).to_string_lossy().into_owned(),
+                );
+                self.diff.ask(request, Some((old, new)), path, editor);
+            }
+        }
+        let styles = Styles::new(&editor.theme);
+        self.diff
+            .render(content, surface, styles.base, styles.guide);
+        dock::render_rail(surface, area, Side::Right, 0..0, styles.track, styles.thumb);
+    }
+
+    /// Takes the diff that the request of `generation` came out as.
+    pub(crate) fn diff_ready(
+        &mut self,
+        generation: u64,
+        output: Output,
+        theme: &helix_view::Theme,
+    ) {
+        self.diff.ready(generation, output, theme);
     }
 
     /// Draws the line of a search over the command line of `area`, the screen.
@@ -353,6 +446,24 @@ impl UndoTree {
                     |_, _, _| {},
                 ));
                 self.search.origin = Some(current);
+                None
+            }
+            Action::ToggleDiff => {
+                self.diff.compare = match self.diff.compare {
+                    Compare::Parent => Compare::Start,
+                    Compare::Start => Compare::Parent,
+                };
+                None
+            }
+            Action::DiffDown | Action::DiffUp => {
+                let rows = editor.config().undo.diff_height.max(2) as isize / 2;
+                let rows = if action == Action::DiffDown {
+                    rows
+                } else {
+                    -rows
+                };
+                let width = self.width.saturating_sub(1) as usize;
+                self.diff.scroll_by(rows, width);
                 None
             }
             Action::NextMatch | Action::PreviousMatch => {

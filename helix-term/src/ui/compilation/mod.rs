@@ -5,9 +5,9 @@
 //! process group of its own, read off the main thread; dropping the document stops it.
 
 mod locus;
-mod output;
+pub(crate) mod output;
 mod run;
-mod screen;
+pub(crate) mod screen;
 
 use std::{path::PathBuf, time::Instant};
 

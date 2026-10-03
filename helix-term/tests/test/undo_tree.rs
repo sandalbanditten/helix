@@ -171,3 +171,82 @@ async fn the_diff_gutter_compares_with_the_start_while_browsing() -> anyhow::Res
     )
     .await
 }
+
+/// An app like [`branched`] whose undo tree shows diffs with `tool`.
+fn with_diff(tool: helix_view::editor::UndoDiff) -> anyhow::Result<Application> {
+    let mut config = test_config();
+    config.editor.undo.diff = tool;
+    config.editor.undo.diff_height = 6;
+    AppBuilder::new()
+        .with_config(config)
+        .with_input_text("#[x|]#\n")
+        .build()
+}
+
+/// Waits past the time the diff waits for the cursor to rest, and some.
+fn rest(_: &Application) {
+    std::thread::sleep(std::time::Duration::from_millis(600));
+}
+
+/// Keys that change nothing but have the editor handle what came in meanwhile: a step without
+/// keys would wait for an event forever.
+const NOTHING: &str = "zz";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_shows_what_the_revision_changed() -> anyhow::Result<()> {
+    let mut app = with_diff(helix_view::editor::UndoDiff::Builtin)?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            (Some("<space>uj"), Some(&rest)),
+            (
+                Some(NOTHING),
+                Some(&|app| {
+                    let screen = screen(app).join("\n");
+                    assert!(screen.contains("─ 1 → 2 ─"), "{screen}");
+                    assert!(screen.contains("-x1"), "{screen}");
+                    assert!(screen.contains("+x12"), "{screen}");
+                }),
+            ),
+            // Against the revision browsing started from.
+            (Some("d"), Some(&rest)),
+            (
+                Some(NOTHING),
+                Some(&|app| {
+                    let screen = screen(app).join("\n");
+                    assert!(screen.contains("─ 3 → 2 ─"), "{screen}");
+                    assert!(screen.contains("-x13"), "{screen}");
+                }),
+            ),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn difftastic_shows_the_diff_when_installed() -> anyhow::Result<()> {
+    if helix_stdx::env::which("difft").is_err() {
+        return Ok(());
+    }
+    let mut app = with_diff(helix_view::editor::UndoDiff::Difftastic)?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            (Some("<space>uj"), Some(&rest)),
+            (
+                Some(NOTHING),
+                Some(&|app| {
+                    let screen = screen(app).join("\n");
+                    // difft's own header: the name it was given and the language it took.
+                    assert!(screen.contains("buffer --- Text"), "{screen}");
+                    assert!(screen.contains("x12"), "{screen}");
+                }),
+            ),
+        ],
+        false,
+    )
+    .await
+}

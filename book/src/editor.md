@@ -418,6 +418,8 @@ files along. Files in the temporary directory and the messages git asks for, lik
 | `persist` | Whether written files keep their undo history in undo files | `false` |
 | `dir` | The directory of the undo files, one per file, named after its path with `%` for each `/` | `undo` in the state directory, `~/.local/state/helix/undo` on Linux |
 | `max-revisions` | The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps all | `1000` |
+| `diff` | What shows the diff of the revision under the cursor below the [undo tree](./undo-tree.md): `"none"`, `"builtin"` for a line diff of Helix's own, or `"difftastic"` for [`difft`](https://difftastic.wilfred.me.uk/), falling back to the builtin diff where it isn't installed | `"none"` |
+| `diff-height` | The rows of the undo tree's diff | `12` |
 
 ### `[editor.buffer-picker]` Section
 

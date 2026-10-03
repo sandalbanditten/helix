@@ -338,6 +338,7 @@ pub fn undo_config(dir: &std::path::Path) -> Config {
         persist: true,
         dir: Some(dir.to_path_buf()),
         max_revisions: 0,
+        ..Default::default()
     };
     config
 }
