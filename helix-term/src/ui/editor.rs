@@ -86,6 +86,11 @@ impl EditorView {
         }
     }
 
+    /// Whether one of the panels docked beside the editor has the keys.
+    fn panel_focused(&self) -> bool {
+        self.file_tree.is_focused() || self.undo_tree.is_focused() || self.diff_view.tree_focused()
+    }
+
     /// Whether the question about buffers changed on disk is up: only in normal mode between
     /// key sequences, so that keys typed for something else never answer it.
     fn asks_about_reloads(&mut self, editor: &Editor) -> bool {
@@ -117,7 +122,7 @@ impl EditorView {
         // While a panel has the keys, the text is drawn as unfocused; the statusline still shows
         // the view's focus and mode.
         let statusline_focused = is_focused;
-        let is_focused = is_focused && !self.file_tree.is_focused() && !self.undo_tree.is_focused();
+        let is_focused = is_focused && !self.panel_focused();
         let inner = view.inner_area(doc);
         let area = view.area;
         let theme = &editor.theme;
@@ -1057,6 +1062,7 @@ impl EditorView {
         if unfocus_panels {
             self.file_tree.unfocus();
             self.undo_tree.unfocus(cxt.editor);
+            self.diff_view.unfocus_tree();
         }
 
         let mut execute_command = |command: &commands::MappableCommand| {
@@ -1150,6 +1156,7 @@ impl EditorView {
                     && !self.keymaps.contains_key(mode, event)
                     && doc!(cxt.editor).diff_view.is_some() =>
             {
+                self.diff_view.keep_files();
                 diff_view::open_file(cxt.editor);
             }
             // special handling for repeat operator
@@ -1336,11 +1343,16 @@ impl EditorView {
 
         // The views were drawn as unfocused while a panel had the keys, which a press in the
         // editor takes back below.
-        let file_tree_focused = self.file_tree.is_focused() || self.undo_tree.is_focused();
+        let file_tree_focused = self.panel_focused();
         // Whether a view was drawn as focused, revealing concealed text at its cursors.
         let drawn_focused =
             |editor: &Editor, view_id| editor.tree.focus == view_id && !file_tree_focused;
 
+        if let Some(result) = self.diff_view.handle_tree_mouse(event, cxt.editor) {
+            self.file_tree.unfocus();
+            self.undo_tree.unfocus(cxt.editor);
+            return result;
+        }
         if let Some(result) = self.undo_tree.handle_mouse(event, cxt.editor) {
             self.file_tree.unfocus();
             return result;
@@ -1353,6 +1365,7 @@ impl EditorView {
         if matches!(event.kind, MouseEventKind::Down(_)) {
             self.file_tree.unfocus();
             self.undo_tree.unfocus(cxt.editor);
+            self.diff_view.unfocus_tree();
         }
 
         let config = cxt.editor.config();
@@ -1621,6 +1634,7 @@ impl Component for EditorView {
         match event {
             Event::Paste(contents) => {
                 self.undo_tree.unfocus(cx.editor);
+                self.diff_view.unfocus_tree();
                 if self.file_tree.is_focused() {
                     let mut context = crate::compositor::Context {
                         editor: cx.editor,
@@ -1682,6 +1696,22 @@ impl Component for EditorView {
                         jobs: cx.jobs,
                     };
                     let result = self.undo_tree.handle_key(key, &mut context);
+                    if matches!(result, EventResult::Consumed(_)) {
+                        return result;
+                    }
+                }
+                if self.diff_view.tree_focused()
+                    && self.keymaps.pending().is_empty()
+                    && self.keymaps.sticky().is_none()
+                    && self.on_next_key.is_none()
+                    && cx.editor.count.is_none()
+                {
+                    let mut context = crate::compositor::Context {
+                        editor: cx.editor,
+                        scroll: None,
+                        jobs: cx.jobs,
+                    };
+                    let result = self.diff_view.handle_tree_key(key, &mut context);
                     if matches!(result, EventResult::Consumed(_)) {
                         return result;
                     }
@@ -1877,7 +1907,12 @@ impl Component for EditorView {
                 views_area = views_area.clip_right(undo_tree_area.width);
             }
         }
-        let file_tree_area = self.file_tree.layout(views_area, cx.editor);
+        // The diff tree of a diff of many takes the file tree's place.
+        let file_tree_area = if self.diff_view.has_tree() {
+            self.diff_view.layout_tree(views_area, cx.editor)
+        } else {
+            self.file_tree.layout(views_area, cx.editor)
+        };
         if let Some(file_tree_area) = file_tree_area {
             views_area = if file_tree_area.left() == views_area.left() {
                 views_area.clip_left(file_tree_area.width)
@@ -1922,7 +1957,11 @@ impl Component for EditorView {
         }
 
         if let Some(file_tree_area) = file_tree_area {
-            self.file_tree.render(file_tree_area, surface, cx);
+            if self.diff_view.has_tree() {
+                self.diff_view.render_tree(file_tree_area, surface, cx);
+            } else {
+                self.file_tree.render(file_tree_area, surface, cx);
+            }
         }
         if let Some(undo_tree_area) = undo_tree_area {
             self.undo_tree.render(undo_tree_area, surface, cx);
@@ -2021,9 +2060,13 @@ impl Component for EditorView {
 
         self.file_tree.render_command_line(area, surface, cx);
         self.undo_tree.render_command_line(area, surface, cx);
+        self.diff_view.render_tree_command_line(area, surface, cx);
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        if self.diff_view.tree_focused() {
+            return self.diff_view.tree_cursor(area, editor);
+        }
         if self.file_tree.is_focused() {
             return self.file_tree.cursor(area, editor);
         }

@@ -1408,8 +1408,14 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
     if ui::compilation::open_on_cursor_line(cx.editor) {
         return;
     }
-    // A pane of the diff view opens its file in the diff's place.
-    if ui::diff_view::open_file(cx.editor) {
+    // A pane of the diff view opens its file in the diff's place, keeping a diff tree.
+    if doc!(cx.editor).diff_view.is_some() {
+        cx.callback.push(Box::new(|compositor, _| {
+            if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+                editor_view.diff_view.keep_files();
+            }
+        }));
+        ui::diff_view::open_file(cx.editor);
         return;
     }
     let (view, doc) = current_ref!(cx.editor);
@@ -3205,7 +3211,12 @@ fn focus_file_tree(cx: &mut Context) {
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
             editor_view.undo_tree.unfocus(cx.editor);
-            editor_view.file_tree.toggle_focus(cx.editor);
+            // The diff tree of a diff of many takes the file tree's place.
+            if editor_view.diff_view.has_tree() {
+                editor_view.diff_view.toggle_tree_focus();
+            } else {
+                editor_view.file_tree.toggle_focus(cx.editor);
+            }
         }
     }));
 }
@@ -3213,7 +3224,11 @@ fn focus_file_tree(cx: &mut Context) {
 fn toggle_file_tree(cx: &mut Context) {
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
-            editor_view.file_tree.toggle(cx.editor);
+            if editor_view.diff_view.has_tree() {
+                editor_view.diff_view.toggle_tree();
+            } else {
+                editor_view.file_tree.toggle(cx.editor);
+            }
         }
     }));
 }
@@ -3226,6 +3241,7 @@ fn focus_undo_tree(cx: &mut Context) {
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
             editor_view.file_tree.unfocus();
+            editor_view.diff_view.unfocus_tree();
             editor_view.undo_tree.toggle_focus(cx.editor);
         }
     }));
@@ -4333,12 +4349,16 @@ fn goto_prev_change(cx: &mut Context) {
 }
 
 fn goto_next_change_impl(cx: &mut Context, direction: Direction) {
-    // The panes of the diff view go through the hunks of their diff.
+    // The panes of the diff view go through the hunks of their diff, and past the last into
+    // the next file of a diff of many.
     if doc!(cx.editor).diff_view.is_some() {
-        let count = cx.count();
-        cx.editor.apply_motion(move |editor| {
-            ui::diff_view::goto_hunk(editor, direction, count);
-        });
+        if !ui::diff_view::goto_hunk(cx.editor, direction, cx.count()) {
+            cx.callback.push(Box::new(move |compositor, cx| {
+                if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+                    editor_view.diff_view.goto_next_file(direction, cx.editor);
+                }
+            }));
+        }
         return;
     }
     let count = cx.count() as u32 - 1;

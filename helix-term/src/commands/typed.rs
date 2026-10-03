@@ -194,6 +194,41 @@ fn diff(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
     Ok(())
 }
 
+fn diff_changes(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let dir = match args.first() {
+        Some(dir) => {
+            let dir =
+                helix_stdx::path::canonicalize(helix_stdx::path::expand_tilde(Path::new(dir)));
+            if !dir.is_dir() {
+                bail!("{} is not a directory", dir.display());
+            }
+            dir
+        }
+        None => helix_stdx::env::current_working_dir(),
+    };
+    let origin = view!(cx.editor).id;
+    let callback = async move {
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(view) = compositor.find::<ui::EditorView>() {
+                    let many = ui::diff_view::Many::Changes(dir);
+                    view.diff_view.open_many(many, Some(origin), None, editor);
+                }
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
+    Ok(())
+}
+
 fn dired(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -3261,6 +3296,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "diff-changes",
+        aliases: &[],
+        doc: "Diff the changes since HEAD.",
+        fun: diff_changes,
+        completer: CommandCompleter::positional(&[completers::directory]),
+        signature: Signature {
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

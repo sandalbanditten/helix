@@ -3,9 +3,13 @@
 //! A row reads `[git][cursor][ancestor lanes][branch][tip][ icon ][label]…[unsaved]`, with the
 //! unsaved mark in the last column so it stays visible when the label is cut short.
 
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use helix_view::{
+    diff_view::builtin::Stats,
     editor::FileTreeSide,
     graphics::{Color, Modifier, Rect, Style},
     Editor, Theme,
@@ -21,6 +25,27 @@ use super::{
     viewport,
 };
 use crate::ui::dock;
+
+/// The lines added and removed under an entry, as the diff tree shows them after its label:
+/// ` +12 -3`, leaving out a count of none.
+pub fn stats_text(stats: Stats) -> (String, String) {
+    let part = |sign, count| {
+        if count == 0 {
+            String::new()
+        } else {
+            format!(" {sign}{count}")
+        }
+    };
+    (part('+', stats.added), part('-', stats.removed))
+}
+
+/// The columns `stats` takes after a label.
+pub fn stats_width(stats: Option<Stats>) -> usize {
+    stats.map_or(0, |stats| {
+        let (added, removed) = stats_text(stats);
+        added.len() + removed.len()
+    })
+}
 
 /// The columns a row needs to show its label in full, unsaved mark included.
 pub fn natural_width(row: &Row, root: bool, icons: bool) -> usize {
@@ -53,6 +78,8 @@ pub struct Styles {
     modified: Style,
     deleted: Style,
     conflict: Style,
+    added: Style,
+    removed: Style,
     track: Style,
     thumb: Style,
     matched: Style,
@@ -104,6 +131,8 @@ impl Styles {
             modified: theme.get("diff.delta.gutter"),
             deleted: theme.get("diff.minus.gutter"),
             conflict: theme.get("diff.delta.conflict"),
+            added: theme.get("diff.plus"),
+            removed: theme.get("diff.minus"),
             track,
             thumb: track.fg(theme.get("ui.menu.scroll").fg.unwrap_or(Color::Reset)),
             // Like the matches of the picker.
@@ -133,6 +162,14 @@ pub struct BufferMarks<'a> {
 }
 
 impl<'a> BufferMarks<'a> {
+    /// Marks only `focused`, the entry shown elsewhere, like the diff tree's file in the panes.
+    pub fn focused(focused: Option<&'a Path>) -> Self {
+        Self {
+            focused,
+            ..Self::default()
+        }
+    }
+
     pub fn new(editor: &'a Editor, root: &Path) -> Self {
         let mut marks = Self::default();
         for doc in editor.documents() {
@@ -180,6 +217,8 @@ pub struct Scene<'a> {
     pub edit: Option<EditRow<'a>>,
     /// The rows matching the search, in order, with the characters of their labels that match.
     pub matches: &'a [(usize, Vec<usize>)],
+    /// The lines added and removed under each entry, shown after its label, by its path.
+    pub stats: Option<&'a HashMap<PathBuf, Stats>>,
 }
 
 impl Scene<'_> {
@@ -347,7 +386,15 @@ impl Scene<'_> {
             (None, None) => parts.push((&row.label, label_style)),
         }
 
-        let last = area.right() - 1;
+        // The stats keep their columns at the end of a row too narrow for its label.
+        let stats = self
+            .stats
+            .filter(|_| entry)
+            .and_then(|stats| stats.get(path).copied());
+        let stats_width = stats_width(stats) as u16;
+        let last = (area.right() - 1)
+            .saturating_sub(stats_width)
+            .max(area.left() + 1);
         let mut x = area.left();
         for (text, style) in parts {
             if x >= last {
@@ -358,10 +405,24 @@ impl Scene<'_> {
         if edit.is_some() {
             return Some(Rect::new(x, area.y, last.saturating_sub(x), 1));
         }
-        if natural_width(row, root, self.icons) > area.width as usize {
+        if natural_width(row, root, self.icons) + stats_width as usize > area.width as usize {
             surface[(last - 1, area.y)]
                 .set_symbol("…")
                 .set_style(label_style);
+            x = last;
+        }
+        if let Some(stats) = stats {
+            let (added, removed) = stats_text(stats);
+            let end = area.right() - 1;
+            for (text, style) in [(added, styles.added), (removed, styles.removed)] {
+                (x, _) = surface.set_stringn(
+                    x,
+                    area.y,
+                    &text,
+                    end.saturating_sub(x) as usize,
+                    row_style.patch(style),
+                );
+            }
         }
 
         let (unsaved, style) = if entry && self.marks.modified.contains(path) {
@@ -369,7 +430,9 @@ impl Scene<'_> {
         } else {
             (" ", row_style)
         };
-        surface[(last, area.y)].set_symbol(unsaved).set_style(style);
+        surface[(area.right() - 1, area.y)]
+            .set_symbol(unsaved)
+            .set_style(style);
         None
     }
 
@@ -521,6 +584,7 @@ mod tests {
             side,
             edit: None,
             matches: &[],
+            stats: None,
         }
         .render(area, &mut surface);
         surface

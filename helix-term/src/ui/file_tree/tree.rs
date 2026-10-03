@@ -6,7 +6,7 @@
 //! the [`NodeId`] of every entry that survives, so the cursor and expansion survive refreshes.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::{OsStr, OsString},
     mem,
     path::{Component, Path, PathBuf},
@@ -139,6 +139,56 @@ impl Tree {
             sort,
             listing_requests: vec![root],
         }
+    }
+
+    /// A tree of the files at `paths`, relative to the root named `root_name`, with every
+    /// directory expanded: the tree of what a diff holds rather than of a directory on disk.
+    pub fn from_paths<'a>(
+        root_name: OsString,
+        paths: impl IntoIterator<Item = &'a Path>,
+        sort: FileTreeSort,
+    ) -> Self {
+        let mut tree = Self::new(root_name, sort);
+        let mut dirs: BTreeMap<PathBuf, BTreeMap<OsString, Kind>> =
+            BTreeMap::from([(PathBuf::new(), BTreeMap::new())]);
+        for path in paths {
+            let names: Vec<_> = path
+                .components()
+                .filter_map(|component| match component {
+                    Component::Normal(name) => Some(name),
+                    _ => None,
+                })
+                .collect();
+            let mut dir = PathBuf::new();
+            for (i, name) in names.iter().enumerate() {
+                let kind = if i + 1 == names.len() {
+                    Kind::File { executable: false }
+                } else {
+                    Kind::Directory
+                };
+                dirs.entry(dir.clone())
+                    .or_default()
+                    .insert(name.to_os_string(), kind);
+                dir.push(name);
+            }
+        }
+        // A directory sorts before the ones in it, so its node exists when they are listed.
+        for (dir, entries) in dirs {
+            let id = tree.find(&dir).expect("listed with its parent");
+            tree.nodes[id].expanded = true;
+            let listing = entries
+                .into_iter()
+                .map(|(name, kind)| Entry {
+                    name,
+                    kind,
+                    ignored: false,
+                    only_child: None,
+                })
+                .collect();
+            tree.apply_listing(id, Some(listing));
+        }
+        tree.listing_requests.clear();
+        tree
     }
 
     pub fn root(&self) -> NodeId {

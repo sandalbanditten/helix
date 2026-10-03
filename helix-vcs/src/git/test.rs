@@ -85,6 +85,21 @@ fn modified_file() {
     );
 }
 
+#[test]
+fn deleted_file() {
+    let temp_git = empty_git_repo();
+    let file = temp_git.path().join("file.txt");
+    let contents = b"foo".as_slice();
+    File::create(&file).unwrap().write_all(contents).unwrap();
+    create_commit(temp_git.path(), true);
+    std::fs::remove_file(&file).unwrap();
+
+    assert_eq!(
+        git::get_diff_base(&file, true).unwrap(),
+        Vec::from(contents)
+    );
+}
+
 /// Test that `get_file_head` does not return content for a directory.
 /// This is important to correctly cover cases where a directory is removed and replaced by a file.
 /// If the contents of the directory object were returned a diff between a path and the directory children would be produced.

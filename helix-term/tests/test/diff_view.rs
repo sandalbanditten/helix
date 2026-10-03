@@ -399,14 +399,152 @@ async fn one_file_is_diffed_against_its_committed_version() -> anyhow::Result<()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn diffs_take_one_file_or_two() -> anyhow::Result<()> {
+async fn diffs_take_one_path_or_two_alike() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let (a, b) = (dir.path().join("a"), dir.path().join("b"));
     fs::write(&a, "a\n")?;
     fs::write(&b, "b\n")?;
     let error = |paths: &[&Path]| diff_session(paths).err().map(|err| err.to_string());
-    let expected = Some("--diff takes one file or two".to_owned());
+    let expected = Some("--diff takes one or two files, or directories".to_owned());
     assert_eq!(error(&[&a, &b, Path::new("/dev/null")]), expected);
-    assert_eq!(error(&[dir.path()]), expected);
+    assert_eq!(error(&[&a, dir.path()]), expected, "a file and a directory");
     Ok(())
+}
+
+/// Two directories: `old` and `new`, with `sub/b.rs` and `a.rs` changed and `c.rs` added.
+fn directories() -> anyhow::Result<(tempfile::TempDir, PathBuf, PathBuf)> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old"), dir.path().join("new"));
+    for (root, files) in [
+        (
+            &old,
+            [("sub/b.rs", "b\n"), ("a.rs", "a\nx\n"), ("same.rs", "s\n")].as_slice(),
+        ),
+        (
+            &new,
+            [
+                ("sub/b.rs", "B\n"),
+                ("a.rs", "a\ny\n"),
+                ("same.rs", "s\n"),
+                ("c.rs", "c\n"),
+            ]
+            .as_slice(),
+        ),
+    ] {
+        for (path, text) in files {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, text)?;
+        }
+    }
+    Ok((dir, old, new))
+}
+
+/// The name of the focused buffer.
+fn name(app: &Application) -> String {
+    doc!(app.editor).display_name().into_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hunk_jumps_go_through_the_files_of_a_diff_of_many() -> anyhow::Result<()> {
+    let (_dir, old, new) = directories()?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session
+        .until("the first file", |app| panes(app).is_some())
+        .await;
+    assert_eq!(name(&session.app), "sub/b.rs (new)", "directories first");
+    session.keys("]g").await?;
+    session
+        .until("the next file", |app| name(app) == "a.rs (new)")
+        .await;
+    assert_eq!(selection(&session.app), (2, 3), "at its first hunk");
+    session.keys("[g").await?;
+    session
+        .until("the previous file", |app| name(app) == "sub/b.rs (new)")
+        .await;
+    session.quit().await
+}
+
+/// The rows of the screen as last drawn, without trailing spaces.
+fn screen(app: &Application) -> Vec<String> {
+    let screen = app.screen();
+    screen
+        .content
+        .chunks(screen.area.width as usize)
+        .map(|row| {
+            let row: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+            row.trim_end().to_owned()
+        })
+        .collect()
+}
+
+/// Whether a row of the screen holds `text`.
+fn shows(app: &Application, text: &str) -> bool {
+    screen(app).iter().any(|row| row.contains(text))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_tree_lists_the_files_with_their_lines() -> anyhow::Result<()> {
+    let (_dir, old, new) = directories()?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session
+        .until("the stats", |app| shows(app, "a.rs +1 -1"))
+        .await;
+    let app = &session.app;
+    assert!(shows(app, "new +3 -2"), "the root sums the files up");
+    assert!(shows(app, "b.rs +1 -1"));
+    assert!(shows(app, "c.rs +1"));
+    assert!(!shows(app, "same.rs"));
+
+    // `space e` focuses the tree on the file shown; Enter shows another one's diff.
+    session.keys("<space>e").await?;
+    session.keys("j<ret>").await?;
+    session
+        .until("the diff of a.rs", |app| name(app) == "a.rs (new)")
+        .await;
+
+    // `gf` opens the file, keeping the tree.
+    session.keys("gf").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert!(doc!(app.editor)
+        .path()
+        .is_some_and(|path| path.ends_with("new/a.rs")));
+    assert!(shows(app, "a.rs +1 -1"));
+
+    // Enter in the tree shows the diff again; closing it ends the diff of many.
+    session.keys("<space>e<ret>").await?;
+    session
+        .until("the diff again", |app| panes(app).is_some())
+        .await;
+    session.keys(":q<ret>").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert!(!shows(app, "a.rs +1 -1"), "the tree is gone");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changes_since_head_are_diffed_together() -> anyhow::Result<()> {
+    let (dir, path) = repository("a\nb\n")?;
+    fs::write(&path, "a\nc\n")?;
+    fs::write(dir.path().join("new.rs"), "n\n")?;
+    let mut session = session(&path, DiffTool::Builtin)?;
+    let origin = session.app.editor.tree.focus;
+    let dir = helix_stdx::path::canonicalize(dir.path());
+    session
+        .keys(&format!(":diff-changes {}<ret>", dir.display()))
+        .await?;
+    session
+        .until("the stats", |app| shows(app, "new.rs +1"))
+        .await;
+    assert_eq!(name(&session.app), "file.rs");
+    assert!(shows(&session.app, "file.rs +1 -1"));
+    session.keys(":q<ret>").await?;
+    let app = &session.app;
+    assert_eq!(app.editor.tree.focus, origin, "the layout comes back");
+    assert!(!shows(app, "new.rs +1"));
+    session.quit().await
 }

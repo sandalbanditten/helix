@@ -12,6 +12,7 @@ use helix_view::{
 };
 
 /// How a diff came out: the alignment, and why it isn't difftastic's if `tool` asked for it.
+#[derive(Clone)]
 pub struct Outcome {
     pub alignment: Arc<Alignment>,
     pub fallback: Option<String>,

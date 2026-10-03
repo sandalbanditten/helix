@@ -6,20 +6,20 @@
 
 mod background;
 pub(crate) mod browser;
-mod edit;
+pub(crate) mod edit;
 pub(crate) mod fs;
-mod git;
+pub(crate) mod git;
 pub(crate) mod icons;
 mod keys;
 pub(crate) mod ls_colors;
 mod mouse;
 pub(crate) mod ops;
 pub(crate) mod order;
-mod render;
-mod rows;
-mod search;
-mod tree;
-mod viewport;
+pub(crate) mod render;
+pub(crate) mod rows;
+pub(crate) mod search;
+pub(crate) mod tree;
+pub(crate) mod viewport;
 mod workspace;
 
 use std::{
@@ -724,6 +724,7 @@ impl FileTree {
             side: config.file_tree.side,
             edit: workspace.edit_row(),
             matches: &matches,
+            stats: None,
         }
         .render(area, surface);
 
@@ -813,13 +814,13 @@ fn file_tree(compositor: &mut Compositor) -> Option<&mut FileTree> {
 
 /// The `LS_COLORS` rules of the configured source, parsed once per source.
 #[derive(Default)]
-struct Palette {
+pub(crate) struct Palette {
     source: Option<LsColorsSource>,
     colors: Option<Arc<LsColors>>,
 }
 
 impl Palette {
-    fn get(&mut self, source: &LsColorsSource) -> Option<Arc<LsColors>> {
+    pub(crate) fn get(&mut self, source: &LsColorsSource) -> Option<Arc<LsColors>> {
         if self.source.as_ref() != Some(source) {
             self.colors = match source {
                 LsColorsSource::Environment(false) => None,

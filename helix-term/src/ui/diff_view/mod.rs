@@ -1,47 +1,56 @@
 //! The diff view: two read-only panes side by side, zoomed over the editor, one per text of a
-//! diff. Their rows line up, and they scroll together.
+//! diff. Their rows line up, and they scroll together. A diff of many files lists them in the
+//! diff tree, docked where the file tree docks.
 //!
 //! [`DiffView`] is owned by the [`EditorView`]. It works out how the texts line up in the
 //! background, opens the panes once that is known, and keeps them in step while they are shown.
 
+mod panes;
 mod run;
+mod set;
 pub(crate) mod styles;
+mod tree;
+
+pub use panes::{changed_text, goto_end_hunk, goto_hunk, open_file, Rows};
 
 use std::{
-    ops,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context as _};
-use helix_core::{movement::Direction, Position, Range, Rope, RopeSlice, Selection};
+use anyhow::{anyhow, bail};
+use helix_core::{movement::Direction, Position, Rope, Selection};
 use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::path::get_relative_path;
 use helix_view::{
-    align_view, current, current_ref,
-    diff_view::{Alignment, LineChange, Pane, Side},
-    doc, doc_mut,
-    document::{from_reader, read_to_string, Mode},
-    editor::Action,
-    graphics::{Rect, Style},
-    view::ViewPosition,
-    Align, Document, DocumentId, Editor, Theme, ViewId,
+    align_view, current_ref,
+    diff_view::{builtin::Stats, Alignment, Pane, Side},
+    doc_mut,
+    document::from_reader,
+    editor::{Action, DiffTool},
+    graphics::{CursorKind, Rect},
+    input::{KeyEvent, MouseEvent},
+    Align, Document, DocumentId, Editor, ViewId,
 };
 use tokio::task::JoinHandle;
+use tui::buffer::Buffer as Surface;
 
-use self::{run::Outcome, styles::Styles};
+use self::{
+    run::Outcome,
+    set::{DiffSet, FileDiff, Reader, Text},
+    tree::DiffTree,
+};
 use crate::{
+    compositor::{Context, EventResult},
     job,
-    ui::{
-        document::{LinePos, TextRenderer},
-        text_decorations::Decoration,
-        EditorView,
-    },
+    ui::EditorView,
 };
 
 /// How long a buffer rests after a change before its diff is worked out again.
 const REDIFF_DELAY: Duration = Duration::from_millis(250);
+/// How often the lines added and removed of a diff of many reach the diff tree.
+const STATS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Two texts to compare, and what they are.
 #[derive(Debug, Clone)]
@@ -61,6 +70,8 @@ pub struct Request {
     origin: Option<ViewId>,
     /// A buffer shown while the diff is worked out, closed once the panes show.
     placeholder: Option<DocumentId>,
+    /// The file of the diff of many it is, by its index.
+    of_many: Option<usize>,
 }
 
 impl Request {
@@ -92,6 +103,7 @@ impl Request {
             file: Some(path.to_path_buf()),
             origin: Some(view.id),
             placeholder: None,
+            of_many: None,
         })
     }
 
@@ -103,13 +115,33 @@ impl Request {
         let name = |path: &Path| get_relative_path(path).display().to_string();
         Ok(Self {
             path: get_relative_path(named).into_owned(),
-            old: read(old)?,
-            new: read(new)?,
+            old: set::read(old)?,
+            new: set::read(new)?,
             names: [name(old), name(new)],
             buffer: None,
             file: (new != null).then(|| new.to_path_buf()),
             origin: None,
             placeholder,
+            of_many: None,
+        })
+    }
+
+    /// The diff of the `index`th file of the diff of many `files`.
+    fn of_many(files: &Files, index: usize) -> anyhow::Result<Self> {
+        let file = &files.set.files[index];
+        Ok(Self {
+            path: file.path.clone(),
+            old: files.reader.read(&file.old)?,
+            new: files.reader.read(&file.new)?,
+            names: files.set.names(file),
+            buffer: None,
+            file: match &file.new {
+                Text::File(path) => Some(path.clone()),
+                Text::Head(_) | Text::Missing => None,
+            },
+            origin: files.origin,
+            placeholder: files.placeholder,
+            of_many: Some(index),
         })
     }
 
@@ -135,38 +167,44 @@ impl Request {
     }
 }
 
-/// The text of the file `path`, decoded like a buffer's.
-fn read(path: &Path) -> anyhow::Result<Rope> {
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let (text, ..) = read_to_string(&mut file, None)?;
-    if text.contains('\0') {
-        bail!("{} is not a text file", path.display());
-    }
-    Ok(Rope::from(text))
+/// The files a diff of many compares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Many {
+    /// The files of two directories.
+    Directories(PathBuf, PathBuf),
+    /// The files below a directory that changed since HEAD.
+    Changes(PathBuf),
 }
 
-/// Opens the diff the command line asks for with `paths`: of two files, or of a file against its
-/// committed version.
+/// Opens the diff the command line asks for with `paths`: of a file against its committed
+/// version, of two files or two directories, or of the changes since HEAD below a directory, the
+/// working directory without paths.
 pub fn open_paths(
     paths: &[PathBuf],
     editor: &mut Editor,
     view: &mut DiffView,
 ) -> anyhow::Result<()> {
-    match paths {
-        [path] if !path.is_dir() => {
+    let many = match paths {
+        [] => Many::Changes(helix_stdx::env::current_working_dir()),
+        [dir] if dir.is_dir() => Many::Changes(dir.clone()),
+        [path] => {
             editor.open(path, Action::VerticalSplit)?;
             let request = Request::buffer_against_head(editor)?;
             view.open(request, editor);
+            return Ok(());
         }
+        [old, new] if old.is_dir() && new.is_dir() => Many::Directories(old.clone(), new.clone()),
         [old, new] if !old.is_dir() && !new.is_dir() => {
             // The editor quits without a view, so one waits for the panes.
             let placeholder = editor.new_file(Action::VerticalSplit);
             let request = Request::files(old, new, Some(placeholder))?;
             view.open(request, editor);
+            return Ok(());
         }
-        _ => bail!("--diff takes one file or two"),
-    }
+        _ => bail!("--diff takes one or two files, or directories"),
+    };
+    let placeholder = editor.new_file(Action::VerticalSplit);
+    view.open_many(many, None, Some(placeholder), editor);
     Ok(())
 }
 
@@ -176,6 +214,40 @@ struct Pair {
     panes: [DocumentId; 2],
     views: [ViewId; 2],
     request: Request,
+    outcome: Outcome,
+}
+
+/// A diff of many files, browsed in the diff tree.
+struct Files {
+    set: DiffSet,
+    reader: Reader,
+    tree: DiffTree,
+    /// The file shown in the panes, by its index.
+    current: Option<usize>,
+    /// The view focused when the diff was asked for.
+    origin: Option<ViewId>,
+    /// A buffer shown until the first file's panes show.
+    placeholder: Option<DocumentId>,
+    /// Whether the panes closed to open their file, which keeps the tree.
+    keep: bool,
+    /// Whether the file being opened shows its last hunk rather than its first, as `[g` coming
+    /// from the next file asks.
+    last_hunk: bool,
+    /// The diff of the next file in the tree, worked out ahead so that `]g` gets there fast.
+    prefetch: Option<(usize, JoinHandle<()>)>,
+    /// The diffs of the files next to the one shown, by their index: worked out ahead, or shown
+    /// last, so that `]g` and `[g` get there fast.
+    cache: Vec<(usize, Request, Outcome)>,
+}
+
+impl Files {
+    /// Keeps the diff of the `index`th file, forgetting the ones no longer next to `current`.
+    fn cache(&mut self, index: usize, request: Request, outcome: Outcome, current: usize) {
+        self.cache.retain(|(cached, ..)| *cached != index);
+        self.cache.push((index, request, outcome));
+        self.cache
+            .retain(|(cached, ..)| cached.abs_diff(current) <= 1);
+    }
 }
 
 #[derive(Default)]
@@ -186,13 +258,15 @@ pub struct DiffView {
     /// Whether the task works out the diff of the pair shown anew.
     refreshing: bool,
     pair: Option<Pair>,
+    /// Counts the diffs of many asked for, likewise.
+    many_generation: u64,
+    files: Option<Files>,
 }
 
 impl DiffView {
     /// Works out the diff of `request` in the background and shows it once known.
     pub fn open(&mut self, request: Request, editor: &mut Editor) {
-        let tool = editor.config().diff.tool;
-        if tool == helix_view::editor::DiffTool::Difftastic && run::has_difft() {
+        if editor.config().diff.tool == DiffTool::Difftastic && run::has_difft() {
             editor.set_status(format!(
                 "Diffing {} with difftastic…",
                 request.path.display()
@@ -212,8 +286,7 @@ impl DiffView {
         let tool = editor.config().diff.tool;
         self.task = Some(tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            let path = request.path.to_string_lossy().into_owned();
-            let outcome = run::align(tool, path, request.old.clone(), request.new.clone()).await;
+            let outcome = align(tool, &request).await;
             job::dispatch(move |editor, compositor| {
                 if let Some(view) = compositor.find::<EditorView>() {
                     view.diff_view.ready(generation, request, outcome, editor);
@@ -237,14 +310,34 @@ impl DiffView {
         }
         if self.refreshing {
             if let Some(pair) = &mut self.pair {
-                refresh(pair, request, outcome.alignment, editor);
+                refresh(pair, request, outcome, editor);
                 return;
             }
         }
+        let of_many = request.of_many;
         if let Some(pair) = self.pair.take() {
             editor.close_diff_panes(pair.panes, None);
+            // The file left stays at hand for going back.
+            if let (Some(files), Some(left), Some(index)) =
+                (&mut self.files, pair.request.of_many, of_many)
+            {
+                files.cache(left, pair.request, pair.outcome, index);
+            }
         }
-        self.pair = Some(show(request, outcome.alignment, editor));
+        self.pair = Some(show(request, outcome, editor));
+        match (&mut self.files, of_many) {
+            (Some(files), Some(index)) => {
+                files.current = Some(index);
+                files.placeholder = None;
+                if std::mem::take(&mut files.last_hunk) {
+                    goto_end_hunk(editor, true);
+                }
+                self.prefetch(index + 1, editor);
+            }
+            // A diff of one file ends a diff of many.
+            (_, None) => self.end_many(),
+            (None, Some(_)) => {}
+        }
     }
 
     /// Keeps the panes in step: the one without the focus scrolls along with the focused one,
@@ -266,6 +359,14 @@ impl DiffView {
             if let Some(task) = self.task.take() {
                 task.abort();
             }
+            // Closing the panes ends a diff of many, unless they closed to open their file.
+            match &mut self.files {
+                Some(files) if files.keep => {
+                    files.keep = false;
+                    files.current = None;
+                }
+                _ => self.end_many(),
+            }
             return;
         }
         if let Some(index) = pair
@@ -273,7 +374,7 @@ impl DiffView {
             .iter()
             .position(|&view| view == editor.tree.focus)
         {
-            sync(
+            panes::sync(
                 editor,
                 [pair.views[index], pair.views[1 - index]],
                 [pair.panes[index], pair.panes[1 - index]],
@@ -285,10 +386,353 @@ impl DiffView {
             }
         }
     }
+
+    /// Keeps the diff tree when the panes close next, as they do to open their file.
+    pub fn keep_files(&mut self) {
+        if let Some(files) = &mut self.files {
+            files.keep = true;
+        }
+    }
+
+    /// Looks for the files of `many` in the background and shows the first one's diff once
+    /// found, with the others in the diff tree. `origin` is the view focused when it was asked
+    /// for, `placeholder` a buffer shown meanwhile.
+    pub fn open_many(
+        &mut self,
+        many: Many,
+        origin: Option<ViewId>,
+        placeholder: Option<DocumentId>,
+        editor: &mut Editor,
+    ) {
+        self.many_generation += 1;
+        let generation = self.many_generation;
+        let config = editor.config();
+        let sort = config.file_tree.sort;
+        let dir = match &many {
+            Many::Directories(_, new) => new.clone(),
+            Many::Changes(dir) => dir.clone(),
+        };
+        let reader = Reader {
+            providers: editor.diff_providers.clone(),
+            trust: editor
+                .workspace_trust
+                .query(&helix_loader::find_workspace_in(&dir).0, TrustQuery::Git)
+                .is_trusted(),
+        };
+        editor.set_status(match &many {
+            Many::Directories(..) => "Comparing the directories…",
+            Many::Changes(_) => "Looking for changes…",
+        });
+        let providers = reader.providers.clone();
+        job::in_background(
+            move || match &many {
+                Many::Directories(old, new) => DiffSet::of_directories(old, new, sort),
+                Many::Changes(dir) => DiffSet::of_changes(dir, &providers, reader.trust, sort),
+            },
+            move |editor, compositor, set| {
+                if let Some(view) = compositor.find::<EditorView>() {
+                    let found = (generation, set, origin, placeholder);
+                    view.diff_view.many_ready(found, reader.clone(), editor);
+                }
+            },
+        );
+    }
+
+    /// Shows the first file of a diff of many found, unless another one was asked for since.
+    #[allow(clippy::type_complexity)]
+    fn many_ready(
+        &mut self,
+        (generation, set, origin, placeholder): (
+            u64,
+            anyhow::Result<DiffSet>,
+            Option<ViewId>,
+            Option<DocumentId>,
+        ),
+        reader: Reader,
+        editor: &mut Editor,
+    ) {
+        if generation != self.many_generation {
+            return;
+        }
+        let set = match set {
+            Ok(set) => set,
+            Err(err) => {
+                editor.set_error(format!("{err:#}"));
+                return;
+            }
+        };
+        if set.files.is_empty() {
+            editor.set_status("No changes");
+            return;
+        }
+        editor.clear_status();
+        self.end_many();
+        spawn_stats(set.files.clone(), reader.clone(), generation);
+        let tree = DiffTree::new(&set, &editor.config().file_tree);
+        self.files = Some(Files {
+            set,
+            reader,
+            tree,
+            current: None,
+            origin,
+            placeholder,
+            keep: false,
+            last_hunk: false,
+            prefetch: None,
+            cache: Vec::new(),
+        });
+        self.show_file(0, editor);
+    }
+
+    /// Shows the diff of the `index`th file of the diff of many.
+    fn show_file(&mut self, index: usize, editor: &mut Editor) {
+        let Some(files) = &mut self.files else {
+            return;
+        };
+        // Worked out ahead: shown at once.
+        if let Some(cached) = files.cache.iter().position(|(cached, ..)| *cached == index) {
+            let (_, request, outcome) = files.cache.swap_remove(cached);
+            self.generation += 1;
+            self.ready(self.generation, request, outcome, editor);
+            return;
+        }
+        match Request::of_many(files, index) {
+            Ok(request) => self.open(request, editor),
+            Err(err) => editor.set_error(format!("{err:#}")),
+        }
+    }
+
+    /// Works out the diff of the `index`th file of the diff of many ahead, if there is one.
+    fn prefetch(&mut self, index: usize, editor: &Editor) {
+        let Some(files) = &mut self.files else {
+            return;
+        };
+        if index >= files.set.files.len()
+            || files.prefetch.as_ref().is_some_and(|(i, _)| *i == index)
+            || files.cache.iter().any(|(cached, ..)| *cached == index)
+        {
+            return;
+        }
+        let Ok(request) = Request::of_many(files, index) else {
+            return;
+        };
+        if let Some((_, task)) = files.prefetch.take() {
+            task.abort();
+        }
+        let (generation, tool) = (self.many_generation, editor.config().diff.tool);
+        files.prefetch = Some((
+            index,
+            tokio::spawn(async move {
+                let outcome = align(tool, &request).await;
+                job::dispatch(move |_, compositor| {
+                    let Some(view) = compositor.find::<EditorView>() else {
+                        return;
+                    };
+                    let diff_view = &mut view.diff_view;
+                    if let Some(files) = diff_view
+                        .files
+                        .as_mut()
+                        .filter(|_| diff_view.many_generation == generation)
+                    {
+                        files.prefetch = None;
+                        if let Some(current) = files.current {
+                            files.cache(index, request, outcome, current);
+                        }
+                    }
+                })
+                .await;
+            }),
+        ));
+    }
+
+    /// Shows the next file's diff, at its first hunk, or the previous one's at its last: where
+    /// `]g` and `[g` go past the hunks of a file of a diff of many.
+    pub fn goto_next_file(&mut self, direction: Direction, editor: &mut Editor) {
+        let Some(files) = &mut self.files else {
+            return;
+        };
+        let Some(current) = files.current else {
+            return;
+        };
+        let next = match direction {
+            Direction::Forward => current + 1,
+            Direction::Backward => match current.checked_sub(1) {
+                Some(previous) => previous,
+                None => return,
+            },
+        };
+        if next >= files.set.files.len() {
+            return;
+        }
+        files.last_hunk = direction == Direction::Backward;
+        self.show_file(next, editor);
+    }
+
+    fn stats_ready(&mut self, generation: u64, stats: Vec<(PathBuf, Stats)>) {
+        if let Some(files) = self
+            .files
+            .as_mut()
+            .filter(|_| self.many_generation == generation)
+        {
+            files.tree.set_stats(stats);
+        }
+    }
+
+    fn end_many(&mut self) {
+        if let Some(files) = self.files.take() {
+            if let Some((_, task)) = files.prefetch {
+                task.abort();
+            }
+        }
+    }
+
+    /// Whether a diff of many shows its files in the diff tree.
+    pub fn has_tree(&self) -> bool {
+        self.files.is_some()
+    }
+
+    pub fn tree_focused(&self) -> bool {
+        self.files
+            .as_ref()
+            .is_some_and(|files| files.tree.is_focused())
+    }
+
+    /// Focuses the diff tree on the file shown, or gives the focus back.
+    pub fn toggle_tree_focus(&mut self) {
+        let Some(files) = &mut self.files else {
+            return;
+        };
+        if files.tree.is_focused() {
+            files.tree.unfocus();
+        } else {
+            let current = files
+                .current
+                .map(|index| files.set.files[index].path.clone());
+            files.tree.focus(current.as_deref());
+        }
+    }
+
+    pub fn toggle_tree(&mut self) {
+        if let Some(files) = &mut self.files {
+            files.tree.toggle();
+        }
+    }
+
+    pub fn unfocus_tree(&mut self) {
+        if let Some(files) = &mut self.files {
+            files.tree.unfocus();
+        }
+    }
+
+    /// The diff tree's area in `main`, if it is shown and fits.
+    pub fn layout_tree(&mut self, main: Rect, editor: &Editor) -> Option<Rect> {
+        self.files.as_mut()?.tree.layout(main, editor)
+    }
+
+    pub fn render_tree(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        if let Some(files) = &mut self.files {
+            let current = files
+                .current
+                .map(|index| files.set.files[index].path.as_path());
+            files.tree.render(area, surface, current, cx);
+        }
+    }
+
+    pub fn render_tree_command_line(
+        &mut self,
+        area: Rect,
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
+        if let Some(files) = &mut self.files {
+            files.tree.render_command_line(area, surface, cx);
+        }
+    }
+
+    pub fn tree_cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        match &self.files {
+            Some(files) => files.tree.cursor(area, editor),
+            None => (None, CursorKind::Hidden),
+        }
+    }
+
+    /// Handles `key` while the diff tree is focused.
+    pub fn handle_tree_key(&mut self, key: KeyEvent, cx: &mut Context) -> EventResult {
+        let Some(files) = &mut self.files else {
+            return EventResult::Ignored(None);
+        };
+        let (result, request) = files.tree.handle_key(key, cx);
+        self.handle_tree_request(request, cx.editor);
+        result
+    }
+
+    /// Handles a mouse event over the diff tree. `None` leaves it to the editor.
+    pub fn handle_tree_mouse(
+        &mut self,
+        event: &MouseEvent,
+        editor: &mut Editor,
+    ) -> Option<EventResult> {
+        let request = self.files.as_mut()?.tree.handle_mouse(event, editor)?;
+        self.handle_tree_request(request, editor);
+        Some(EventResult::Consumed(None))
+    }
+
+    fn handle_tree_request(&mut self, request: tree::Request, editor: &mut Editor) {
+        let tree::Request::Show(path) = request else {
+            return;
+        };
+        let Some(files) = &self.files else {
+            return;
+        };
+        let index = files.set.files.iter().position(|file| file.path == path);
+        if let Some(index) = index.filter(|&index| files.current != Some(index)) {
+            self.show_file(index, editor);
+        }
+    }
+}
+
+/// Lines up the texts of `request` with `tool`.
+async fn align(tool: DiffTool, request: &Request) -> Outcome {
+    let path = request.path.to_string_lossy().into_owned();
+    run::align(tool, path, request.old.clone(), request.new.clone()).await
+}
+
+/// Counts the lines added and removed in `files` in the background, handing them to the diff
+/// tree of the diff of many `generation` now and then.
+fn spawn_stats(files: Vec<FileDiff>, reader: Reader, generation: u64) {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    std::thread::spawn(move || {
+        let mut batch = Vec::new();
+        let mut sent = Instant::now();
+        for file in files {
+            if let Some(stats) = reader.stats(&file) {
+                batch.push((file.path, stats));
+            }
+            if sent.elapsed() >= STATS_INTERVAL {
+                // The editor quit when nothing receives them anymore.
+                if sender.blocking_send(std::mem::take(&mut batch)).is_err() {
+                    return;
+                }
+                sent = Instant::now();
+            }
+        }
+        let _ = sender.blocking_send(batch);
+    });
+    tokio::spawn(async move {
+        while let Some(batch) = receiver.recv().await {
+            job::dispatch(move |_, compositor| {
+                if let Some(view) = compositor.find::<EditorView>() {
+                    view.diff_view.stats_ready(generation, batch);
+                }
+            })
+            .await;
+        }
+    });
 }
 
 /// Opens the panes of the diff of `request`, zoomed, with the cursor on the first hunk.
-fn show(request: Request, alignment: Arc<Alignment>, editor: &mut Editor) -> Pair {
+fn show(request: Request, outcome: Outcome, editor: &mut Editor) -> Pair {
+    let alignment = outcome.alignment.clone();
     let loader = editor.syn_loader.load();
     let language = loader
         .language_for_filename(&request.path)
@@ -344,11 +788,13 @@ fn show(request: Request, alignment: Arc<Alignment>, editor: &mut Editor) -> Pai
         panes: ids,
         views,
         request,
+        outcome,
     }
 }
 
-/// Shows the panes of `pair` with the texts of `request`, lined up by `alignment`.
-fn refresh(pair: &mut Pair, request: Request, alignment: Arc<Alignment>, editor: &mut Editor) {
+/// Shows the panes of `pair` with the texts of `request`, lined up as `outcome` says.
+fn refresh(pair: &mut Pair, request: Request, outcome: Outcome, editor: &mut Editor) {
+    let alignment = &outcome.alignment;
     for (index, side) in [Side::Old, Side::New].into_iter().enumerate() {
         let text = match side {
             Side::Old => &request.old,
@@ -358,6 +804,7 @@ fn refresh(pair: &mut Pair, request: Request, alignment: Arc<Alignment>, editor:
         doc_mut!(editor, &pair.panes[index]).replace_diff_text(text, pane, pair.views[index]);
     }
     pair.request = request;
+    pair.outcome = outcome;
 }
 
 fn pane(request: &Request, side: Side, alignment: Arc<Alignment>, partner: DocumentId) -> Pane {
@@ -372,401 +819,5 @@ fn pane(request: &Request, side: Side, alignment: Arc<Alignment>, partner: Docum
         partner,
         file: request.file.clone(),
         origin: request.origin,
-    }
-}
-
-/// Scrolls the pane `docs[1]` in `views[1]` to the row the focused pane `docs[0]` in `views[0]`
-/// shows at its top, and puts its cursor on the row of the focused pane's cursor.
-fn sync(editor: &mut Editor, views: [ViewId; 2], docs: [DocumentId; 2]) {
-    let doc = doc!(editor, &docs[0]);
-    let Some(pane) = doc.diff_view.as_ref() else {
-        return;
-    };
-    let text = doc.text().slice(..);
-    let offset = doc.view_offset(views[0]);
-    let top = top_row(pane, text.char_to_line(offset.anchor), offset);
-    let cursor = text.char_to_line(doc.selection(views[0]).primary().cursor(text));
-    let cursor_row = pane.row_of_line(cursor);
-
-    let partner = doc_mut!(editor, &docs[1]);
-    let Some(pane) = partner.diff_view.as_ref() else {
-        return;
-    };
-    let text = partner.text().slice(..);
-    let current = partner.view_offset(views[1]);
-    let offset = offset_at_row(pane, text, top, current.horizontal_offset);
-    let cursor_line = text.char_to_line(partner.selection(views[1]).primary().cursor(text));
-    let cursor = cursor_row
-        .map(|row| pane.line_at_or_before(row).unwrap_or(0) as usize)
-        .filter(|&line| line != cursor_line)
-        .map(|line| text.line_to_char(line));
-    if offset != current {
-        partner.set_view_offset(views[1], offset);
-    }
-    if let Some(pos) = cursor {
-        partner.set_selection(views[1], Selection::point(pos));
-    }
-}
-
-/// The row of the alignment at the top of a pane scrolled to `offset`, anchored on `line`.
-fn top_row(pane: &Pane, line: usize, offset: ViewPosition) -> u32 {
-    // A pane anchored at its start counts from the top, above its first line.
-    let anchor_row = if offset.anchor == 0 {
-        0
-    } else {
-        pane.row_of_line(line).unwrap_or(0)
-    };
-    anchor_row + offset.vertical_offset as u32
-}
-
-/// The offset showing `row` of the alignment at the top of `pane`.
-fn offset_at_row(pane: &Pane, text: RopeSlice, row: u32, horizontal_offset: usize) -> ViewPosition {
-    let (anchor, vertical_offset) = match pane.line_at_or_before(row) {
-        Some(line) if line > 0 => {
-            let line_row = pane.row_of_line(line as usize).unwrap_or(row);
-            (text.line_to_char(line as usize), row - line_row)
-        }
-        _ => (0, row),
-    };
-    ViewPosition {
-        anchor,
-        horizontal_offset,
-        vertical_offset: vertical_offset as usize,
-    }
-}
-
-/// Selects the hunk `count` hunks after or before each selection of the focused pane, like `]g`
-/// and `[g` select the changes of the diff gutter. Returns whether there was one.
-pub fn goto_hunk(editor: &mut Editor, direction: Direction, count: usize) -> bool {
-    let mode = editor.mode;
-    let (view, doc) = current!(editor);
-    let Some(pane) = doc.diff_view.as_ref() else {
-        return false;
-    };
-    let text = doc.text().slice(..);
-    let mut found = false;
-    let selection = doc.selection(view.id).clone().transform(|range| {
-        let line = range.cursor_line(text);
-        let Some(hunk) = hunk_from(pane, line, direction, count) else {
-            return range;
-        };
-        found = true;
-        let new_range = hunk_range(pane, text, &pane.alignment.hunks()[hunk]);
-        if mode == Mode::Select {
-            let head = if new_range.head < range.anchor {
-                new_range.anchor
-            } else {
-                new_range.head
-            };
-            Range::new(range.anchor, head)
-        } else {
-            new_range.with_direction(direction)
-        }
-    });
-    if found {
-        doc.set_selection(view.id, selection);
-    }
-    found
-}
-
-/// Selects the first hunk of the focused pane, or the last one, like `[G` and `]G`.
-pub fn goto_end_hunk(editor: &mut Editor, last: bool) {
-    let (view, doc) = current!(editor);
-    let Some(pane) = doc.diff_view.as_ref() else {
-        return;
-    };
-    let hunks = pane.alignment.hunks();
-    let hunk = if last { hunks.last() } else { hunks.first() };
-    if let Some(hunk) = hunk {
-        let range = hunk_range(pane, doc.text().slice(..), hunk);
-        let jump = (doc.id(), doc.selection(view.id).clone());
-        view.push_jump(doc, jump);
-        doc.set_selection(view.id, Selection::single(range.anchor, range.head));
-    }
-}
-
-/// The index of the hunk `count` hunks after or before the row of `line` of `pane`.
-fn hunk_from(pane: &Pane, line: usize, direction: Direction, count: usize) -> Option<usize> {
-    let row = pane.row_of_line(line)?;
-    let hunks = pane.alignment.hunks();
-    let count = count.max(1);
-    match direction {
-        Direction::Forward => {
-            let next = hunks.partition_point(|hunk| hunk.start <= row);
-            (next < hunks.len()).then(|| (next + count - 1).min(hunks.len() - 1))
-        }
-        Direction::Backward => {
-            let mut before = hunks.partition_point(|hunk| hunk.end <= row);
-            // A hunk of only fillers right above the cursor is the one the cursor is on, like a
-            // removal of the diff gutter.
-            if before > 0 && hunks[before - 1].end == row && !has_lines(pane, &hunks[before - 1]) {
-                before -= 1;
-            }
-            before
-                .checked_sub(1)
-                .map(|prev| prev.saturating_sub(count - 1))
-        }
-    }
-}
-
-/// Whether the side of `pane` has lines on the rows `rows`.
-fn has_lines(pane: &Pane, rows: &ops::Range<u32>) -> bool {
-    pane.alignment
-        .line_at_or_after(pane.side, rows.start)
-        .and_then(|line| pane.row_of_line(line as usize))
-        .is_some_and(|row| row < rows.end)
-}
-
-/// What selecting the hunk on the rows `rows` of `pane` selects: its lines on the pane's side,
-/// or the first char of the line after it where the side has only fillers there.
-fn hunk_range(pane: &Pane, text: RopeSlice, rows: &ops::Range<u32>) -> Range {
-    let alignment = &pane.alignment;
-    let first = alignment.line_at_or_after(pane.side, rows.start);
-    let last = alignment.line_at_or_before(pane.side, rows.end.saturating_sub(1));
-    match (first, last) {
-        (Some(first), Some(last)) if first <= last => Range::new(
-            text.line_to_char(first as usize),
-            text.line_to_char(last as usize + 1),
-        ),
-        _ => {
-            let line = first.unwrap_or_else(|| alignment.lines(pane.side).saturating_sub(1));
-            let anchor = text.line_to_char(line as usize);
-            Range::new(anchor, (anchor + 1).min(text.len_chars()))
-        }
-    }
-}
-
-/// Opens the file the focused pane shows a side of in the diff's place, at the line on the
-/// cursor's row: the diff closes, and the file opens in the view it was asked for from. Returns
-/// whether the focused buffer is a pane.
-pub fn open_file(editor: &mut Editor) -> bool {
-    let (view, doc) = current_ref!(editor);
-    let Some(pane) = doc.diff_view.as_ref() else {
-        return false;
-    };
-    let Some(file) = pane.file.clone() else {
-        editor.set_error("The diff shows no file to open");
-        return true;
-    };
-    let text = doc.text().slice(..);
-    let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
-    // The file is the new side: from the old side, it opens at the line on the same row.
-    let line = match pane.side {
-        Side::New => line,
-        Side::Old => pane
-            .row_of_line(line)
-            .and_then(|row| pane.alignment.line_at_or_before(Side::New, row))
-            .unwrap_or(0) as usize,
-    };
-    // Closing one pane closes both, giving the focus back.
-    editor.close(view.id);
-    let action = if editor.tree.views().next().is_some() {
-        Action::Replace
-    } else {
-        Action::VerticalSplit
-    };
-    if let Err(err) = editor.open(&file, action) {
-        editor.set_error(format!("Cannot open {}: {err}", file.display()));
-        return true;
-    }
-    let (view, doc) = current!(editor);
-    let text = doc.text().slice(..);
-    let pos = text.line_to_char(line.min(text.len_lines() - 1));
-    doc.set_selection(view.id, Selection::point(pos));
-    align_view(doc, view, Align::Center);
-    true
-}
-
-/// The styles of the text that changed on the lines `lines` of the pane `doc`, by char ranges.
-pub fn changed_text(
-    doc: &Document,
-    pane: &Pane,
-    lines: ops::Range<usize>,
-    theme: &Theme,
-) -> Vec<(ops::Range<usize>, Style)> {
-    let style = Styles::new(theme).text(pane.side);
-    let text = doc.text().slice(..);
-    let lines = lines.start as u32..lines.end.min(text.len_lines()) as u32;
-    let mut spans = Vec::new();
-    for (line, change) in pane.alignment.changes(pane.side, lines) {
-        let LineChange::Parts(parts) = change else {
-            continue;
-        };
-        let start = text.line_to_byte(*line as usize);
-        for part in parts {
-            let range = text.byte_to_char(start + part.start as usize)
-                ..text.byte_to_char(start + part.end as usize);
-            spans.push((range, style));
-        }
-    }
-    spans
-}
-
-/// Paints the rows of a pane: the background of its changed lines and of its fillers.
-pub struct Rows<'a> {
-    pane: &'a Pane,
-    styles: Styles,
-    /// The text area of the pane.
-    area: Rect,
-    /// The first visual row not painted yet.
-    next_row: u16,
-}
-
-impl<'a> Rows<'a> {
-    pub fn new(pane: &'a Pane, theme: &Theme, area: Rect) -> Self {
-        Self {
-            pane,
-            styles: Styles::new(theme),
-            area,
-            next_row: 0,
-        }
-    }
-
-    fn paint(&mut self, renderer: &mut TextRenderer, rows: ops::Range<u16>, style: Style) {
-        if rows.is_empty() {
-            return;
-        }
-        let area = Rect::new(
-            self.area.x,
-            rows.start,
-            self.area.width,
-            rows.end - rows.start,
-        );
-        renderer.set_style(area, style);
-        self.next_row = self.next_row.max(rows.end);
-    }
-}
-
-impl Decoration for Rows<'_> {
-    fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
-        // Rows skipped since the last line are fillers: those above the first line, or those
-        // after a line above the view.
-        self.paint(renderer, self.next_row..pos.visual_line, self.styles.filler);
-        let changed = self
-            .pane
-            .alignment
-            .change(self.pane.side, pos.doc_line as u32);
-        let row = pos.visual_line..pos.visual_line + 1;
-        if pos.first_visual_line && changed.is_some() {
-            self.paint(renderer, row, self.styles.line(self.pane.side));
-        } else {
-            self.next_row = self.next_row.max(row.end);
-        }
-    }
-
-    fn render_virt_lines(
-        &mut self,
-        renderer: &mut TextRenderer,
-        pos: LinePos,
-        virt_off: Position,
-    ) -> Position {
-        let fillers = &self.pane.alignment.fillers(self.pane.side).after;
-        let count = fillers
-            .binary_search_by_key(&(pos.doc_line as u32), |(line, _)| *line)
-            .map_or(0, |index| fillers[index].1) as u16;
-        let start = pos.visual_line + virt_off.row as u16;
-        self.paint(renderer, start..start + count, self.styles.filler);
-        Position::new(count as usize, 0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use helix_view::diff_view::{builtin, Row};
-
-    use super::*;
-
-    fn pane(side: Side, alignment: &Arc<Alignment>) -> Pane {
-        Pane {
-            side,
-            alignment: alignment.clone(),
-            name: String::new(),
-            partner: DocumentId::default(),
-            file: None,
-            origin: None,
-        }
-    }
-
-    #[test]
-    fn hunks_are_selected_by_the_rows_they_are_on() {
-        // A line changed, and one added that the old side shows a filler for.
-        let old = Rope::from("a\nb\nc\nd\ne\n");
-        let new = Rope::from("a\nB\nc\nd\nnew\ne\n");
-        let alignment = Arc::new(builtin::align(old.slice(..), new.slice(..)));
-        assert_eq!(alignment.hunks(), [1..2, 4..5]);
-        let (old_pane, new_pane) = (pane(Side::Old, &alignment), pane(Side::New, &alignment));
-        let (old, new) = (old.slice(..), new.slice(..));
-
-        assert_eq!(hunk_from(&new_pane, 0, Direction::Forward, 1), Some(0));
-        assert_eq!(hunk_from(&new_pane, 1, Direction::Forward, 1), Some(1));
-        assert_eq!(
-            hunk_from(&new_pane, 0, Direction::Forward, 5),
-            Some(1),
-            "counts stop at the last"
-        );
-        assert_eq!(hunk_from(&new_pane, 4, Direction::Forward, 1), None);
-        assert_eq!(hunk_range(&new_pane, new, &(1..2)), Range::new(2, 4));
-        assert_eq!(hunk_range(&new_pane, new, &(4..5)), Range::new(8, 12));
-
-        // The old side has only a filler on the second hunk: it selects the line after it.
-        assert_eq!(hunk_range(&old_pane, old, &(4..5)), Range::new(8, 9));
-        assert_eq!(hunk_from(&old_pane, 3, Direction::Forward, 1), Some(1));
-        // From there `[g` goes past it, as from a removal in the diff gutter.
-        assert_eq!(hunk_from(&old_pane, 4, Direction::Backward, 1), Some(0));
-        assert_eq!(
-            hunk_from(&old_pane, 1, Direction::Backward, 1),
-            None,
-            "inside the first"
-        );
-        assert_eq!(hunk_from(&new_pane, 5, Direction::Backward, 1), Some(1));
-    }
-
-    #[test]
-    fn panes_scroll_to_the_same_row() {
-        // old: a b c       new: x y a b z c
-        let old = Rope::from("a\nb\nc\n");
-        let new = Rope::from("x\ny\na\nb\nz\nc\n");
-        let alignment = Arc::new(builtin::align(old.slice(..), new.slice(..)));
-        assert_eq!(
-            alignment.rows()[..3],
-            [
-                Row {
-                    old: None,
-                    new: Some(0)
-                },
-                Row {
-                    old: None,
-                    new: Some(1)
-                },
-                Row {
-                    old: Some(0),
-                    new: Some(2)
-                },
-            ]
-        );
-        let (old_pane, new_pane) = (pane(Side::Old, &alignment), pane(Side::New, &alignment));
-        let at = |anchor, vertical_offset| ViewPosition {
-            anchor,
-            horizontal_offset: 0,
-            vertical_offset,
-        };
-        // The new side at its top shows the fillers above the old side's first line.
-        assert_eq!(top_row(&new_pane, 0, at(0, 0)), 0);
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 0, 0), at(0, 0));
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 1, 0), at(0, 1));
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 2, 0), at(0, 2));
-        // Line 1 of the old side, `b`, is on row 3.
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 3, 0), at(2, 0));
-        // Row 4 is a filler after `b` on the old side.
-        assert_eq!(
-            offset_at_row(&old_pane, old.slice(..), 4, 7),
-            ViewPosition {
-                anchor: 2,
-                horizontal_offset: 7,
-                vertical_offset: 1
-            }
-        );
-        assert_eq!(top_row(&old_pane, 1, at(2, 1)), 4);
-        assert_eq!(top_row(&new_pane, 4, at(8, 0)), 4);
     }
 }

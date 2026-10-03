@@ -22,6 +22,21 @@ use crate::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
 #[cfg(test)]
 mod test;
 
+/// `file` with its symlinks resolved. A file deleted from the working tree, which HEAD may still
+/// have, is resolved by its directory.
+fn realpath(file: &Path) -> Result<PathBuf> {
+    if file.exists() {
+        return gix::path::realpath(file).context("resolve symlinks");
+    }
+    let (dir, name) = (
+        get_repo_dir(file)?,
+        file.file_name().context("no file name")?,
+    );
+    Ok(gix::path::realpath(dir)
+        .context("resolve symlinks")?
+        .join(name))
+}
+
 #[inline]
 fn get_repo_dir(file: &Path) -> Result<&Path> {
     file.parent().context("file has no parent directory")
@@ -30,7 +45,7 @@ fn get_repo_dir(file: &Path) -> Result<&Path> {
 pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
     debug_assert!(!file.exists() || file.is_file());
     debug_assert!(file.is_absolute());
-    let file = gix::path::realpath(file).context("resolve symlinks")?;
+    let file = realpath(file)?;
 
     // TODO cache repository lookup
 
