@@ -4,7 +4,9 @@ use std::ops::{Bound, RangeBounds};
 
 pub use regex_cursor::engines::meta::{Builder as RegexBuilder, Regex};
 pub use regex_cursor::regex_automata::util::syntax::Config;
-use regex_cursor::{Input as RegexInput, RopeyCursor};
+/// What a [`Regex`] searches: also a plain `&str`.
+pub use regex_cursor::Input as RegexInput;
+use regex_cursor::RopeyCursor;
 use ropey::iter::Chunks;
 use ropey::RopeSlice;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};

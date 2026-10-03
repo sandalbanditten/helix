@@ -366,6 +366,19 @@ mod tests {
                 "{revisions} revisions: frame of 50 rows {:?}",
                 start.elapsed()
             );
+            let start = Instant::now();
+            let config = helix_view::editor::SearchConfig::default();
+            let regex = crate::ui::search::regex("wor[dk]s? ", &config, false).unwrap();
+            let matches = (1..history.len())
+                .filter(|&revision| {
+                    let text = super::super::rows::changed_text(&history, revision);
+                    regex.is_match(helix_stdx::rope::RegexInput::new(text.as_str()))
+                })
+                .count();
+            eprintln!(
+                "{revisions} revisions: a search, {matches} matches {:?}",
+                start.elapsed()
+            );
         }
     }
 

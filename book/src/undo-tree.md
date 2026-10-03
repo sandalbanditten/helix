@@ -47,7 +47,7 @@ branch you went into.
 | `ge`, `End`          | Go to the oldest revision |
 | `zz`, `zc`           | Align the cursor row to the center |
 | `zt`, `zb`           | Align the cursor row to the top, bottom |
-| `/`                  | Search the text revisions inserted or deleted |
+| `/`                  | Search the text revisions inserted or deleted, with a regex |
 | `n`, `N`             | Go to the next, previous match |
 | `d`                  | Toggle the diff against the start |
 | `J`, `K`             | Scroll the diff down, up |
@@ -57,9 +57,13 @@ branch you went into.
 | `Enter`              | Keep the revision and return focus to the editor |
 | `Escape`             | Go back to the start and return focus to the editor |
 
-The search, typed in the command line, takes the buffer to the first revision below the cursor
-whose change contains the text as you type, ignoring case unless the text has capitals, and
-highlights the matching changes; `Enter` keeps it and `Escape` goes back.
+The search is the editor's: a regex typed in the command line, which recalls and completes
+earlier searches (`Ctrl-p`, `Ctrl-n`, `Tab`) and ignores case unless the regex has capitals, as
+the [`[editor.search]`](./editor.md#editorsearch-section) settings say. As you type, it takes the
+buffer to the first revision below the cursor whose change matches and highlights the matching
+changes; `Enter` keeps the search and `Escape` goes back. Searches are shared: `n` and `N` in the
+tree go to the changes matching the last search, typed in the tree or in the editor, and the
+editor's `n` and `N` look for the tree's.
 
 The panel fits its width to the widest row when it appears, within limits; after `+` or `-` it
 keeps the width you set.

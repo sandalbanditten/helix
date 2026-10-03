@@ -2311,15 +2311,6 @@ fn search_impl(
     };
 }
 
-fn search_completions(cx: &mut Context, reg: Option<char>) -> Vec<String> {
-    let mut items = reg
-        .and_then(|reg| cx.editor.registers.read(reg, cx.editor))
-        .map_or(Vec::new(), |reg| reg.take(200).collect());
-    items.sort_unstable();
-    items.dedup();
-    items.into_iter().map(|value| value.to_string()).collect()
-}
-
 fn search(cx: &mut Context) {
     searcher(cx, Direction::Forward)
 }
@@ -2329,7 +2320,7 @@ fn rsearch(cx: &mut Context) {
 }
 
 fn searcher(cx: &mut Context, direction: Direction) {
-    let reg = cx.register.unwrap_or('/');
+    let reg = cx.register.unwrap_or(ui::search::REGISTER);
     let config = cx.editor.config();
     let scrolloff = config.scrolloff;
     let wrap_around = config.search.wrap_around;
@@ -2340,19 +2331,13 @@ fn searcher(cx: &mut Context, direction: Direction) {
     };
 
     // TODO: could probably share with select_on_matches?
-    let completions = search_completions(cx, Some(reg));
+    let completion = ui::search::completion(cx.editor, reg);
 
     ui::regex_prompt(
         cx,
         "search:".into(),
         Some(reg),
-        move |_editor: &Editor, input: &str| {
-            completions
-                .iter()
-                .filter(|comp| comp.starts_with(input))
-                .map(|comp| (0.., comp.clone().into()))
-                .collect()
-        },
+        completion,
         move |cx, regex, event| {
             if event == PromptEvent::Validate {
                 cx.editor.registers.last_search_register = reg;
@@ -2380,23 +2365,9 @@ fn search_next_or_prev_impl(cx: &mut Context, movement: Movement, direction: Dir
     let config = cx.editor.config();
     let scrolloff = config.scrolloff;
     if let Some(query) = cx.editor.registers.first(register, cx.editor) {
-        let search_config = &config.search;
-        let case_insensitive = if search_config.smart_case {
-            !query.chars().any(char::is_uppercase)
-        } else {
-            false
-        };
-        let wrap_around = search_config.wrap_around;
+        let wrap_around = config.search.wrap_around;
         let is_crlf = doc!(cx.editor).line_ending == LineEnding::Crlf;
-        if let Ok(regex) = rope::RegexBuilder::new()
-            .syntax(
-                rope::Config::new()
-                    .case_insensitive(case_insensitive)
-                    .multi_line(true)
-                    .crlf(is_crlf),
-            )
-            .build(&query)
-        {
+        if let Ok(regex) = ui::search::regex(&query, &config.search, is_crlf) {
             for _ in 0..count {
                 search_impl(
                     cx.editor,

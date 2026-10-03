@@ -81,17 +81,68 @@ async fn searching_finds_what_revisions_changed() -> anyhow::Result<()> {
         &mut app,
         vec![
             (Some(BRANCH), None),
+            // Regexes, like the editor's search, from the cursor down.
             (
-                Some("<space>u/2<ret>"),
+                Some("<space>u/[23]<ret>"),
                 Some(&|app| assert_eq!(text(app), "x12\n")),
             ),
-            (Some("n"), Some(&|app| assert_eq!(text(app), "x12\n"))),
+            (
+                Some("n"),
+                Some(&|app| {
+                    assert_eq!(text(app), "x13\n");
+                    let status = app
+                        .editor
+                        .get_status()
+                        .map(|(status, _)| status.to_string());
+                    assert_eq!(status.as_deref(), Some("Wrapped around the undo tree"));
+                }),
+            ),
+            (Some("N"), Some(&|app| assert_eq!(text(app), "x12\n"))),
             // A search typed and abandoned goes back to where it started.
             (
                 Some("gg/1<esc>"),
                 Some(&|app| assert_eq!(text(app), "x13\n")),
             ),
+            // So does one that is no regex.
+            (
+                Some("/x1(<ret>"),
+                Some(&|app| assert_eq!(text(app), "x13\n")),
+            ),
             (Some("<ret>"), Some(&|app| assert_eq!(text(app), "x13\n"))),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tree_and_the_editor_share_their_searches() -> anyhow::Result<()> {
+    let mut app = branched()?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            // A search in the editor, which matches nothing in its text, is the tree's `n`.
+            (Some("/2<ret>"), None),
+            (
+                Some("<space>un"),
+                Some(&|app| assert_eq!(text(app), "x12\n")),
+            ),
+            // A search in the tree is the editor's `n`: in `x12`, the `2`.
+            (Some("gg/1[23]<ret><ret>"), None),
+            (
+                Some("ggn"),
+                Some(&|app| {
+                    let (view, doc) = helix_view::current_ref!(app.editor);
+                    let selection = doc.selection(view.id).primary();
+                    assert_eq!(selection.fragment(doc.text().slice(..)), "13");
+                }),
+            ),
+            // The tree's prompt recalls earlier searches.
+            (
+                Some("<space>u/<C-p><C-p><ret>"),
+                Some(&|app| assert_eq!(text(app), "x12\n")),
+            ),
         ],
         false,
     )

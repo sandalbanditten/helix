@@ -14,8 +14,13 @@ mod rows;
 
 use std::time::SystemTime;
 
-use helix_core::{Position, Rope};
-use helix_stdx::path::get_relative_path;
+use std::{cell::RefCell, rc::Rc};
+
+use helix_core::{LineEnding, Position, Rope};
+use helix_stdx::{
+    path::get_relative_path,
+    rope::{self, RegexInput},
+};
 use helix_view::{
     editor::UndoDiff,
     graphics::{CursorKind, Rect},
@@ -33,10 +38,9 @@ use self::{
 };
 use crate::{
     compositor::{Component, Context, Event, EventResult},
-    ctrl, key,
     ui::{
         dock::{self, Side},
-        Prompt,
+        search, Prompt, PromptEvent,
     },
 };
 
@@ -62,10 +66,14 @@ struct Browse {
 /// A search of the text revisions changed.
 #[derive(Default)]
 struct Search {
-    /// The line the query is typed in.
+    /// The line a search is typed in.
     prompt: Option<Prompt>,
-    /// The revision the cursor was on when the query was typed.
+    /// What the prompt last told its callback: the line and the event. The prompt is no layer of
+    /// the compositor, so the tree acts on what it told after handing it each key.
+    reported: Rc<RefCell<Option<(String, PromptEvent)>>>,
+    /// The revision the cursor was on when the search was typed.
     origin: Option<usize>,
+    /// The query the matches are of: the one being typed, or the last search.
     query: String,
     /// The revisions whose changes match `query`.
     matches: Vec<usize>,
@@ -181,7 +189,10 @@ impl UndoTree {
             .is_some_and(|rows| rows.are_of(doc_id, history))
         {
             self.rows = Some(Rows::new(doc_id, history));
-            self.search.matches = self.matching(&self.search.query.clone(), editor);
+            self.search.matches = match self.regex(&self.search.query, editor) {
+                Ok(regex) if !self.search.query.is_empty() => self.matching(&regex, editor),
+                _ => Vec::new(),
+            };
         }
         Some(doc_mut(editor, doc_id).history.get_mut().current_revision())
     }
@@ -439,11 +450,13 @@ impl UndoTree {
                 None
             }
             Action::Search => {
-                self.search.prompt = Some(Prompt::new(
+                let reported = Rc::clone(&self.search.reported);
+                self.search.prompt = Some(search::regex_prompt(
                     "search:".into(),
-                    None,
-                    |_, _| Vec::new(),
-                    |_, _, _| {},
+                    Some(search::REGISTER),
+                    search::completion(editor, search::REGISTER),
+                    move |_, line, event| *reported.borrow_mut() = Some((line.to_owned(), event)),
+                    editor,
                 ));
                 self.search.origin = Some(current);
                 None
@@ -467,11 +480,7 @@ impl UndoTree {
                 None
             }
             Action::NextMatch | Action::PreviousMatch => {
-                let found = self.find(current, action == Action::NextMatch);
-                if found.is_none() && !self.search.query.is_empty() {
-                    editor.set_error(format!("No match for '{}'", self.search.query));
-                }
-                found
+                self.find_next(current, action == Action::NextMatch, editor)
             }
             Action::Grow | Action::Shrink => {
                 let width = if action == Action::Grow {
@@ -527,82 +536,142 @@ impl UndoTree {
         view.ensure_cursor_in_view(doc, scrolloff);
     }
 
-    /// The next revision below (`down`) or above `from` whose changes match the search,
-    /// wrapping around.
-    fn find(&self, from: usize, down: bool) -> Option<usize> {
+    /// The next revision below (`down`) or above `from` whose changes match the search, and
+    /// whether the search wrapped around to find it, which it does if `wrap`.
+    fn find(&self, from: usize, down: bool, wrap: bool) -> Option<(usize, bool)> {
         let rows = self.rows.as_ref()?;
-        let matches = &self.search.matches;
+        let matches = self.search.matches.iter().copied();
         let row = |revision: usize| rows.graph.row_of(revision);
         let from = row(from);
-        if down {
+        let (next, wrapped) = if down {
             let after = matches
-                .iter()
-                .copied()
+                .clone()
                 .filter(|&r| row(r) > from)
                 .min_by_key(|&r| row(r));
-            after.or_else(|| matches.iter().copied().min_by_key(|&r| row(r)))
+            (after, matches.min_by_key(|&r| row(r)))
         } else {
             let before = matches
-                .iter()
-                .copied()
+                .clone()
                 .filter(|&r| row(r) < from)
                 .max_by_key(|&r| row(r));
-            before.or_else(|| matches.iter().copied().max_by_key(|&r| row(r)))
+            (before, matches.max_by_key(|&r| row(r)))
+        };
+        match next {
+            Some(revision) => Some((revision, false)),
+            None => wrapped.filter(|_| wrap).map(|revision| (revision, true)),
         }
     }
 
-    /// The revisions whose changes match `query`: smart-case, like the editor's search.
-    fn matching(&self, query: &str, editor: &mut Editor) -> Vec<usize> {
-        let (Some(rows), false) = (&self.rows, query.is_empty()) else {
+    /// The next revision below (`down`) or above `current` whose changes match the last search,
+    /// the editor's or the tree's, telling as the editor's `n` and `N` do when it wrapped around
+    /// or there is none.
+    fn find_next(&mut self, current: usize, down: bool, editor: &mut Editor) -> Option<usize> {
+        let register = editor.registers.last_search_register;
+        let query = editor.registers.first(register, editor)?.into_owned();
+        if query != self.search.query {
+            match self.regex(&query, editor) {
+                Ok(regex) => {
+                    self.search.matches = self.matching(&regex, editor);
+                    self.search.query = query;
+                }
+                Err(_) => {
+                    editor.set_error(format!("Invalid regex: {query}"));
+                    return None;
+                }
+            }
+        }
+        match self.find(current, down, editor.config().search.wrap_around) {
+            Some((revision, wrapped)) => {
+                if wrapped {
+                    editor.set_status("Wrapped around the undo tree");
+                }
+                Some(revision)
+            }
+            None => {
+                editor.set_error("No more matches");
+                None
+            }
+        }
+    }
+
+    /// The regex of a search for `query` in the history shown.
+    fn regex(&self, query: &str, editor: &Editor) -> Result<rope::Regex, search::RegexError> {
+        let crlf = self
+            .rows
+            .as_ref()
+            .and_then(|rows| editor.document(rows.doc))
+            .is_some_and(|doc| doc.line_ending == LineEnding::Crlf);
+        search::regex(query, &editor.config().search, crlf)
+    }
+
+    /// The revisions whose changes match `regex`: the text they inserted or deleted.
+    fn matching(&self, regex: &rope::Regex, editor: &mut Editor) -> Vec<usize> {
+        let Some(rows) = &self.rows else {
             return Vec::new();
-        };
-        let case_sensitive = query.chars().any(char::is_uppercase);
-        let query = if case_sensitive {
-            query.to_owned()
-        } else {
-            query.to_lowercase()
         };
         let history = doc_mut(editor, rows.doc).history.get_mut();
         (1..history.len())
             .filter(|&revision| {
                 let text = rows::changed_text(history, revision);
-                if case_sensitive {
-                    text.contains(&query)
-                } else {
-                    text.to_lowercase().contains(&query)
-                }
+                regex.is_match(RegexInput::new(text.as_str()))
             })
             .collect()
     }
 
+    /// Hands `event` to the line of the search, then follows what it told: like the editor's
+    /// search, the buffer goes to the first match below where the search started as the query is
+    /// typed, and back there while it matches nothing; `Enter` keeps the search for `n` and `N`,
+    /// `Esc` goes back.
     fn handle_search(&mut self, event: &Event, cx: &mut Context) {
         let Some(prompt) = &mut self.search.prompt else {
             return;
         };
-        let origin = self.search.origin;
-        match event {
-            Event::Key(key!(Enter)) => {
-                self.search.prompt = None;
-                return;
-            }
-            Event::Key(key!(Esc) | ctrl!('c')) => {
-                self.search.prompt = None;
-                if let Some(origin) = origin {
-                    self.browse_to(origin, cx.editor);
-                }
-                return;
-            }
-            _ => prompt.handle_event(event, cx),
-        };
-        let query = prompt.line().clone();
-        self.search.matches = self.matching(&query, cx.editor);
-        self.search.query = query;
-        let Some(origin) = origin else {
+        // The prompt asks to be closed as a layer would be.
+        if let EventResult::Consumed(Some(_)) = prompt.handle_event(event, cx) {
+            self.search.prompt = None;
+        }
+        let Some(origin) = self.search.origin else {
             return;
         };
-        // Like the editor's search, the cursor goes to the first match below where it started,
-        // and back there while nothing matches.
-        let target = self.find(origin, true).unwrap_or(origin);
+        let reported = self.search.reported.borrow_mut().take();
+        match reported {
+            Some((line, PromptEvent::Update)) => self.search_from(origin, &line, false, cx),
+            Some((line, PromptEvent::Validate)) => {
+                cx.editor.registers.last_search_register = search::REGISTER;
+                self.search_from(origin, &line, true, cx);
+            }
+            Some((_, PromptEvent::Abort)) if self.search.prompt.is_none() => {
+                self.browse_to(origin, cx.editor);
+            }
+            _ => {}
+        }
+    }
+
+    /// Takes the buffer to the first revision below `origin` whose changes match `query`, or
+    /// back to `origin` while none does or `query` is empty or no regex. A query that is no
+    /// regex when it is `entered` says why.
+    fn search_from(&mut self, origin: usize, query: &str, entered: bool, cx: &mut Context) {
+        let regex = self.regex(query, cx.editor);
+        let found = match regex {
+            Ok(regex) if !query.is_empty() => {
+                self.search.matches = self.matching(&regex, cx.editor);
+                let wrap = cx.editor.config().search.wrap_around;
+                self.find(origin, true, wrap)
+            }
+            Ok(_) => {
+                self.search.matches.clear();
+                None
+            }
+            Err(error) => {
+                self.search.matches.clear();
+                if entered {
+                    search::show_invalid(cx, error);
+                }
+                None
+            }
+        };
+        self.search.query = query.to_owned();
+        let target = found.map_or(origin, |(revision, _)| revision);
         self.browse_to(target, cx.editor);
     }
 

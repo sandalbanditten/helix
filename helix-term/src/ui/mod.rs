@@ -16,6 +16,7 @@ pub mod popup;
 pub mod prompt;
 mod reload_question;
 mod scrollbar;
+pub(crate) mod search;
 mod select;
 mod sgr;
 mod spinner;
@@ -24,9 +25,8 @@ mod text;
 mod text_decorations;
 pub(crate) mod undo_tree;
 
-use crate::compositor::Compositor;
 use crate::filter_picker_entry;
-use crate::job::{self, Callback};
+use crate::job::Callback;
 pub use completion::Completion;
 pub use editor::EditorView;
 use helix_stdx::rope;
@@ -116,7 +116,7 @@ pub fn raw_regex_prompt(
     let offset_snapshot = doc.view_offset(view.id);
     let config = cx.editor.config();
 
-    let mut prompt = Prompt::new(
+    let prompt = search::regex_prompt(
         prompt,
         history_register,
         completion_fn,
@@ -134,22 +134,8 @@ pub fn raw_regex_prompt(
                         return;
                     }
 
-                    let case_insensitive = if config.search.smart_case {
-                        !input.chars().any(char::is_uppercase)
-                    } else {
-                        false
-                    };
-
                     let is_crlf = doc!(cx.editor).line_ending == helix_core::LineEnding::Crlf;
-                    match rope::RegexBuilder::new()
-                        .syntax(
-                            rope::Config::new()
-                                .case_insensitive(case_insensitive)
-                                .multi_line(true)
-                                .crlf(is_crlf),
-                        )
-                        .build(input)
-                    {
+                    match search::regex(input, &config.search, is_crlf) {
                         Ok(regex) => {
                             let doc = doc_mut!(cx.editor, &doc_id);
                             let view = view_mut!(cx.editor, view_id);
@@ -174,35 +160,15 @@ pub fn raw_regex_prompt(
                             doc.set_view_offset(view.id, offset_snapshot);
 
                             if event == PromptEvent::Validate {
-                                let callback = async move {
-                                    let call: job::Callback = Callback::EditorCompositor(Box::new(
-                                        move |editor: &mut Editor, compositor: &mut Compositor| {
-                                            let contents = Text::new(format!("{}", err));
-                                            let size = compositor.size();
-                                            let popup = Popup::new("invalid-regex", contents)
-                                                .position(Some(helix_core::Position::new(
-                                                    size.height as usize - 2, // 2 = statusline + commandline
-                                                    editor.tree.area().x as usize,
-                                                )))
-                                                .auto_close(true);
-                                            compositor.replace_or_push("invalid-regex", popup);
-                                        },
-                                    ));
-                                    Ok(call)
-                                };
-
-                                cx.jobs.callback(callback);
+                                search::show_invalid(cx, err);
                             }
                         }
                     }
                 }
             }
         },
-    )
-    .with_language("regex", std::sync::Arc::clone(&cx.editor.syn_loader));
-    // Calculate initial completion
-    prompt.recalculate_completion(cx.editor);
-    // prompt
+        cx.editor,
+    );
     cx.push_layer(Box::new(prompt));
 }
 
