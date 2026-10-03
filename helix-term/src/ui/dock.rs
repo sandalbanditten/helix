@@ -67,12 +67,15 @@ pub fn split(area: Rect, side: Side) -> (Rect, u16) {
     }
 }
 
-/// Draws the rail of a panel docked on `side` in `area`, with a thumb over the rows `thumb`.
+/// Draws the rail of a panel docked on `side` in `area`, with a thumb over the rows `thumb`, on
+/// the panel's `base` style. What was drawn there before, like the text under a floating panel,
+/// leaves nothing behind.
 pub fn render_rail(
     surface: &mut Surface,
     area: Rect,
     side: Side,
     thumb: Range<usize>,
+    base: Style,
     track: Style,
     thumb_style: Style,
 ) {
@@ -88,7 +91,9 @@ pub fn render_rail(
         } else {
             ("│", track)
         };
-        surface[(rail, y)].set_symbol(symbol).set_style(style);
+        let cell = &mut surface[(rail, y)];
+        cell.reset();
+        cell.set_symbol(symbol).set_style(base.patch(style));
     }
 }
 
@@ -162,6 +167,26 @@ mod tests {
             statusline_area(Rect::new(0, 0, 60, 29), &[outer, inner]),
             Rect::new(0, 28, 100, 1)
         );
+    }
+
+    #[test]
+    fn rails_cover_what_was_drawn_before() {
+        use helix_view::graphics::{Color, Modifier};
+
+        let area = Rect::new(0, 0, 4, 3);
+        let mut surface = Surface::empty(area);
+        let text = Style::default()
+            .fg(Color::Red)
+            .bg(Color::Blue)
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC);
+        surface.set_string(0, 0, "text", text);
+        let base = Style::default().bg(Color::Black);
+        let track = Style::default().fg(Color::Gray);
+        render_rail(&mut surface, area, Side::Right, 0..0, base, track, track);
+        let cell = &surface[(0, 0)];
+        assert_eq!(cell.symbol.as_str(), "│");
+        assert_eq!((cell.fg, cell.bg), (Color::Gray, Color::Black));
+        assert!(cell.modifier.is_empty());
     }
 
     #[test]

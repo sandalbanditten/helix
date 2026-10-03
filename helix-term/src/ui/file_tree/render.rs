@@ -209,6 +209,7 @@ impl Scene<'_> {
             area,
             self.side.into(),
             thumb,
+            self.styles.base,
             self.styles.track,
             self.styles.thumb,
         );

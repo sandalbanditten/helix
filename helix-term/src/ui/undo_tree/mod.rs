@@ -351,7 +351,15 @@ impl UndoTree {
         }
         self.diff
             .render(content, surface, styles.base, header, editor);
-        dock::render_rail(surface, area, Side::Right, 0..0, styles.track, styles.thumb);
+        dock::render_rail(
+            surface,
+            area,
+            Side::Right,
+            0..0,
+            styles.base,
+            styles.track,
+            styles.thumb,
+        );
     }
 
     /// Runs the editor's command `name`, `count` times, if the panel has the keys and the command

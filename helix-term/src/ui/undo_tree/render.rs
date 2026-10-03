@@ -144,6 +144,7 @@ impl Scene<'_> {
             area,
             Side::Right,
             thumb,
+            self.styles.base,
             self.styles.track,
             self.styles.thumb,
         );
