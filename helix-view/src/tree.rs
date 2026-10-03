@@ -371,6 +371,12 @@ impl Tree {
         self.is_zoomed().then_some(self.focus)
     }
 
+    /// The zoomed views while several cover the area, side by side. The focus moves among them
+    /// only, as within a layout of their own.
+    fn zoomed_together(&self) -> Option<&[ViewId]> {
+        (self.is_zoomed() && self.zoomed.len() > 1).then_some(&self.zoomed)
+    }
+
     /// The views shown: only the zoomed ones while there are, else every view.
     pub fn visible_views(&self) -> impl Iterator<Item = (&View, bool)> {
         let zoomed = self.is_zoomed().then_some(&self.zoomed);
@@ -503,6 +509,14 @@ impl Tree {
 
     // Finds the split in the given direction if it exists
     pub fn find_split_in_direction(&self, id: ViewId, direction: Direction) -> Option<ViewId> {
+        if let Some(zoomed) = self.zoomed_together() {
+            let index = zoomed.iter().position(|&view| view == id)?;
+            return match direction {
+                Direction::Left => index.checked_sub(1).map(|index| zoomed[index]),
+                Direction::Right => zoomed.get(index + 1).copied(),
+                Direction::Up | Direction::Down => None,
+            };
+        }
         let parent = self.nodes[id].parent;
         // Base case, we found the root of the tree
         if parent == id {
@@ -602,6 +616,13 @@ impl Tree {
     }
 
     pub fn prev(&self) -> ViewId {
+        if let Some(zoomed) = self.zoomed_together() {
+            let index = zoomed
+                .iter()
+                .position(|&view| view == self.focus)
+                .expect("the focus is zoomed");
+            return zoomed[(index + zoomed.len() - 1) % zoomed.len()];
+        }
         // This function is very dumb, but that's because we don't store any parent links.
         // (we'd be able to go parent.prev_sibling() recursively until we find something)
         // For now that's okay though, since it's unlikely you'll be able to open a large enough
@@ -622,6 +643,13 @@ impl Tree {
     }
 
     pub fn next(&self) -> ViewId {
+        if let Some(zoomed) = self.zoomed_together() {
+            let index = zoomed
+                .iter()
+                .position(|&view| view == self.focus)
+                .expect("the focus is zoomed");
+            return zoomed[(index + 1) % zoomed.len()];
+        }
         // This function is very dumb, but that's because we don't store any parent links.
         // (we'd be able to go parent.next_sibling() recursively until we find something)
         // For now that's okay though, since it's unlikely you'll be able to open a large enough
@@ -1086,6 +1114,36 @@ mod test {
         assert!(tree.resize(area));
         assert_eq!(tree.zoomed(), None);
         assert_eq!(visible(&tree).len(), 3);
+    }
+
+    #[test]
+    fn the_focus_moves_among_views_zoomed_together() {
+        let area = Rect::new(0, 0, 80, 24);
+        let (mut tree, first, old) = two_views(area);
+        let new = tree.split(
+            View::new(DocumentId::default(), GutterConfig::default()),
+            Layout::Vertical,
+        );
+        tree.set_zoom(&[old, new]);
+        assert_eq!(tree.next(), old, "round from the last one");
+        assert_eq!(tree.prev(), old);
+        assert_eq!(
+            tree.find_split_in_direction(new, Direction::Left),
+            Some(old)
+        );
+        assert_eq!(tree.find_split_in_direction(new, Direction::Right), None);
+        tree.focus = old;
+        assert_eq!(tree.prev(), new, "round from the first one");
+        assert_eq!(tree.find_split_in_direction(old, Direction::Left), None);
+        assert_eq!(tree.find_split_in_direction(old, Direction::Up), None);
+
+        // A single zoomed view lets the focus leave it.
+        tree.set_zoom(&[old]);
+        assert_eq!(tree.prev(), first);
+        assert_eq!(
+            tree.find_split_in_direction(old, Direction::Left),
+            Some(first)
+        );
     }
 
     #[test]
