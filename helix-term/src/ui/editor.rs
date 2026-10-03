@@ -6,6 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
+        diff_view::{self, DiffView},
         dired::{self, Dired},
         dock,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
@@ -52,6 +53,7 @@ pub struct EditorView {
     pub(crate) file_tree: FileTree,
     pub(crate) undo_tree: UndoTree,
     pub(crate) dired: Dired,
+    pub(crate) diff_view: DiffView,
     pub(crate) reload_question: ReloadQuestion,
 }
 
@@ -79,6 +81,7 @@ impl EditorView {
             file_tree: FileTree::default(),
             undo_tree: UndoTree::default(),
             dired: Dired::default(),
+            diff_view: DiffView::default(),
             reload_question: ReloadQuestion::default(),
         }
     }
@@ -149,6 +152,10 @@ impl EditorView {
             decorations.add_decoration(line_decoration);
         }
 
+        if let Some(pane) = &doc.diff_view {
+            decorations.add_decoration(diff_view::Rows::new(pane, theme, inner));
+        }
+
         let folds = text_annotations.folds();
         let syntax_highlighting =
             Self::doc_syntax_highlighting(doc, folds, view_offset.anchor, inner.height, &loader);
@@ -159,6 +166,9 @@ impl EditorView {
                 .dired
                 .spans(doc, first..first + inner.height as usize, editor);
             Cow::Owned(spans)
+        } else if let Some(pane) = &doc.diff_view {
+            let lines = first..first + inner.height as usize;
+            Cow::Owned(diff_view::changed_text(doc, pane, lines, theme))
         } else if let Some(compilation) = &doc.compilation {
             // The colors of the output on the lines shown.
             let end = text.line_to_char((first + inner.height as usize + 1).min(text.len_lines()));
@@ -1835,15 +1845,15 @@ impl Component for EditorView {
         };
 
         self.dired.follow(cx.editor);
-        // A split covers the editor only while it shows its dired or compilation buffer.
+        self.diff_view.follow(cx.editor);
+        // A split covers the editor only while it shows its dired or compilation buffer, or a
+        // pane of the diff view.
         if let Some(zoomed) = cx.editor.tree.zoomed() {
             let doc = cx.editor.tree.get(zoomed).doc;
-            if cx
-                .editor
-                .document(doc)
-                .is_none_or(|doc| doc.dired.is_none() && doc.compilation.is_none())
-            {
-                cx.editor.tree.set_zoom(None);
+            if cx.editor.document(doc).is_none_or(|doc| {
+                doc.dired.is_none() && doc.compilation.is_none() && doc.diff_view.is_none()
+            }) {
+                cx.editor.tree.set_zoom(&[]);
             }
         }
 

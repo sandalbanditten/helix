@@ -269,6 +269,10 @@ pub struct Document {
     /// The run this document shows, if it is the compilation buffer.
     pub compilation: Option<Box<crate::compilation::Compilation>>,
 
+    /// The side of a diff this document shows, if it is a pane of the diff view. A pane is
+    /// read-only: only [`Document::replace_diff_text`] changes its text.
+    pub diff_view: Option<Box<crate::diff_view::Pane>>,
+
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -829,6 +833,7 @@ impl Document {
             readonly: false,
             dired: None,
             compilation: None,
+            diff_view: None,
             jump_labels: HashMap::new(),
             conceal_cache: RefCell::default(),
             document_highlights: HashMap::new(),
@@ -1900,6 +1905,9 @@ impl Document {
         view_id: ViewId,
         emit_lsp_notification: bool,
     ) -> bool {
+        if self.diff_view.is_some() && !transaction.changes().is_empty() {
+            return false;
+        }
         // store the state just before any changes are made. This allows us to undo to the
         // state just before a transaction was applied.
         if self.changes.is_empty() && !transaction.changes().is_empty() {
@@ -1919,6 +1927,19 @@ impl Document {
         }
         success
     }
+    /// Replaces the text of a pane of the diff view, which can't be edited otherwise, with `text`
+    /// shown as `pane`. What is on screen moves along with the text that stays.
+    pub fn replace_diff_text(
+        &mut self,
+        text: &Rope,
+        pane: crate::diff_view::Pane,
+        view_id: ViewId,
+    ) -> bool {
+        let transaction = helix_core::diff::compare_ropes(&self.text, text);
+        self.diff_view = Some(Box::new(pane));
+        self.apply_impl(&transaction, view_id, false)
+    }
+
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
     pub fn apply(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
         self.apply_inner(transaction, view_id, true)
@@ -2464,6 +2485,9 @@ impl Document {
         if let Some(compilation) = &self.compilation {
             return compilation.display_name().into();
         }
+        if let Some(pane) = &self.diff_view {
+            return pane.name.as_str().into();
+        }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())
     }
@@ -2735,7 +2759,8 @@ impl Document {
             .unwrap_or_else(|| "↪ ".into());
         let tab_width = self.tab_width() as u16;
         TextFormat {
-            soft_wrap: enable_soft_wrap && viewport_width > 10,
+            // The rows of the diff view's panes line up only while each line takes one.
+            soft_wrap: enable_soft_wrap && viewport_width > 10 && self.diff_view.is_none(),
             tab_width,
             max_wrap: max_wrap.min(viewport_width / 4),
             max_indent_retain: max_indent_retain.min(viewport_width * 2 / 5),

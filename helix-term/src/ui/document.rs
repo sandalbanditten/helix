@@ -505,6 +505,7 @@ impl<'a> TextRenderer<'a> {
 
     /// Sets the style of an area **within the text viewport* this accounts
     /// both for the renderers vertical offset and its viewport
+    /// Sets the style of `area`, whose rows are visual lines, as far as it is in the viewport.
     pub fn set_style(&mut self, mut area: Rect, style: Style) {
         let offset = self.offset.row as u16;
         if area.y < offset {
@@ -512,7 +513,8 @@ impl<'a> TextRenderer<'a> {
             area.y = offset;
         }
         area.y = area.y - offset + self.viewport.y;
-        self.surface.set_style(area, style);
+        self.surface
+            .set_style(area.intersection(self.viewport), style);
     }
 
     #[allow(clippy::too_many_arguments)]

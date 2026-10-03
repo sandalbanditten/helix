@@ -222,6 +222,13 @@ impl Alignment {
         self.sides[side.index()].rows.get(line as usize).copied()
     }
 
+    /// The line of `side` shown on `row`, or the last one before it if `row` is a filler; `None`
+    /// if no line comes before it.
+    pub fn line_at_or_before(&self, side: Side, row: u32) -> Option<u32> {
+        let rows = &self.sides[side.index()].rows;
+        (rows.partition_point(|&line_row| line_row <= row) as u32).checked_sub(1)
+    }
+
     /// The change of `line` of `side`, if it changed.
     pub fn change(&self, side: Side, line: u32) -> Option<&LineChange> {
         let changes = &self.sides[side.index()].changes;
@@ -312,6 +319,19 @@ mod tests {
         assert_eq!(alignment.row_of_line(Side::Old, 2), Some(3));
         assert_eq!(alignment.row_of_line(Side::New, 5), Some(6));
         assert_eq!(alignment.row_of_line(Side::New, 6), None);
+        assert_eq!(
+            alignment.line_at_or_before(Side::Old, 0),
+            None,
+            "above the first line"
+        );
+        assert_eq!(alignment.line_at_or_before(Side::Old, 1), Some(0));
+        assert_eq!(alignment.line_at_or_before(Side::Old, 2), Some(1));
+        assert_eq!(
+            alignment.line_at_or_before(Side::Old, 4),
+            Some(2),
+            "a filler"
+        );
+        assert_eq!(alignment.line_at_or_before(Side::Old, 9), Some(3));
         assert_eq!(
             *alignment.fillers(Side::Old),
             Fillers {

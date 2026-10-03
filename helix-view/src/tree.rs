@@ -9,8 +9,9 @@ pub struct Tree {
     // (container, index inside the container)
     pub focus: ViewId,
     area: Rect,
-    /// The view covering the whole area while it has the focus, hiding the others.
-    zoomed: Option<ViewId>,
+    /// The views covering the whole area side by side while one of them has the focus, hiding
+    /// the others.
+    zoomed: Vec<ViewId>,
 
     nodes: SlotMap<ViewId, Node>,
 
@@ -98,7 +99,7 @@ impl Tree {
             root,
             focus: root,
             area,
-            zoomed: None,
+            zoomed: Vec::new(),
             nodes,
             stack: Vec::new(),
         }
@@ -345,8 +346,8 @@ impl Tree {
     }
 
     pub fn resize(&mut self, area: Rect) -> bool {
-        // A zoom ends once its view loses the focus.
-        if self.area != area || self.zoomed != self.zoomed() {
+        // A zoom ends once its views lose the focus.
+        if self.area != area || (!self.zoomed.is_empty() && !self.is_zoomed()) {
             self.area = area;
             self.recalculate();
             return true;
@@ -354,23 +355,27 @@ impl Tree {
         false
     }
 
-    /// Lets `view` cover the whole area while it has the focus, or ends the zoom with `None`.
-    pub fn set_zoom(&mut self, view: Option<ViewId>) {
-        self.zoomed = view;
+    /// Lets `views` cover the whole area side by side, in order, while one of them has the focus,
+    /// or ends the zoom with none.
+    pub fn set_zoom(&mut self, views: &[ViewId]) {
+        self.zoomed = views.to_vec();
         self.recalculate();
     }
 
-    /// The view covering the whole area, if one does.
-    pub fn zoomed(&self) -> Option<ViewId> {
-        self.zoomed
-            .filter(|&view| view == self.focus && self.try_get(view).is_some())
+    fn is_zoomed(&self) -> bool {
+        self.zoomed.contains(&self.focus) && self.try_get(self.focus).is_some()
     }
 
-    /// The views shown: only the zoomed one while there is one, else every view.
+    /// The focused view, if zoomed views cover the whole area.
+    pub fn zoomed(&self) -> Option<ViewId> {
+        self.is_zoomed().then_some(self.focus)
+    }
+
+    /// The views shown: only the zoomed ones while there are, else every view.
     pub fn visible_views(&self) -> impl Iterator<Item = (&View, bool)> {
-        let zoomed = self.zoomed();
+        let zoomed = self.is_zoomed().then_some(&self.zoomed);
         self.views()
-            .filter(move |(view, _)| zoomed.is_none_or(|zoomed| zoomed == view.id))
+            .filter(move |(view, _)| zoomed.is_none_or(|zoomed| zoomed.contains(&view.id)))
     }
 
     pub fn recalculate(&mut self) {
@@ -462,11 +467,34 @@ impl Tree {
         }
 
         // The other views keep their areas for when the zoom ends.
-        self.zoomed = self.zoomed();
-        if let Some(view) = self.zoomed {
-            let area = self.area;
-            self.get_mut(view).area = area;
+        let mut zoomed = std::mem::take(&mut self.zoomed);
+        zoomed.retain(|&view| self.try_get(view).is_some());
+        if !zoomed.contains(&self.focus) {
+            zoomed.clear();
         }
+        for (view, area) in zoomed
+            .iter()
+            .zip(Self::side_by_side(self.area, zoomed.len()))
+        {
+            self.get_mut(*view).area = area;
+        }
+        self.zoomed = zoomed;
+    }
+
+    /// `count` areas side by side in `area`, the way a vertical layout splits it: a column apart,
+    /// the last one taking what rounding leaves.
+    fn side_by_side(area: Rect, count: usize) -> impl Iterator<Item = Rect> {
+        let count = count.max(1) as u16;
+        let width = area.width.saturating_sub(count.saturating_sub(2)) / count;
+        (0..count).map(move |i| {
+            let x = area.x + i * (width + 1);
+            let width = if i + 1 == count {
+                area.right().saturating_sub(x)
+            } else {
+                width
+            };
+            Rect::new(x, area.y, width, area.height)
+        })
     }
 
     pub fn traverse(&self) -> Traverse<'_> {
@@ -1015,7 +1043,7 @@ mod test {
         let (mut tree, left, right) = two_views(area);
         let (left_area, right_area) = (tree.get(left).area, tree.get(right).area);
 
-        tree.set_zoom(Some(right));
+        tree.set_zoom(&[right]);
         assert_eq!(tree.zoomed(), Some(right));
         assert_eq!(tree.get(right).area, area);
         assert_eq!(tree.get(left).area, left_area);
@@ -1035,10 +1063,36 @@ mod test {
     }
 
     #[test]
+    fn zoomed_views_cover_the_area_side_by_side() {
+        let area = Rect::new(0, 0, 80, 24);
+        let (mut tree, left, right) = two_views(area);
+        let below = tree.split(
+            View::new(DocumentId::default(), GutterConfig::default()),
+            Layout::Horizontal,
+        );
+        let (old, new) = (left, below);
+        tree.focus = new;
+        tree.set_zoom(&[old, new]);
+        assert_eq!(tree.zoomed(), Some(new));
+        assert_eq!(visible(&tree), [old, new]);
+        // Split like a vertical layout: a column apart for the border.
+        assert_eq!(tree.get(old).area, Rect::new(0, 0, 40, 24));
+        assert_eq!(tree.get(new).area, Rect::new(41, 0, 39, 24));
+
+        // Either one keeps the zoom; another ends it.
+        tree.focus = old;
+        assert_eq!(tree.zoomed(), Some(old));
+        tree.focus = right;
+        assert!(tree.resize(area));
+        assert_eq!(tree.zoomed(), None);
+        assert_eq!(visible(&tree).len(), 3);
+    }
+
+    #[test]
     fn removing_the_zoomed_view_ends_the_zoom() {
         let area = Rect::new(0, 0, 80, 24);
         let (mut tree, left, right) = two_views(area);
-        tree.set_zoom(Some(right));
+        tree.set_zoom(&[right]);
         tree.remove(right);
         assert_eq!(tree.zoomed(), None);
         assert_eq!(tree.get(left).area, area);

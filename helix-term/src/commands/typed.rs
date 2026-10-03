@@ -118,7 +118,7 @@ fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow
     }
 
     // last view and we have unsaved changes
-    if cx.editor.tree.views().count() == 1 {
+    if cx.editor.closes_last_view(view!(cx.editor).id) {
         buffers_remaining_impl(cx.editor)?
     }
 
@@ -172,6 +172,25 @@ fn open_impl(cx: &mut compositor::Context, args: Args, action: Action) -> anyhow
             goto_position(cx.editor, pos);
         }
     }
+    Ok(())
+}
+
+fn diff(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let request = ui::diff_view::Request::buffer_against_head(cx.editor)?;
+    let callback = async move {
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(view) = compositor.find::<ui::EditorView>() {
+                    view.diff_view.open(request, editor);
+                }
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
     Ok(())
 }
 
@@ -3231,6 +3250,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::all(completers::filename),
         signature: Signature {
             positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "diff",
+        aliases: &[],
+        doc: "Diff the buffer against HEAD.",
+        fun: diff,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },

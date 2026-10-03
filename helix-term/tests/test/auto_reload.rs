@@ -355,24 +355,6 @@ async fn the_known_text_back_on_disk_asks_nothing() -> anyhow::Result<()> {
     session.quit().await
 }
 
-fn git(dir: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=helix", "-c", "user.email=helix@helix"])
-        .args([
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "init.defaultBranch=main",
-        ])
-        .args(args)
-        .env_remove("GIT_DIR")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-}
-
 /// The diff base of the buffer and its number of hunks.
 fn diff(app: &Application) -> Option<(String, u32)> {
     let handle = doc!(app.editor).diff_handle()?;

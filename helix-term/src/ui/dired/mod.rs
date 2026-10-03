@@ -278,7 +278,7 @@ fn show(editor: &mut Editor, listing: Listing, select: Option<PathBuf>) {
         }
     }
     let focus = editor.tree.focus;
-    editor.tree.set_zoom(Some(focus));
+    editor.tree.set_zoom(&[focus]);
 
     let scrolloff = editor.config().scrolloff;
     let (view, doc) = current!(editor);

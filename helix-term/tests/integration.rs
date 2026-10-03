@@ -20,6 +20,7 @@ mod test {
     mod command_line;
     mod commands;
     mod conceal;
+    mod diff_view;
     mod folding;
     mod inlay_hints;
     mod movement;

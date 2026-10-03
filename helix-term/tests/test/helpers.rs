@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     mem::replace,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -583,4 +583,23 @@ impl Session {
         anyhow::ensure!(errors.is_empty(), "errors closing: {errors:?}");
         Ok(())
     }
+}
+
+/// Runs git with `args` in `dir`, as a user of its own, and asserts that it succeeds.
+pub fn git(dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=helix", "-c", "user.email=helix@helix"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
 }

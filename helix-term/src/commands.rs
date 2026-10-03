@@ -3071,6 +3071,10 @@ fn ensure_selections_forward(cx: &mut Context) {
 }
 
 fn enter_insert_mode(cx: &mut Context) {
+    if doc!(cx.editor).diff_view.is_some() {
+        cx.editor.set_error("The diff view is read-only");
+        return;
+    }
     cx.editor.mode = Mode::Insert;
 }
 
@@ -6092,7 +6096,7 @@ fn vsplit_new(cx: &mut Context) {
 }
 
 fn wclose(cx: &mut Context) {
-    if cx.editor.tree.views().count() == 1 {
+    if cx.editor.closes_last_view(view!(cx.editor).id) {
         if let Err(err) = typed::buffers_remaining_impl(cx.editor) {
             cx.editor.set_error(err.to_string());
             return;

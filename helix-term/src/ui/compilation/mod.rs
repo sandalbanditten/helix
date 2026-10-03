@@ -254,7 +254,7 @@ fn show(editor: &mut Editor) -> DocumentId {
         }
     };
     let focus = editor.tree.focus;
-    editor.tree.set_zoom(Some(focus));
+    editor.tree.set_zoom(&[focus]);
     doc_id
 }
 
@@ -501,7 +501,7 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
             CompilationOpen::Return => {
                 editor.switch(doc_id, covering(editor));
                 let focus = editor.tree.focus;
-                editor.tree.set_zoom(Some(focus));
+                editor.tree.set_zoom(&[focus]);
             }
         },
     }

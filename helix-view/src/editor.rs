@@ -318,6 +318,26 @@ impl Default for CompilationConfig {
     }
 }
 
+/// The diff view, which shows two texts side by side.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DiffConfig {
+    /// What lines up the texts. Defaults to `difftastic`.
+    pub tool: DiffTool,
+}
+
+/// What lines up the texts of the diff view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffTool {
+    /// `difft`'s structural diff, falling back to the builtin diff where it isn't installed or
+    /// fails.
+    #[default]
+    Difftastic,
+    /// A line diff of Helix's own.
+    Builtin,
+}
+
 /// The undo history: undo files, which keep it between sessions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -648,6 +668,8 @@ pub struct Config {
     pub compilation: CompilationConfig,
     /// The undo history: undo files, which keep it between sessions.
     pub undo: UndoConfig,
+    /// The diff view, which shows two texts side by side.
+    pub diff: DiffConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1654,6 +1676,7 @@ impl Default for Config {
             dired: DiredConfig::default(),
             compilation: CompilationConfig::default(),
             undo: UndoConfig::default(),
+            diff: DiffConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,
@@ -2711,12 +2734,67 @@ impl Editor {
     }
 
     pub fn close(&mut self, id: ViewId) {
+        // A pane of the diff view closes its partner too, which may be next in a list to close.
+        if !self.tree.contains(id) {
+            return;
+        }
+        let panes = self.diff_panes(id);
         // Remove selections for the closed view on all documents.
         for doc in self.documents_mut() {
             doc.remove_view(id);
         }
         self.tree.remove(id);
+        // A pane of the diff view closes with its partner, giving the focus back.
+        if let Some((docs, origin)) = panes {
+            self.close_diff_panes(docs, origin);
+        }
         self._refresh();
+    }
+
+    /// The documents of the diff view's panes, if `view` shows one of them, and the view focused
+    /// before the diff opened.
+    fn diff_panes(&self, view: ViewId) -> Option<([DocumentId; 2], Option<ViewId>)> {
+        let doc = self.tree.try_get(view)?.doc;
+        let pane = self.documents.get(&doc)?.diff_view.as_ref()?;
+        Some(([doc, pane.partner], pane.origin))
+    }
+
+    /// Closes the views showing the panes `docs` and the panes themselves, focusing `origin`.
+    pub fn close_diff_panes(&mut self, docs: [DocumentId; 2], origin: Option<ViewId>) {
+        let views: Vec<_> = self
+            .tree
+            .views()
+            .filter(|(view, _)| docs.contains(&view.doc))
+            .map(|(view, _)| view.id)
+            .collect();
+        for view in views {
+            for doc in self.documents_mut() {
+                doc.remove_view(view);
+            }
+            self.tree.remove(view);
+        }
+        for (view, _) in self.tree.views_mut() {
+            for doc in &docs {
+                view.remove_document(doc);
+            }
+        }
+        for doc in docs {
+            if let Some(doc) = self.documents.remove(&doc) {
+                helix_event::dispatch(DocumentDidClose { editor: self, doc });
+            }
+        }
+        if let Some(origin) = origin.filter(|&origin| self.tree.contains(origin)) {
+            self.focus(origin);
+        }
+    }
+
+    /// Whether closing `view` leaves no view: it is the last one, or it and its partner pane of
+    /// the diff view are.
+    pub fn closes_last_view(&self, view: ViewId) -> bool {
+        let panes = self.diff_panes(view).map(|(docs, _)| docs);
+        self.tree.views().all(|(other, _)| {
+            other.id == view || panes.is_some_and(|docs| docs.contains(&other.doc))
+        })
     }
 
     pub fn close_document(&mut self, doc_id: DocumentId, force: bool) -> Result<(), CloseError> {

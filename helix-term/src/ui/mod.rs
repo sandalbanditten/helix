@@ -1,5 +1,6 @@
 pub(crate) mod compilation;
 mod completion;
+pub(crate) mod diff_view;
 pub(crate) mod dired;
 mod dock;
 mod document;
