@@ -2,6 +2,7 @@
 
 use helix_view::{info::Info, input::KeyEvent};
 
+use super::browser::Motion;
 use crate::{
     ctrl, key,
     ui::panel_keys::{self, bind, Bindings},
@@ -46,6 +47,28 @@ pub enum Action {
     ToggleWidth,
     Help,
     Unfocus,
+}
+
+impl Action {
+    /// The move of the cursor the action makes, if it makes one.
+    pub fn motion(self) -> Option<Motion> {
+        Some(match self {
+            Self::Down => Motion::Down,
+            Self::Up => Motion::Up,
+            Self::Expand => Motion::Expand,
+            Self::Collapse => Motion::Collapse,
+            Self::HalfPageDown => Motion::HalfPageDown,
+            Self::HalfPageUp => Motion::HalfPageUp,
+            Self::PageDown => Motion::PageDown,
+            Self::PageUp => Motion::PageUp,
+            Self::First => Motion::First,
+            Self::Last => Motion::Last,
+            Self::AlignCenter => Motion::AlignCenter,
+            Self::AlignTop => Motion::AlignTop,
+            Self::AlignBottom => Motion::AlignBottom,
+            _ => return None,
+        })
+    }
 }
 
 impl panel_keys::Action for Action {

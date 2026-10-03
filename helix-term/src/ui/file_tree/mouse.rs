@@ -9,7 +9,7 @@ use helix_view::{
     Editor,
 };
 
-use super::{ops, tree::Kind, viewport, FileTree, Workspace};
+use super::{ops, tree::Kind, FileTree};
 use crate::compositor::EventResult;
 use crate::ui::dock;
 
@@ -75,17 +75,16 @@ impl FileTree {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let lines = editor.config().scroll_lines.unsigned_abs();
                 if let Some(workspace) = &mut self.workspace {
-                    let start = workspace.start;
-                    workspace.start = match kind {
-                        MouseEventKind::ScrollDown => start + lines,
-                        _ => start.saturating_sub(lines),
-                    };
-                    workspace.clamp_start();
+                    let down = kind == MouseEventKind::ScrollDown;
+                    workspace.browser.scroll(lines, down);
                 }
             }
             MouseEventKind::Down(MouseButton::Left) if column == rail => {
                 // Without a thumb, the whole rail is track, which still resizes.
-                let thumb = self.workspace.as_ref().and_then(Workspace::thumb);
+                let thumb = self
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.browser.thumb());
                 self.gesture = Some(match thumb {
                     Some(thumb) if thumb.contains(&row) => Gesture::ThumbPressed {
                         column,
@@ -120,13 +119,13 @@ impl FileTree {
         match gesture {
             Gesture::Scrolling { grab } => {
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.drag_thumb(row, grab);
+                    workspace.browser.drag_thumb(row, grab);
                 }
             }
             Gesture::Resizing => self.resize_to(column, editor),
             Gesture::TrackPressed { row, .. } if released => {
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.page_towards(row);
+                    workspace.browser.page_towards(row);
                 }
             }
             _ => {}
@@ -156,17 +155,18 @@ impl FileTree {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
-        let Some(index) = workspace.row_at(row) else {
+        let browser = &mut workspace.browser;
+        let Some(index) = browser.row_at(row) else {
             return;
         };
-        let node = workspace.rows[index].node;
-        let kind = workspace.tree.node(node).kind;
+        let node = browser.rows[index].node;
+        let kind = browser.tree.node(node).kind;
         if kind == Kind::Directory && index != 0 {
-            workspace.toggle_row(index);
+            browser.toggle_row(index);
             // The rows stay where they are under the pointer.
             self.update_rows(editor);
         } else if kind.is_file() {
-            let path = workspace.root.join(&workspace.rows[index].path);
+            let path = workspace.root.join(&workspace.browser.rows[index].path);
             match ops::open(editor, &path, OpenAction::Replace) {
                 // Like opening with Enter.
                 Ok(()) => self.unfocus(),
@@ -176,109 +176,6 @@ impl FileTree {
     }
 }
 
-impl Workspace {
-    /// The ordinary row drawn on the screen row `row`. Pinned rows and blank space have none.
-    fn row_at(&self, row: u16) -> Option<usize> {
-        let area = self.rows_area;
-        if !(area.top()..area.bottom()).contains(&row) {
-            return None;
-        }
-        let offset = usize::from(row - area.top());
-        let pinned = viewport::pinned(&self.rows, self.drawn_start, area.height as usize).len();
-        let index = self.drawn_start + offset.checked_sub(pinned)?;
-        (index < self.rows.len()).then_some(index)
-    }
-
-    /// The screen rows of the rail's thumb, if the rows do not fit.
-    fn thumb(&self) -> Option<std::ops::Range<u16>> {
-        let area = self.rows_area;
-        let thumb = viewport::thumb(&self.rows, self.drawn_start, area.height as usize)?;
-        Some(area.top() + thumb.start as u16..area.top() + thumb.end as u16)
-    }
-
-    /// Scrolls so that the thumb, held `grab` rows below its top, is at the screen row `row`.
-    fn drag_thumb(&mut self, row: u16, grab: usize) {
-        let Some(thumb) = self.thumb() else {
-            return;
-        };
-        let height = self.rows_area.height as usize;
-        let travel = height - thumb.len();
-        if travel == 0 {
-            return;
-        }
-        let offset = usize::from(row.saturating_sub(self.rows_area.top()))
-            .saturating_sub(grab)
-            .min(travel);
-        let max_start = viewport::max_start(&self.rows, height);
-        self.start = (offset * max_start + travel / 2) / travel;
-    }
-
-    /// Scrolls a page towards the screen row `row` of the rail's track.
-    fn page_towards(&mut self, row: u16) {
-        let Some(thumb) = self.thumb() else {
-            return;
-        };
-        let height = self.rows_area.height as usize;
-        let page = viewport::capacity(&self.rows, self.start, height).max(1);
-        if row < thumb.start {
-            self.start = self.start.saturating_sub(page);
-        } else if row >= thumb.end {
-            self.start += page;
-        }
-        self.clamp_start();
-    }
-
-    fn clamp_start(&mut self) {
-        self.start = viewport::clamp(&self.rows, self.start, self.rows_area.height as usize);
-    }
-}
-
 fn contains(area: Rect, column: u16, row: u16) -> bool {
     (area.left()..area.right()).contains(&column) && (area.top()..area.bottom()).contains(&row)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::{tree::tests::file, workspace::tests::workspace};
-    use super::*;
-
-    /// The test workspace with ten more files, drawn four rows high.
-    fn scrollable() -> Workspace {
-        let mut workspace = workspace();
-        let root = workspace.tree.root();
-        let mut entries: Vec<_> = (0..10).map(|i| file(&format!("f{i}"))).collect();
-        entries.extend(["a", "b"].map(file));
-        workspace.tree.apply_listing(root, Some(entries));
-        workspace.rebuild_rows();
-        workspace.rows_area = Rect::new(0, 5, 20, 4);
-        workspace
-    }
-
-    #[test]
-    fn rows_are_found_below_the_pinned_ones() {
-        let mut workspace = scrollable();
-        assert_eq!(workspace.row_at(5), Some(0));
-        assert_eq!(workspace.row_at(9), None);
-        // Scrolled down, the root row is pinned and inert.
-        workspace.drawn_start = 3;
-        assert_eq!(workspace.row_at(5), None);
-        assert_eq!(workspace.row_at(6), Some(3));
-    }
-
-    #[test]
-    fn the_thumb_drags_and_the_track_pages() {
-        let mut workspace = scrollable();
-        let rows = workspace.rows.len();
-        assert_eq!(workspace.thumb(), Some(5..7));
-        // Dragging the thumb to the bottom shows the last rows.
-        workspace.drag_thumb(8, 0);
-        assert_eq!(workspace.start, viewport::max_start(&workspace.rows, 4));
-        workspace.drawn_start = workspace.start;
-        assert_eq!(workspace.thumb().map(|thumb| thumb.end), Some(9));
-        // Pressing the track above the thumb goes a page up.
-        let before = workspace.start;
-        workspace.page_towards(5);
-        assert!(workspace.start < before);
-        assert!(rows > 4);
-    }
 }

@@ -17,12 +17,12 @@ use helix_view::{
     dired::Source,
     editor::{Action as OpenAction, FileTreeConfig, FileTreeSort},
     graphics::Rect,
-    smooth_scroll::SmoothOffset,
     Editor,
 };
 
 use super::{
     background::{in_background, ListRequest, Lister},
+    browser::Browser,
     edit::{Clip, Edit, EditKind},
     fs::ListOptions,
     git::GitStatuses,
@@ -33,7 +33,6 @@ use super::{
     rows::{InputRow, Rows},
     search::{Candidates, Hit, Matching},
     tree::{Kind, NodeId, Reveal, Tree},
-    viewport::{self, Align},
 };
 use crate::watch::Watcher;
 
@@ -42,30 +41,16 @@ pub(super) struct Workspace {
     /// Tells results for this workspace from results for an earlier one.
     pub(super) generation: u64,
     pub(super) root: Arc<Path>,
-    pub(super) tree: Tree,
-    pub(super) rows: Rows,
-    /// The settings `rows` were built with.
-    pub(super) flatten_dirs: bool,
+    /// The entries, the rows showing them, the cursor and the scroll position.
+    pub(super) browser: Browser,
+    /// The order the entries were listed in.
     pub(super) sort: FileTreeSort,
-    /// Whether `rows` needs rebuilding.
-    pub(super) dirty: bool,
     pub(super) git: GitStatuses,
     pub(super) git_refresh: GitRefresh,
-    pub(super) cursor: NodeId,
-    /// The first ordinary row.
-    pub(super) start: usize,
-    pub(super) smooth_scroll: SmoothOffset,
     /// Whether the first listing has arrived; the panel is only shown after that.
     pub(super) ready: bool,
     /// Paths to reveal once their directories are listed.
     pub(super) reveals: Vec<PendingReveal>,
-    /// A node to scroll into view once the panel height is known.
-    pub(super) scroll_to: Option<NodeId>,
-    /// The number of rows the panel showed last.
-    pub(super) height: usize,
-    /// Where the rows were drawn last, and the first ordinary row drawn, for the mouse.
-    pub(super) rows_area: Rect,
-    pub(super) drawn_start: usize,
     /// A name or path being typed for a file operation.
     pub(super) edit: Option<Edit>,
     /// Where the line of an inline edit was drawn last.
@@ -181,30 +166,19 @@ impl Workspace {
             .file_name()
             .map_or_else(|| root.as_os_str().to_owned(), ToOwned::to_owned);
         let tree = Tree::new(name, config.sort);
-        let rows = Rows::build(&tree, config.flatten_dirs, None);
         let git_dir = root
             .ancestors()
             .map(|dir| dir.join(".git"))
             .find(|git_dir| git_dir.is_dir());
         Self {
             generation,
-            cursor: tree.root(),
             root: root.into(),
-            tree,
-            rows,
-            flatten_dirs: config.flatten_dirs,
+            browser: Browser::new(tree, config.flatten_dirs),
             sort: config.sort,
-            dirty: false,
             git: GitStatuses::default(),
             git_refresh: GitRefresh::Idle,
-            start: 0,
-            smooth_scroll: SmoothOffset::default(),
             ready: false,
             reveals: Vec::new(),
-            scroll_to: None,
-            height: 0,
-            rows_area: Rect::default(),
-            drawn_start: 0,
             edit: None,
             edit_area: None,
             search: Search::default(),
@@ -215,17 +189,17 @@ impl Workspace {
     }
 
     pub(super) fn start_search(&mut self, editor: &Editor) {
-        let Some(index) = self.rows.index_of(self.cursor) else {
+        let Some(index) = self.browser.rows.index_of(self.browser.cursor) else {
             return;
         };
-        let row = &self.rows[index];
+        let row = &self.browser.rows[index];
         self.search = Search {
             origin: Some(Origin {
-                cursor: self.cursor,
+                cursor: self.browser.cursor,
                 path: row.path.clone(),
-                is_dir: self.tree.node(row.node).kind == Kind::Directory,
-                start: self.start,
-                expanded: self.tree.expanded_directories().collect(),
+                is_dir: self.browser.tree.node(row.node).kind == Kind::Directory,
+                start: self.browser.start,
+                expanded: self.browser.tree.expanded_directories().collect(),
             }),
             query: std::mem::take(&mut self.search.query),
             ..Search::default()
@@ -246,7 +220,7 @@ impl Workspace {
             }
             None if incremental => {
                 if let Some(origin) = &self.search.origin {
-                    self.cursor = origin.cursor;
+                    self.browser.cursor = origin.cursor;
                 }
             }
             None => editor.set_error("No more matches"),
@@ -265,24 +239,26 @@ impl Workspace {
             self.search.generation += 1;
             self.reveals
                 .retain(|reveal| reveal.purpose != Purpose::Match);
-            if self.tree.contains(origin.cursor) {
-                self.cursor = origin.cursor;
+            if self.browser.tree.contains(origin.cursor) {
+                self.browser.cursor = origin.cursor;
             }
-            self.start = origin.start;
+            self.browser.start = origin.start;
         }
         let expanded: Vec<_> = self
+            .browser
             .tree
             .expanded_directories()
             .filter(|dir| !origin.expanded.contains(dir))
             .collect();
         for dir in expanded {
-            let keep =
-                kept && self.tree.contains(self.cursor) && self.tree.is_within(self.cursor, dir);
-            if self.tree.contains(dir) && !keep {
-                self.tree.collapse(dir);
+            let keep = kept
+                && self.browser.tree.contains(self.browser.cursor)
+                && self.browser.tree.is_within(self.browser.cursor, dir);
+            if self.browser.tree.contains(dir) && !keep {
+                self.browser.tree.collapse(dir);
             }
         }
-        self.dirty = true;
+        self.browser.dirty = true;
     }
 
     /// The rows among `rows` of files matching the query being typed, in order, each with the
@@ -292,7 +268,7 @@ impl Workspace {
             Some(Edit {
                 kind: EditKind::Search,
                 prompt,
-            }) => self.search.matches(prompt.line(), &self.rows, rows),
+            }) => self.search.matches(prompt.line(), &self.browser.rows, rows),
             _ => Vec::new(),
         }
     }
@@ -304,55 +280,57 @@ impl Workspace {
             .as_ref()
             .is_some_and(|edit| edit.kind.input().is_some())
         {
-            self.rows.input()
+            self.browser.rows.input()
         } else {
-            self.rows.index_of(self.cursor)
+            self.browser.rows.index_of(self.browser.cursor)
         }
     }
 
     /// The absolute path of the cursor's entry.
     pub(super) fn cursor_path(&self) -> Option<PathBuf> {
-        let index = self.rows.index_of(self.cursor)?;
-        Some(self.root.join(&self.rows[index].path))
+        let index = self.browser.rows.index_of(self.browser.cursor)?;
+        Some(self.root.join(&self.browser.rows[index].path))
     }
 
     /// The path of the cursor's entry relative to the root, unless it is the root.
     pub(super) fn cursor_entry(&self) -> Option<&Path> {
         let index = self
+            .browser
             .rows
-            .index_of(self.cursor)
+            .index_of(self.browser.cursor)
             .filter(|&index| index != 0)?;
-        Some(&self.rows[index].path)
+        Some(&self.browser.rows[index].path)
     }
 
     /// What dired lists for the cursor's entry, and the entry to put dired's cursor on
     /// (relative to the listing's root): with `tree` every row the tree shows, else the
     /// directory under the cursor or the one holding the entry under it.
     pub(super) fn dired_source(&self, tree: bool) -> Option<(Source, Option<PathBuf>)> {
-        let index = self.rows.index_of(self.cursor)?;
-        let row = &self.rows[index];
+        let index = self.browser.rows.index_of(self.browser.cursor)?;
+        let row = &self.browser.rows[index];
         if tree {
             let mut expanded: BTreeSet<PathBuf> = self
+                .browser
                 .tree
                 .expanded_directories()
-                .map(|dir| self.tree.path(dir))
+                .map(|dir| self.browser.tree.path(dir))
                 .filter(|path| !path.as_os_str().is_empty())
                 .collect();
             // A run shown as one row lists each of its directories.
-            for row in self.rows.iter().filter(|row| row.head != row.node) {
-                let mut dir = self.tree.node(row.node).parent;
+            for row in self.browser.rows.iter().filter(|row| row.head != row.node) {
+                let mut dir = self.browser.tree.node(row.node).parent;
                 while let Some(id) = dir {
-                    expanded.insert(self.tree.path(id));
+                    expanded.insert(self.browser.tree.path(id));
                     if id == row.head {
                         break;
                     }
-                    dir = self.tree.node(id).parent;
+                    dir = self.browser.tree.node(id).parent;
                 }
             }
             let root = self.root.to_path_buf();
             return Some((Source::Tree { root, expanded }, Some(row.path.clone())));
         }
-        if index == 0 || self.tree.node(row.node).kind == Kind::Directory {
+        if index == 0 || self.browser.tree.node(row.node).kind == Kind::Directory {
             return Some((Source::Directory(self.root.join(&row.path)), None));
         }
         let dir = self.root.join(row.path.parent()?);
@@ -364,11 +342,12 @@ impl Workspace {
         let edit = self.edit.as_ref()?;
         let name = edit.prompt.line().as_str();
         let (index, directory) = match &edit.kind {
-            EditKind::Rename { node, .. } => (self.rows.index_of(*node)?, false),
-            EditKind::Create { directory, .. } => {
-                (self.rows.input()?, *directory || name.ends_with('/'))
-            }
-            EditKind::Paste { directory, .. } => (self.rows.input()?, *directory),
+            EditKind::Rename { node, .. } => (self.browser.rows.index_of(*node)?, false),
+            EditKind::Create { directory, .. } => (
+                self.browser.rows.input()?,
+                *directory || name.ends_with('/'),
+            ),
+            EditKind::Paste { directory, .. } => (self.browser.rows.input()?, *directory),
             EditKind::Move { .. } | EditKind::Delete { .. } | EditKind::Search => return None,
         };
         Some(EditRow {
@@ -380,19 +359,19 @@ impl Workspace {
 
     pub(super) fn cancel_edit(&mut self) {
         if self.edit.take().is_some() {
-            self.dirty = true;
+            self.browser.dirty = true;
         }
         self.finish_search(false);
     }
 
     /// Runs a file operation on the cursor's entry or starts typing the name it needs.
     pub(super) fn act(&mut self, action: Action, editor: &mut Editor) -> Focus {
-        let Some(index) = self.rows.index_of(self.cursor) else {
+        let Some(index) = self.browser.rows.index_of(self.browser.cursor) else {
             return Focus::Keep;
         };
-        let row = &self.rows[index];
+        let row = &self.browser.rows[index];
         let (node, path) = (row.node, row.path.clone());
-        let kind = self.tree.node(node).kind;
+        let kind = self.browser.tree.node(node).kind;
         let root = index == 0;
         let open = |editor: &mut Editor, action| {
             if !kind.is_file() {
@@ -407,16 +386,22 @@ impl Workspace {
             }
         };
         match action {
-            Action::Open if kind == Kind::Directory && !root => self.toggle_row(index),
+            Action::Open if kind == Kind::Directory && !root => self.browser.toggle_row(index),
             Action::Open => return open(editor, OpenAction::Replace),
             Action::OpenHorizontal => return open(editor, OpenAction::HorizontalSplit),
             Action::OpenVertical => return open(editor, OpenAction::VerticalSplit),
             // The workspace root is the one entry that stays put.
             Action::Rename | Action::MoveInWorkspace | Action::Move | Action::Delete if root => {}
             Action::Rename => {
-                let name = self.tree.node(node).name.to_string_lossy().into_owned();
+                let name = self
+                    .browser
+                    .tree
+                    .node(node)
+                    .name
+                    .to_string_lossy()
+                    .into_owned();
                 self.edit = Some(Edit::new(EditKind::Rename { node, path }, name, editor));
-                self.dirty = true;
+                self.browser.dirty = true;
             }
             Action::MoveInWorkspace | Action::Move => {
                 let absolute = action == Action::Move;
@@ -430,21 +415,25 @@ impl Workspace {
             }
             Action::NewFile | Action::NewDirectory => {
                 let dir_row = self.input_dir_row(index);
-                let dir = self.rows[dir_row].node;
+                let dir = self.browser.rows[dir_row].node;
                 let kind = EditKind::Create {
                     dir,
-                    dir_path: self.rows[dir_row].path.clone(),
+                    dir_path: self.browser.rows[dir_row].path.clone(),
                     directory: action == Action::NewDirectory,
                 };
                 self.edit = Some(Edit::new(kind, String::new(), editor));
-                self.dirty = true;
+                self.browser.dirty = true;
             }
             Action::Delete => {
                 let directory = kind == Kind::Directory;
                 let kind = EditKind::Delete { path, directory };
                 self.edit = Some(Edit::new(kind, String::new(), editor));
             }
-            _ => self.navigate(action),
+            _ => {
+                if let Some(motion) = action.motion() {
+                    self.browser.navigate(motion);
+                }
+            }
         }
         Focus::Keep
     }
@@ -452,14 +441,20 @@ impl Workspace {
     /// The row of the directory a new entry goes in from row `index`, expanded: the directory
     /// under the cursor, or the one holding the entry under it.
     fn input_dir_row(&mut self, index: usize) -> usize {
-        let row = &self.rows[index];
-        let dir_row = if self.tree.node(row.node).kind == Kind::Directory {
+        let row = &self.browser.rows[index];
+        let dir_row = if self.browser.tree.node(row.node).kind == Kind::Directory {
             index
         } else {
             row.parent.unwrap_or(0)
         };
-        if dir_row != 0 && !self.tree.node(self.rows[dir_row].node).expanded {
-            self.expand_row(dir_row);
+        if dir_row != 0
+            && !self
+                .browser
+                .tree
+                .node(self.browser.rows[dir_row].node)
+                .expanded
+        {
+            self.browser.expand_row(dir_row);
         }
         dir_row
     }
@@ -473,7 +468,7 @@ impl Workspace {
         copying: &HashSet<PathBuf>,
         editor: &mut Editor,
     ) {
-        let Some(index) = self.rows.index_of(self.cursor) else {
+        let Some(index) = self.browser.rows.index_of(self.browser.cursor) else {
             return;
         };
         let Some(name) = clip.path.file_name() else {
@@ -485,7 +480,7 @@ impl Workspace {
             return;
         };
         let dir_row = self.input_dir_row(index);
-        let dir_path = self.rows[dir_row].path.clone();
+        let dir_path = self.browser.rows[dir_row].path.clone();
         let dir = self.root.join(&dir_path);
         let directory = metadata.is_dir();
         // A cut entry pasted where it is keeps its name.
@@ -499,13 +494,13 @@ impl Workspace {
         };
         let kind = EditKind::Paste {
             clip,
-            dir: self.rows[dir_row].node,
+            dir: self.browser.rows[dir_row].node,
             dir_path,
             directory,
         };
         let name = name.to_string_lossy().into_owned();
         self.edit = Some(Edit::new(kind, name, editor));
-        self.dirty = true;
+        self.browser.dirty = true;
     }
 
     /// Carries out a finished edit.
@@ -579,7 +574,7 @@ impl Workspace {
     /// moved, created (`from` is `None`) or deleted, and puts the cursor on `to`.
     pub(super) fn moved(&mut self, from: Option<&Path>, to: &Path) {
         if let Some(parent) = from.and_then(Path::parent) {
-            self.tree.invalidate(parent);
+            self.browser.tree.invalidate(parent);
         }
         self.appeared(to, Purpose::Cursor);
     }
@@ -592,9 +587,9 @@ impl Workspace {
             let known = to
                 .ancestors()
                 .skip(1)
-                .find(|dir| self.tree.find(dir).is_some());
+                .find(|dir| self.browser.tree.find(dir).is_some());
             if let Some(dir) = known {
-                self.tree.invalidate(dir);
+                self.browser.tree.invalidate(dir);
             }
             self.reveal(to.to_path_buf(), purpose);
         }
@@ -602,100 +597,27 @@ impl Workspace {
 
     /// Deletes the entry at `path`, relative to the root, moving the cursor off it first.
     pub(super) fn delete(&mut self, path: PathBuf, editor: &mut Editor) {
-        if let Some(index) = self.rows.index_of(self.cursor) {
-            let after =
-                (index + 1..self.rows.len()).find(|&i| !self.rows[i].path.starts_with(&path));
+        if let Some(index) = self.browser.rows.index_of(self.browser.cursor) {
+            let after = (index + 1..self.browser.rows.len())
+                .find(|&i| !self.browser.rows[i].path.starts_with(&path));
             let neighbour = after.unwrap_or(index.saturating_sub(1));
-            self.cursor = self.rows[neighbour].node;
+            self.browser.cursor = self.browser.rows[neighbour].node;
         }
         match ops::delete(editor, &self.root.join(&path)) {
             Ok(()) => {
                 editor.set_status(format!("'{}' deleted", path.display()));
                 if let Some(parent) = path.parent() {
-                    self.tree.invalidate(parent);
+                    self.browser.tree.invalidate(parent);
                 }
             }
             Err(err) => editor.set_error(err.to_string()),
         }
     }
 
-    /// Moves the cursor or expands or collapses the directory under it.
-    pub(super) fn navigate(&mut self, action: Action) {
-        let Some(cursor) = self.rows.index_of(self.cursor) else {
-            self.cursor = self.tree.root();
-            return;
-        };
-        let last = self.rows.len() - 1;
-        let height = self.height.max(1);
-        let start = viewport::clamp(&self.rows, self.start, height);
-        let page = viewport::capacity(&self.rows, start, height).max(1);
-        let target = match action {
-            Action::Down if cursor == last => 0,
-            Action::Down => cursor + 1,
-            Action::Up if cursor == 0 => last,
-            Action::Up => cursor - 1,
-            Action::HalfPageDown => (cursor + page / 2).min(last),
-            Action::HalfPageUp => cursor.saturating_sub(page / 2),
-            Action::PageDown => (cursor + page).min(last),
-            Action::PageUp => cursor.saturating_sub(page),
-            Action::First => 0,
-            Action::Last => last,
-            Action::Expand => {
-                self.expand_row(cursor);
-                cursor
-            }
-            Action::Collapse => {
-                let row = &self.rows[cursor];
-                if cursor != 0 && self.tree.node(row.node).expanded {
-                    // Collapsing the first directory of a run collapses the rest of it.
-                    self.tree.collapse(row.head);
-                    self.dirty = true;
-                }
-                cursor
-            }
-            Action::AlignCenter | Action::AlignTop | Action::AlignBottom => {
-                let align = match action {
-                    Action::AlignCenter => Align::Center,
-                    Action::AlignTop => Align::Top,
-                    _ => Align::Bottom,
-                };
-                self.start = viewport::align(&self.rows, height, cursor, align);
-                cursor
-            }
-            // The other actions leave the cursor where it is.
-            _ => cursor,
-        };
-        self.cursor = self.rows[target].node;
-    }
-
-    /// Expands or collapses the directory of row `index`.
-    pub(super) fn toggle_row(&mut self, index: usize) {
-        let row = &self.rows[index];
-        if self.tree.node(row.node).expanded {
-            // Collapsing the first directory of a run collapses the rest of it.
-            self.tree.collapse(row.head);
-            self.dirty = true;
-        } else {
-            self.expand_row(index);
-        }
-    }
-
-    /// Expands every directory of the run that row `index` stands for.
-    pub(super) fn expand_row(&mut self, index: usize) {
-        let row = &self.rows[index];
-        let (head, mut node) = (row.head, Some(row.node));
-        while let Some(id) = node {
-            self.tree.expand(id);
-            node = (id != head).then(|| self.tree.node(id).parent).flatten();
-        }
-        self.dirty = true;
-    }
-
     /// Scrolls just enough to show the cursor with `scrolloff` rows around it.
     pub(super) fn reveal_cursor(&mut self, scrolloff: usize) {
         if let Some(cursor) = self.cursor_row() {
-            let height = self.height.max(1);
-            self.start = viewport::reveal(&self.rows, self.start, height, cursor, scrolloff);
+            self.browser.reveal_row(cursor, scrolloff);
         }
     }
 
@@ -709,29 +631,29 @@ impl Workspace {
     pub(super) fn update(&mut self, lister: &Lister, config: &FileTreeConfig) {
         if config.sort != self.sort {
             self.sort = config.sort;
-            self.tree.set_sort(config.sort);
-            self.dirty = true;
+            self.browser.tree.set_sort(config.sort);
+            self.browser.dirty = true;
         }
-        if config.flatten_dirs != self.flatten_dirs {
-            self.flatten_dirs = config.flatten_dirs;
-            self.dirty = true;
+        if config.flatten_dirs != self.browser.flatten_dirs {
+            self.browser.flatten_dirs = config.flatten_dirs;
+            self.browser.dirty = true;
         }
 
         let mut unlisted = Vec::new();
         let mut revealed = false;
-        self.reveals.retain(
-            |PendingReveal { path, purpose }| match self.tree.reveal(path) {
+        self.reveals.retain(|PendingReveal { path, purpose }| {
+            match self.browser.tree.reveal(path) {
                 Reveal::Found(node) => {
                     if *purpose != Purpose::Show {
-                        self.cursor = node;
-                        self.scroll_to = Some(node);
+                        self.browser.cursor = node;
+                        self.browser.scroll_to = Some(node);
                     }
                     revealed = true;
                     false
                 }
                 Reveal::Unlisted(dir) => {
                     // List the whole way down at once rather than one directory per round trip.
-                    let dir = self.tree.path(dir);
+                    let dir = self.browser.tree.path(dir);
                     unlisted.extend(
                         path.ancestors()
                             .skip(1)
@@ -742,12 +664,15 @@ impl Workspace {
                     true
                 }
                 Reveal::Missing => false,
-            },
-        );
-        self.dirty |= revealed;
+            }
+        });
+        self.browser.dirty |= revealed;
 
-        let requests = self.tree.take_listing_requests();
-        let mut dirs: Vec<_> = requests.into_iter().map(|id| self.tree.path(id)).collect();
+        let requests = self.browser.tree.take_listing_requests();
+        let mut dirs: Vec<_> = requests
+            .into_iter()
+            .map(|id| self.browser.tree.path(id))
+            .collect();
         dirs.extend(unlisted);
         if !dirs.is_empty() {
             // Parents first, so their children exist when the listings are merged.
@@ -764,7 +689,7 @@ impl Workspace {
             });
         }
 
-        if std::mem::take(&mut self.dirty) {
+        if std::mem::take(&mut self.browser.dirty) {
             self.rebuild_rows();
             self.watch();
         }
@@ -776,72 +701,41 @@ impl Workspace {
             return;
         };
         let mut dirs: HashSet<_> = self
+            .browser
             .tree
             .loaded_directories()
-            .map(|dir| self.root.join(self.tree.path(dir)))
+            .map(|dir| self.root.join(self.browser.tree.path(dir)))
             .collect();
         dirs.extend(self.git_dir.clone());
         watcher.watch(dirs);
     }
 
-    /// Rebuilds `rows`, keeping the cursor and the first ordinary row on the same entries, or
-    /// on their closest shown directory when they disappear from view or from disk.
+    /// Rebuilds the rows, with the input row of a new entry being named.
     pub(super) fn rebuild_rows(&mut self) {
-        let path_of = |node| {
-            self.rows
-                .index_of(node)
-                .map(|index| self.rows[index].path.clone())
-        };
-        let anchor = self
-            .rows
-            .get(self.start)
-            .map(|row| (row.node, row.path.clone()));
-        let cursor_path = path_of(self.cursor);
-        self.rows = Rows::build(&self.tree, self.flatten_dirs, self.input_row());
-        self.start = anchor
-            .and_then(|(node, path)| self.shown_row(node, Some(&path)))
-            .unwrap_or(self.start.min(self.rows.len() - 1));
-        self.cursor = self
-            .shown_row(self.cursor, cursor_path.as_deref())
-            .map_or(self.tree.root(), |index| self.rows[index].node);
+        let input = self.input_row();
+        self.browser.rebuild_rows(input);
     }
 
     /// Where the input row for a new entry goes: after the directories for a file (when they
     /// come first), else first.
     pub(super) fn input_row(&self) -> Option<InputRow> {
         let (dir, directory) = self.edit.as_ref()?.kind.input()?;
-        if !self.tree.contains(dir) {
+        if !self.browser.tree.contains(dir) {
             return None;
         }
         let at = match (directory, self.sort) {
             (false, FileTreeSort::DirectoriesFirst) => self
+                .browser
                 .tree
                 .children(dir)
                 .iter()
-                .take_while(|child| self.tree.node(**child).kind.group() == Group::Directory)
+                .take_while(|child| {
+                    self.browser.tree.node(**child).kind.group() == Group::Directory
+                })
                 .count(),
             _ => 0,
         };
         Some(InputRow { dir, at })
-    }
-
-    /// The row of `node`, last seen at `path`, or of its closest ancestor that has one.
-    pub(super) fn shown_row(&self, node: NodeId, path: Option<&Path>) -> Option<usize> {
-        let mut current = if self.tree.contains(node) {
-            Some(node)
-        } else {
-            // The entry is gone; start from its closest ancestor that is still there.
-            path?
-                .ancestors()
-                .find_map(|ancestor| self.tree.find(ancestor))
-        };
-        while let Some(node) = current {
-            if let Some(index) = self.rows.index_of(node) {
-                return Some(index);
-            }
-            current = self.tree.node(node).parent;
-        }
-        None
     }
 
     pub(super) fn refresh_git(&mut self, editor: &Editor) {
@@ -879,14 +773,15 @@ impl Workspace {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use super::super::browser::Motion;
     use super::super::tree::tests::{dir, file, run};
     use super::*;
 
     /// root, `docs`, `src/main` (a run), `a`, `b`
     pub fn workspace() -> Workspace {
         let mut workspace = Workspace::new("/root".into(), 1, &FileTreeConfig::default());
-        let root = workspace.tree.root();
-        workspace.tree.apply_listing(
+        let root = workspace.browser.tree.root();
+        workspace.browser.tree.apply_listing(
             root,
             Some(vec![
                 run("src", &["main"]),
@@ -896,45 +791,47 @@ pub(super) mod tests {
             ]),
         );
         workspace.rebuild_rows();
-        workspace.height = 10;
+        workspace.browser.height = 10;
         workspace
     }
 
     fn cursor_label(workspace: &Workspace) -> &str {
-        let index = workspace.rows.index_of(workspace.cursor).unwrap();
-        &workspace.rows[index].label
-    }
-
-    #[test]
-    fn the_cursor_wraps_around() {
-        let mut workspace = workspace();
-        workspace.navigate(Action::Up);
-        assert_eq!(cursor_label(&workspace), "b");
-        workspace.navigate(Action::Down);
-        assert_eq!(cursor_label(&workspace), "root");
-        workspace.navigate(Action::PageDown);
-        assert_eq!(cursor_label(&workspace), "b");
-        workspace.navigate(Action::HalfPageUp);
-        assert_eq!(cursor_label(&workspace), "root");
+        let index = workspace
+            .browser
+            .rows
+            .index_of(workspace.browser.cursor)
+            .unwrap();
+        &workspace.browser.rows[index].label
     }
 
     #[test]
     fn a_run_expands_and_collapses_as_one() {
         let mut workspace = workspace();
-        let src = workspace.tree.find("src".as_ref()).unwrap();
-        let main = workspace.tree.find("src/main".as_ref()).unwrap();
-        workspace.cursor = main;
-        workspace.navigate(Action::Expand);
-        assert!(workspace.tree.node(src).expanded && workspace.tree.node(main).expanded);
+        let src = workspace.browser.tree.find("src".as_ref()).unwrap();
+        let main = workspace.browser.tree.find("src/main".as_ref()).unwrap();
+        workspace.browser.cursor = main;
+        workspace.browser.navigate(Motion::Expand);
+        assert!(
+            workspace.browser.tree.node(src).expanded && workspace.browser.tree.node(main).expanded
+        );
         workspace
+            .browser
             .tree
             .apply_listing(main, Some(vec![file("lib.rs")]));
         workspace.rebuild_rows();
-        let labels: Vec<_> = workspace.rows.iter().map(|row| &*row.label).collect();
+        let labels: Vec<_> = workspace
+            .browser
+            .rows
+            .iter()
+            .map(|row| &*row.label)
+            .collect();
         assert_eq!(labels, ["root", "docs", "src/main", "lib.rs", "a", "b"]);
 
-        workspace.navigate(Action::Collapse);
-        assert!(!workspace.tree.node(src).expanded && !workspace.tree.node(main).expanded);
+        workspace.browser.navigate(Motion::Collapse);
+        assert!(
+            !workspace.browser.tree.node(src).expanded
+                && !workspace.browser.tree.node(main).expanded
+        );
         workspace.rebuild_rows();
         assert_eq!(cursor_label(&workspace), "src/main");
     }
@@ -943,20 +840,25 @@ pub(super) mod tests {
     /// would.
     fn searched_into_docs() -> Workspace {
         let mut workspace = workspace();
-        let root = workspace.tree.root();
+        let root = workspace.browser.tree.root();
         workspace.search.origin = Some(Origin {
             cursor: root,
             path: PathBuf::new(),
             is_dir: true,
             start: 0,
-            expanded: workspace.tree.expanded_directories().collect(),
+            expanded: workspace.browser.tree.expanded_directories().collect(),
         });
-        let docs = workspace.tree.find("docs".as_ref()).unwrap();
-        workspace.tree.expand(docs);
+        let docs = workspace.browser.tree.find("docs".as_ref()).unwrap();
+        workspace.browser.tree.expand(docs);
         workspace
+            .browser
             .tree
             .apply_listing(docs, Some(vec![file("guide.md")]));
-        workspace.cursor = workspace.tree.find("docs/guide.md".as_ref()).unwrap();
+        workspace.browser.cursor = workspace
+            .browser
+            .tree
+            .find("docs/guide.md".as_ref())
+            .unwrap();
         workspace
     }
 
@@ -964,23 +866,27 @@ pub(super) mod tests {
     fn a_cancelled_search_goes_back_where_it_started() {
         let mut workspace = searched_into_docs();
         workspace.finish_search(false);
-        let docs = workspace.tree.find("docs".as_ref()).unwrap();
-        assert!(!workspace.tree.node(docs).expanded);
-        assert_eq!(workspace.cursor, workspace.tree.root());
+        let docs = workspace.browser.tree.find("docs".as_ref()).unwrap();
+        assert!(!workspace.browser.tree.node(docs).expanded);
+        assert_eq!(workspace.browser.cursor, workspace.browser.tree.root());
     }
 
     #[test]
     fn a_finished_search_keeps_the_way_to_its_match() {
         let mut workspace = searched_into_docs();
-        let src = workspace.tree.find("src".as_ref()).unwrap();
-        workspace.tree.expand(src);
+        let src = workspace.browser.tree.find("src".as_ref()).unwrap();
+        workspace.browser.tree.expand(src);
         workspace.finish_search(true);
-        let docs = workspace.tree.find("docs".as_ref()).unwrap();
-        assert!(workspace.tree.node(docs).expanded);
-        assert!(!workspace.tree.node(src).expanded);
+        let docs = workspace.browser.tree.find("docs".as_ref()).unwrap();
+        assert!(workspace.browser.tree.node(docs).expanded);
+        assert!(!workspace.browser.tree.node(src).expanded);
         assert_eq!(
-            workspace.cursor,
-            workspace.tree.find("docs/guide.md".as_ref()).unwrap()
+            workspace.browser.cursor,
+            workspace
+                .browser
+                .tree
+                .find("docs/guide.md".as_ref())
+                .unwrap()
         );
     }
 
@@ -993,7 +899,7 @@ pub(super) mod tests {
             paths,
             FileTreeSort::DirectoriesFirst,
         )));
-        let (search, rows) = (&mut workspace.search, &workspace.rows);
+        let (search, rows) = (&mut workspace.search, &workspace.browser.rows);
         let labels: Vec<_> = rows.iter().map(|row| &*row.label).collect();
         assert_eq!(labels, ["root", "docs", "guide.md", "src/main", "a", "b"]);
 
@@ -1010,30 +916,36 @@ pub(super) mod tests {
     #[test]
     fn entries_appearing_in_new_directories_list_the_closest_known_one() {
         let mut workspace = workspace();
-        let docs = workspace.tree.find("docs".as_ref()).unwrap();
-        workspace.tree.expand(docs);
+        let docs = workspace.browser.tree.find("docs".as_ref()).unwrap();
+        workspace.browser.tree.expand(docs);
         workspace
+            .browser
             .tree
             .apply_listing(docs, Some(vec![file("guide.md")]));
-        workspace.tree.take_listing_requests();
+        workspace.browser.tree.take_listing_requests();
         workspace.appeared("/root/docs/new/deep.md".as_ref(), Purpose::Cursor);
-        assert_eq!(workspace.tree.take_listing_requests(), [docs]);
+        assert_eq!(workspace.browser.tree.take_listing_requests(), [docs]);
     }
 
     #[test]
     fn rebuilding_keeps_the_cursor_on_a_shown_row() {
         let mut workspace = workspace();
-        let docs = workspace.tree.find("docs".as_ref()).unwrap();
-        workspace.tree.expand(docs);
+        let docs = workspace.browser.tree.find("docs".as_ref()).unwrap();
+        workspace.browser.tree.expand(docs);
         workspace
+            .browser
             .tree
             .apply_listing(docs, Some(vec![file("guide.md")]));
         workspace.rebuild_rows();
-        workspace.cursor = workspace.tree.find("docs/guide.md".as_ref()).unwrap();
+        workspace.browser.cursor = workspace
+            .browser
+            .tree
+            .find("docs/guide.md".as_ref())
+            .unwrap();
 
         // Collapsing `docs` hides the cursor's row: it moves to `docs`.
-        workspace.tree.collapse(docs);
+        workspace.browser.tree.collapse(docs);
         workspace.rebuild_rows();
-        assert_eq!(workspace.cursor, docs);
+        assert_eq!(workspace.browser.cursor, docs);
     }
 }

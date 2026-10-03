@@ -5,6 +5,7 @@
 //! results come back through the job queue, which finds the tree in the compositor.
 
 mod background;
+pub(crate) mod browser;
 mod edit;
 pub(crate) mod fs;
 mod git;
@@ -50,7 +51,6 @@ use self::{
     render::{natural_width, BufferMarks, Scene, Styles},
     search::{Candidates, Direction},
     tree::{Kind, Listing},
-    viewport::Align,
     workspace::{Focus, GitRefresh, Purpose, Workspace},
 };
 use crate::{
@@ -144,7 +144,7 @@ impl FileTree {
         };
         // Files in collapsed directories are not watched, so their status may be old.
         workspace.refresh_git(editor);
-        workspace.cursor = workspace.tree.root();
+        workspace.browser.cursor = workspace.browser.tree.root();
         if let Some(path) =
             path.and_then(|path| Some(path.strip_prefix(&workspace.root).ok()?.to_path_buf()))
         {
@@ -215,7 +215,7 @@ impl FileTree {
             return;
         }
         if let Some(workspace) = &mut self.workspace {
-            workspace.tree.invalidate_all();
+            workspace.browser.tree.invalidate_all();
             workspace.refresh_git(editor);
         }
         self.update(editor);
@@ -258,9 +258,9 @@ impl FileTree {
         for path in &paths {
             if let Ok(path) = path.strip_prefix(&workspace.root) {
                 // A changed directory, or an entry that appeared or went in one.
-                workspace.tree.invalidate(path);
+                workspace.browser.tree.invalidate(path);
                 if let Some(parent) = path.parent() {
-                    workspace.tree.invalidate(parent);
+                    workspace.browser.tree.invalidate(parent);
                 }
             }
         }
@@ -333,6 +333,7 @@ impl FileTree {
     fn fitted_width(&self, icons: bool) -> u16 {
         let widest = self.workspace.as_ref().map_or(0, |workspace| {
             workspace
+                .browser
                 .rows
                 .iter()
                 .enumerate()
@@ -398,7 +399,7 @@ impl FileTree {
             EditEvent::Cancel => workspace.cancel_edit(),
             EditEvent::Submit => {
                 if let Some(edit) = workspace.edit.take() {
-                    workspace.dirty = true;
+                    workspace.browser.dirty = true;
                     let line = edit.prompt.line();
                     if let EditKind::Paste { clip, dir_path, .. } = edit.kind {
                         if !line.trim().is_empty() {
@@ -471,7 +472,7 @@ impl FileTree {
 
         self.copying.insert(to.clone());
         editor.set_status(format!("Copying '{from_shown}' to '{to_shown}'..."));
-        let (generation, cursor) = (workspace.generation, workspace.cursor);
+        let (generation, cursor) = (workspace.generation, workspace.browser.cursor);
         let copies = vec![(clip.path, to.clone())];
         let job = ops::copy_in_background(editor, copies, move |editor, _, result| {
             match result {
@@ -488,7 +489,7 @@ impl FileTree {
                 file_tree.copying.remove(&to);
                 if let Some(workspace) = file_tree.workspace_of(generation) {
                     // The cursor only follows the copy if it stayed where it was pasted.
-                    let purpose = if workspace.cursor == cursor {
+                    let purpose = if workspace.browser.cursor == cursor {
                         Purpose::Cursor
                     } else {
                         Purpose::Show
@@ -620,7 +621,7 @@ impl FileTree {
             workspace
                 .reveals
                 .retain(|reveal| reveal.purpose != Purpose::Match);
-            workspace.cursor = origin.cursor;
+            workspace.browser.cursor = origin.cursor;
             self.update(editor);
             return;
         }
@@ -632,11 +633,11 @@ impl FileTree {
         let Some(workspace) = &self.workspace else {
             return;
         };
-        let Some(index) = workspace.rows.index_of(workspace.cursor) else {
+        let Some(index) = workspace.browser.rows.index_of(workspace.browser.cursor) else {
             return;
         };
-        let row = &workspace.rows[index];
-        let from_dir = workspace.tree.node(row.node).kind == Kind::Directory;
+        let row = &workspace.browser.rows[index];
+        let from_dir = workspace.browser.tree.node(row.node).kind == Kind::Directory;
         let (query, from) = (workspace.search.query.clone(), row.path.clone());
         if !query.is_empty() {
             self.find(query, from, from_dir, direction, false, editor);
@@ -696,18 +697,7 @@ impl FileTree {
         workspace.update(&lister, &config.file_tree);
 
         let height = area.height as usize;
-        workspace.height = height;
-        if let Some(target) = workspace.scroll_to.take() {
-            if let Some(index) = workspace.rows.index_of(target) {
-                if !viewport::is_visible(&workspace.rows, workspace.start, height, index) {
-                    workspace.start =
-                        viewport::align(&workspace.rows, height, index, Align::Center);
-                }
-            }
-        }
-        let start = viewport::clamp(&workspace.rows, workspace.start, height);
-        let start = workspace.smooth_scroll.frame(start, area.height, cx.editor);
-        (workspace.rows_area, workspace.drawn_start) = (area, start);
+        let start = workspace.browser.frame(area, cx.editor);
 
         let marks = BufferMarks::new(cx.editor, &workspace.root);
         let styles = Styles::new(&cx.editor.theme);
@@ -718,8 +708,8 @@ impl FileTree {
             .characters()
             .map(|characters| characters.map(String::from));
         let edit_area = Scene {
-            tree: &workspace.tree,
-            rows: &workspace.rows,
+            tree: &workspace.browser.tree,
+            rows: &workspace.browser.rows,
             git: &workspace.git,
             marks: &marks,
             palette: palette.as_deref(),
@@ -785,12 +775,12 @@ impl FileTree {
             return;
         };
         for (path, listing) in listings {
-            if let Some(dir) = workspace.tree.find(&path) {
-                workspace.tree.apply_listing(dir, listing);
+            if let Some(dir) = workspace.browser.tree.find(&path) {
+                workspace.browser.tree.apply_listing(dir, listing);
             }
         }
         workspace.ready = true;
-        workspace.dirty = true;
+        workspace.browser.dirty = true;
         workspace.update(&lister, &editor.config().file_tree);
     }
 
