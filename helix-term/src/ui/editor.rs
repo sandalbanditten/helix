@@ -1144,6 +1144,14 @@ impl EditorView {
                 let i = i.to_digit(10).unwrap() as usize;
                 cxt.editor.count = NonZeroUsize::new(i);
             }
+            // Enter opens the file a pane of the diff view shows, unless it is mapped.
+            (key!(Enter), _)
+                if self.keymaps.pending().is_empty()
+                    && !self.keymaps.contains_key(mode, event)
+                    && doc!(cxt.editor).diff_view.is_some() =>
+            {
+                diff_view::open_file(cxt.editor);
+            }
             // special handling for repeat operator
             (key!('.'), _) if self.keymaps.pending().is_empty() => {
                 for _ in 0..cxt.editor.count.map_or(1, NonZeroUsize::into) {

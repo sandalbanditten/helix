@@ -7,16 +7,16 @@
 mod run;
 pub(crate) mod styles;
 
-use std::{ops::Range, path::PathBuf, sync::Arc, time::Duration};
+use std::{ops, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail};
-use helix_core::{Position, Rope, Selection};
+use helix_core::{movement::Direction, Position, Range, Rope, RopeSlice, Selection};
 use helix_loader::workspace_trust::TrustQuery;
 use helix_view::{
-    align_view, current_ref,
+    align_view, current, current_ref,
     diff_view::{Alignment, LineChange, Pane, Side},
     doc, doc_mut,
-    document::from_reader,
+    document::{from_reader, Mode},
     editor::Action,
     graphics::{Rect, Style},
     view::ViewPosition,
@@ -267,7 +267,9 @@ fn show(request: Request, alignment: Arc<Alignment>, editor: &mut Editor) -> Pai
     for index in 0..2 {
         let doc = doc_mut!(editor, &ids[index]);
         let pane = doc.diff_view.as_ref().expect("set above");
-        let line = line_at_or_after(&alignment, pane.side, first);
+        let line = alignment
+            .line_at_or_after(pane.side, first)
+            .unwrap_or_else(|| alignment.lines(pane.side).saturating_sub(1));
         let pos = doc.text().line_to_char(line as usize);
         doc.set_selection(views[index], Selection::point(pos));
         let view = editor.tree.get(views[index]);
@@ -306,15 +308,6 @@ fn pane(request: &Request, side: Side, alignment: Arc<Alignment>, partner: Docum
         file: request.file.clone(),
         origin: request.origin,
     }
-}
-
-/// The first line of `side` on `row` or after it, or the last line.
-fn line_at_or_after(alignment: &Alignment, side: Side, row: u32) -> u32 {
-    let rows = alignment.rows();
-    rows[(row as usize).min(rows.len())..]
-        .iter()
-        .find_map(|row| row.line(side))
-        .unwrap_or_else(|| alignment.lines(side).saturating_sub(1))
 }
 
 /// Scrolls the pane `docs[1]` in `views[1]` to the row the focused pane `docs[0]` in `views[0]`
@@ -362,12 +355,7 @@ fn top_row(pane: &Pane, line: usize, offset: ViewPosition) -> u32 {
 }
 
 /// The offset showing `row` of the alignment at the top of `pane`.
-fn offset_at_row(
-    pane: &Pane,
-    text: helix_core::RopeSlice,
-    row: u32,
-    horizontal_offset: usize,
-) -> ViewPosition {
+fn offset_at_row(pane: &Pane, text: RopeSlice, row: u32, horizontal_offset: usize) -> ViewPosition {
     let (anchor, vertical_offset) = match pane.line_at_or_before(row) {
         Some(line) if line > 0 => {
             let line_row = pane.row_of_line(line as usize).unwrap_or(row);
@@ -382,13 +370,155 @@ fn offset_at_row(
     }
 }
 
+/// Selects the hunk `count` hunks after or before each selection of the focused pane, like `]g`
+/// and `[g` select the changes of the diff gutter. Returns whether there was one.
+pub fn goto_hunk(editor: &mut Editor, direction: Direction, count: usize) -> bool {
+    let mode = editor.mode;
+    let (view, doc) = current!(editor);
+    let Some(pane) = doc.diff_view.as_ref() else {
+        return false;
+    };
+    let text = doc.text().slice(..);
+    let mut found = false;
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let line = range.cursor_line(text);
+        let Some(hunk) = hunk_from(pane, line, direction, count) else {
+            return range;
+        };
+        found = true;
+        let new_range = hunk_range(pane, text, &pane.alignment.hunks()[hunk]);
+        if mode == Mode::Select {
+            let head = if new_range.head < range.anchor {
+                new_range.anchor
+            } else {
+                new_range.head
+            };
+            Range::new(range.anchor, head)
+        } else {
+            new_range.with_direction(direction)
+        }
+    });
+    if found {
+        doc.set_selection(view.id, selection);
+    }
+    found
+}
+
+/// Selects the first hunk of the focused pane, or the last one, like `[G` and `]G`.
+pub fn goto_end_hunk(editor: &mut Editor, last: bool) {
+    let (view, doc) = current!(editor);
+    let Some(pane) = doc.diff_view.as_ref() else {
+        return;
+    };
+    let hunks = pane.alignment.hunks();
+    let hunk = if last { hunks.last() } else { hunks.first() };
+    if let Some(hunk) = hunk {
+        let range = hunk_range(pane, doc.text().slice(..), hunk);
+        let jump = (doc.id(), doc.selection(view.id).clone());
+        view.push_jump(doc, jump);
+        doc.set_selection(view.id, Selection::single(range.anchor, range.head));
+    }
+}
+
+/// The index of the hunk `count` hunks after or before the row of `line` of `pane`.
+fn hunk_from(pane: &Pane, line: usize, direction: Direction, count: usize) -> Option<usize> {
+    let row = pane.row_of_line(line)?;
+    let hunks = pane.alignment.hunks();
+    let count = count.max(1);
+    match direction {
+        Direction::Forward => {
+            let next = hunks.partition_point(|hunk| hunk.start <= row);
+            (next < hunks.len()).then(|| (next + count - 1).min(hunks.len() - 1))
+        }
+        Direction::Backward => {
+            let mut before = hunks.partition_point(|hunk| hunk.end <= row);
+            // A hunk of only fillers right above the cursor is the one the cursor is on, like a
+            // removal of the diff gutter.
+            if before > 0 && hunks[before - 1].end == row && !has_lines(pane, &hunks[before - 1]) {
+                before -= 1;
+            }
+            before
+                .checked_sub(1)
+                .map(|prev| prev.saturating_sub(count - 1))
+        }
+    }
+}
+
+/// Whether the side of `pane` has lines on the rows `rows`.
+fn has_lines(pane: &Pane, rows: &ops::Range<u32>) -> bool {
+    pane.alignment
+        .line_at_or_after(pane.side, rows.start)
+        .and_then(|line| pane.row_of_line(line as usize))
+        .is_some_and(|row| row < rows.end)
+}
+
+/// What selecting the hunk on the rows `rows` of `pane` selects: its lines on the pane's side,
+/// or the first char of the line after it where the side has only fillers there.
+fn hunk_range(pane: &Pane, text: RopeSlice, rows: &ops::Range<u32>) -> Range {
+    let alignment = &pane.alignment;
+    let first = alignment.line_at_or_after(pane.side, rows.start);
+    let last = alignment.line_at_or_before(pane.side, rows.end.saturating_sub(1));
+    match (first, last) {
+        (Some(first), Some(last)) if first <= last => Range::new(
+            text.line_to_char(first as usize),
+            text.line_to_char(last as usize + 1),
+        ),
+        _ => {
+            let line = first.unwrap_or_else(|| alignment.lines(pane.side).saturating_sub(1));
+            let anchor = text.line_to_char(line as usize);
+            Range::new(anchor, (anchor + 1).min(text.len_chars()))
+        }
+    }
+}
+
+/// Opens the file the focused pane shows a side of in the diff's place, at the line on the
+/// cursor's row: the diff closes, and the file opens in the view it was asked for from. Returns
+/// whether the focused buffer is a pane.
+pub fn open_file(editor: &mut Editor) -> bool {
+    let (view, doc) = current_ref!(editor);
+    let Some(pane) = doc.diff_view.as_ref() else {
+        return false;
+    };
+    let Some(file) = pane.file.clone() else {
+        editor.set_error("The diff shows no file to open");
+        return true;
+    };
+    let text = doc.text().slice(..);
+    let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+    // The file is the new side: from the old side, it opens at the line on the same row.
+    let line = match pane.side {
+        Side::New => line,
+        Side::Old => pane
+            .row_of_line(line)
+            .and_then(|row| pane.alignment.line_at_or_before(Side::New, row))
+            .unwrap_or(0) as usize,
+    };
+    // Closing one pane closes both, giving the focus back.
+    editor.close(view.id);
+    let action = if editor.tree.views().next().is_some() {
+        Action::Replace
+    } else {
+        Action::VerticalSplit
+    };
+    if let Err(err) = editor.open(&file, action) {
+        editor.set_error(format!("Cannot open {}: {err}", file.display()));
+        return true;
+    }
+    let (view, doc) = current!(editor);
+    let text = doc.text().slice(..);
+    let pos = text.line_to_char(line.min(text.len_lines() - 1));
+    doc.set_selection(view.id, Selection::point(pos));
+    align_view(doc, view, Align::Center);
+    true
+}
+
 /// The styles of the text that changed on the lines `lines` of the pane `doc`, by char ranges.
 pub fn changed_text(
     doc: &Document,
     pane: &Pane,
-    lines: Range<usize>,
+    lines: ops::Range<usize>,
     theme: &Theme,
-) -> Vec<(Range<usize>, Style)> {
+) -> Vec<(ops::Range<usize>, Style)> {
     let style = Styles::new(theme).text(pane.side);
     let text = doc.text().slice(..);
     let lines = lines.start as u32..lines.end.min(text.len_lines()) as u32;
@@ -427,7 +557,7 @@ impl<'a> Rows<'a> {
         }
     }
 
-    fn paint(&mut self, renderer: &mut TextRenderer, rows: Range<u16>, style: Style) {
+    fn paint(&mut self, renderer: &mut TextRenderer, rows: ops::Range<u16>, style: Style) {
         if rows.is_empty() {
             return;
         }
@@ -493,6 +623,40 @@ mod tests {
     }
 
     #[test]
+    fn hunks_are_selected_by_the_rows_they_are_on() {
+        // A line changed, and one added that the old side shows a filler for.
+        let old = Rope::from("a\nb\nc\nd\ne\n");
+        let new = Rope::from("a\nB\nc\nd\nnew\ne\n");
+        let alignment = Arc::new(builtin::align(old.slice(..), new.slice(..)));
+        assert_eq!(alignment.hunks(), [1..2, 4..5]);
+        let (old_pane, new_pane) = (pane(Side::Old, &alignment), pane(Side::New, &alignment));
+        let (old, new) = (old.slice(..), new.slice(..));
+
+        assert_eq!(hunk_from(&new_pane, 0, Direction::Forward, 1), Some(0));
+        assert_eq!(hunk_from(&new_pane, 1, Direction::Forward, 1), Some(1));
+        assert_eq!(
+            hunk_from(&new_pane, 0, Direction::Forward, 5),
+            Some(1),
+            "counts stop at the last"
+        );
+        assert_eq!(hunk_from(&new_pane, 4, Direction::Forward, 1), None);
+        assert_eq!(hunk_range(&new_pane, new, &(1..2)), Range::new(2, 4));
+        assert_eq!(hunk_range(&new_pane, new, &(4..5)), Range::new(8, 12));
+
+        // The old side has only a filler on the second hunk: it selects the line after it.
+        assert_eq!(hunk_range(&old_pane, old, &(4..5)), Range::new(8, 9));
+        assert_eq!(hunk_from(&old_pane, 3, Direction::Forward, 1), Some(1));
+        // From there `[g` goes past it, as from a removal in the diff gutter.
+        assert_eq!(hunk_from(&old_pane, 4, Direction::Backward, 1), Some(0));
+        assert_eq!(
+            hunk_from(&old_pane, 1, Direction::Backward, 1),
+            None,
+            "inside the first"
+        );
+        assert_eq!(hunk_from(&new_pane, 5, Direction::Backward, 1), Some(1));
+    }
+
+    #[test]
     fn panes_scroll_to_the_same_row() {
         // old: a b c       new: x y a b z c
         let old = Rope::from("a\nb\nc\n");
@@ -539,7 +703,5 @@ mod tests {
         );
         assert_eq!(top_row(&old_pane, 1, at(2, 1)), 4);
         assert_eq!(top_row(&new_pane, 4, at(8, 0)), 4);
-        assert_eq!(line_at_or_after(&alignment, Side::Old, 0), 0);
-        assert_eq!(line_at_or_after(&alignment, Side::Old, 4), 2);
     }
 }

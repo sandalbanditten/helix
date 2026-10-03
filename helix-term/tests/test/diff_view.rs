@@ -1,3 +1,5 @@
+#![allow(clippy::single_range_in_vec_init)]
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -267,5 +269,58 @@ async fn difftastic_lines_up_the_diff_when_installed() -> anyhow::Result<()> {
         Some(&LineChange::Parts(vec![25..26]))
     );
     assert_eq!(status(&session.app), "");
+    session.quit().await
+}
+
+/// The primary selection of the focused buffer, as anchor and head.
+fn selection(app: &Application) -> (usize, usize) {
+    let view = app.editor.tree.focus;
+    let range = doc!(app.editor).selection(view).primary();
+    (range.anchor, range.head)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hunks_are_jumped_to_and_the_file_opened() -> anyhow::Result<()> {
+    let (_dir, path) = repository("a\nb\nc\nd\ne\nf\ng\n")?;
+    let mut session = session(&path, DiffTool::Builtin)?;
+    // Hunks on rows 1, 4 (a filler on the old side) and 7.
+    set_text(&mut session.app, "a\nB\nc\nd\nnew\ne\nf\nG\n");
+    let (buffer, origin) = (doc!(session.app.editor).id(), session.app.editor.tree.focus);
+    session.keys(":diff<ret>").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    assert_eq!(
+        selection(&session.app),
+        (2, 3),
+        "the cursor starts on the first hunk"
+    );
+    session.keys("]g").await?;
+    assert_eq!(selection(&session.app), (8, 12));
+    session.keys("]g").await?;
+    assert_eq!(selection(&session.app), (16, 18));
+    session.keys("[G").await?;
+    assert_eq!(selection(&session.app), (2, 4));
+    session.keys("]G").await?;
+    assert_eq!(selection(&session.app), (16, 18));
+    session.keys("[g").await?;
+    assert_eq!(selection(&session.app), (12, 8));
+
+    // From the old side the file opens at the line on the cursor's row, in the diff's place.
+    session.keys("<C-w>h").await?;
+    assert_eq!(selection(&session.app), (6, 7), "the old side's `d`");
+    session.keys("gf").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(app.editor.tree.focus, origin);
+    assert_eq!(doc!(app.editor).id(), buffer);
+    assert_eq!(selection(app), (6, 7));
+
+    // So does Enter.
+    session.keys(":diff<ret>").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    session.keys("j<ret>").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(doc!(app.editor).id(), buffer);
+    assert_eq!(selection(app), (4, 5));
     session.quit().await
 }

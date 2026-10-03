@@ -1408,6 +1408,10 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
     if ui::compilation::open_on_cursor_line(cx.editor) {
         return;
     }
+    // A pane of the diff view opens its file in the diff's place.
+    if ui::diff_view::open_file(cx.editor) {
+        return;
+    }
     let (view, doc) = current_ref!(cx.editor);
     let text = doc.text().clone();
     let selections = doc.selection(view.id).ranges().to_vec();
@@ -4296,6 +4300,10 @@ fn goto_last_change(cx: &mut Context) {
 }
 
 fn goto_first_change_impl(cx: &mut Context, reverse: bool) {
+    if doc!(cx.editor).diff_view.is_some() {
+        ui::diff_view::goto_end_hunk(cx.editor, reverse);
+        return;
+    }
     let editor = &mut cx.editor;
     let (view, doc) = current!(editor);
     if let Some(handle) = doc.diff_handle() {
@@ -4325,6 +4333,14 @@ fn goto_prev_change(cx: &mut Context) {
 }
 
 fn goto_next_change_impl(cx: &mut Context, direction: Direction) {
+    // The panes of the diff view go through the hunks of their diff.
+    if doc!(cx.editor).diff_view.is_some() {
+        let count = cx.count();
+        cx.editor.apply_motion(move |editor| {
+            ui::diff_view::goto_hunk(editor, direction, count);
+        });
+        return;
+    }
     let count = cx.count() as u32 - 1;
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
