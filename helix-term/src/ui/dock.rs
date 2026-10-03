@@ -41,6 +41,17 @@ pub fn clamp_width(width: u16, max_width: u16) -> u16 {
     width.min(max_width).max(MIN_WIDTH)
 }
 
+/// The width `|` switches a panel `width` wide to: the widest it may get, `max_width`, and from
+/// there the narrowest. A panel not laid out yet, with no `max_width`, may get the widest of all.
+pub fn toggled_width(width: u16, max_width: u16) -> u16 {
+    let max_width = if max_width == 0 { MAX_WIDTH } else { max_width };
+    if width < max_width {
+        clamp_width(max_width, max_width)
+    } else {
+        MIN_WIDTH
+    }
+}
+
 /// The width that shows rows `widest` columns wide whole, with the rail, within the limits.
 pub fn fitted_width(widest: usize, max_width: u16) -> u16 {
     let width = u16::try_from(widest + 1).unwrap_or(u16::MAX);
@@ -162,5 +173,9 @@ mod tests {
         assert_eq!(fitted_width(40, max), 41);
         assert_eq!(fitted_width(400, max), MAX_WIDTH);
         assert_eq!(clamp_width(70, 30), 30);
+        assert_eq!(toggled_width(20, 30), 30);
+        assert_eq!(toggled_width(30, 30), MIN_WIDTH);
+        assert_eq!(toggled_width(MIN_WIDTH, 30), 30);
+        assert_eq!(toggled_width(MIN_WIDTH, 0), MAX_WIDTH);
     }
 }

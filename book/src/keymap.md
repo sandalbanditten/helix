@@ -534,6 +534,7 @@ there.
 | `n`, `N`             | Go to the next, previous match |
 | `+`, `-`             | Widen, narrow the file tree |
 | `=`                  | Fit the width to the widest row |
+| `\|`                 | Toggle the widest and narrowest width |
 | `?`                  | Show these keys |
 | `Escape`             | Return focus to the editor |
 

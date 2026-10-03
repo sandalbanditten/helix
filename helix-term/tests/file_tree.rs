@@ -295,6 +295,30 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_width_toggles_between_widest_and_narrowest() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt"])?;
+        let mut app = workspace.app("a.txt")?;
+        let views = |app: &Application| app.editor.tree.area().width;
+        // The editor keeps 20 columns, and the panel is at most 64 wide.
+        let widest = |app: &Application| app.screen().area.width.saturating_sub(20).min(64);
+        test_key_sequences(
+            &mut app,
+            vec![
+                (
+                    Some("<space>e|"),
+                    Some(&|app| assert_eq!(views(app), app.screen().area.width - widest(app))),
+                ),
+                (
+                    Some("|"),
+                    Some(&|app| assert_eq!(views(app), app.screen().area.width - 16)),
+                ),
+            ],
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn creating_opens_new_files() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["src/a.txt"])?;
         let mut app = workspace.app("src/a.txt")?;

@@ -315,6 +315,8 @@ impl FileTree {
             Some(width) => width,
             None => *self.width.insert(self.fitted_width(config.file_tree.icons)),
         };
+        // A width chosen before the screen was known, or for a wider one, yields to the editor.
+        let width = dock::clamp_width(width, self.max_width);
         if main.height < 2 || main.width < width + dock::MIN_EDITOR_WIDTH {
             self.focused = false;
             return None;
@@ -530,6 +532,10 @@ impl FileTree {
                 self.width = Some(dock::clamp_width(width, self.max_width));
             }
             Action::Fit => self.width = Some(self.fitted_width(config.file_tree.icons)),
+            Action::ToggleWidth => {
+                let width = self.width.unwrap_or(dock::MIN_WIDTH);
+                self.width = Some(dock::toggled_width(width, self.max_width));
+            }
             Action::EditDirectory | Action::EditTree => {
                 let Some(workspace) = &mut self.workspace else {
                     return;

@@ -537,6 +537,11 @@ impl UndoTree {
                 self.set_by_hand = false;
                 None
             }
+            Action::ToggleWidth => {
+                self.width = dock::toggled_width(self.width, self.max_width);
+                self.set_by_hand = true;
+                None
+            }
             Action::Help => {
                 editor.autoinfo = Some(if self.diff_focused {
                     keys::diff_info()

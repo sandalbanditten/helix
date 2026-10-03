@@ -43,6 +43,7 @@ pub enum Action {
     Grow,
     Shrink,
     Fit,
+    ToggleWidth,
     Help,
     Unfocus,
 }
@@ -84,6 +85,7 @@ impl panel_keys::Action for Action {
             Self::Grow => "Widen the file tree",
             Self::Shrink => "Narrow the file tree",
             Self::Fit => "Fit the width to the widest row",
+            Self::ToggleWidth => "Toggle the widest and narrowest width",
             Self::Help => "Show these keys",
             Self::Unfocus => "Return focus to the editor",
         }
@@ -128,6 +130,7 @@ const BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!('+')]], Action::Grow),
     bind(&[&[key!('-')]], Action::Shrink),
     bind(&[&[key!('=')]], Action::Fit),
+    bind(&[&[key!('|')]], Action::ToggleWidth),
     bind(&[&[key!('?')]], Action::Help),
     bind(&[&[key!(Esc)]], Action::Unfocus),
 ]);

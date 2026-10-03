@@ -367,3 +367,59 @@ async fn the_diff_part_takes_focus_and_scrolls() -> anyhow::Result<()> {
     )
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_floating_tree_covers_the_views_rather_than_narrowing_them() -> anyhow::Result<()> {
+    let mut config = test_config();
+    config.editor.undo.float = true;
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text("#[x|]#\n")
+        .build()?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            (
+                Some("<space>U"),
+                Some(&|app| {
+                    let width = app.screen().area.width;
+                    assert_eq!(app.editor.tree.area().width, width);
+                    let screen = screen(app);
+                    let node = screen[0].chars().position(|c| c == '●');
+                    assert!(
+                        node.is_some_and(|at| at > width as usize / 2),
+                        "{}",
+                        screen.join("\n")
+                    );
+                }),
+            ),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_width_toggles_between_widest_and_narrowest() -> anyhow::Result<()> {
+    let mut app = branched()?;
+    let views = |app: &Application| app.editor.tree.area().width;
+    // The editor keeps 20 columns, and the panel is at most 64 wide.
+    let widest = |app: &Application| app.screen().area.width.saturating_sub(20).min(64);
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            (
+                Some("<space>u|"),
+                Some(&|app| assert_eq!(views(app), app.screen().area.width - widest(app))),
+            ),
+            (
+                Some("|"),
+                Some(&|app| assert_eq!(views(app), app.screen().area.width - 16)),
+            ),
+        ],
+        false,
+    )
+    .await
+}

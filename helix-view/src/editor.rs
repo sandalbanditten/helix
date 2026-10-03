@@ -335,6 +335,9 @@ pub struct UndoConfig {
     pub diff: UndoDiff,
     /// The rows of the undo tree's diff. Defaults to `12`.
     pub diff_height: u16,
+    /// Whether the undo tree floats over the editor's right edge rather than making room beside
+    /// it. Defaults to `false`.
+    pub float: bool,
 }
 
 impl Default for UndoConfig {
@@ -345,6 +348,7 @@ impl Default for UndoConfig {
             max_revisions: 1000,
             diff: UndoDiff::default(),
             diff_height: 12,
+            float: false,
         }
     }
 }

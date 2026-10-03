@@ -1849,10 +1849,15 @@ impl Component for EditorView {
 
         // -1 for commandline
         let mut views_area = area.clip_bottom(1);
-        // The undo tree takes the right edge, a file tree on the right docking beside it.
-        let undo_tree_area = self.undo_tree.layout(views_area, cx.editor);
-        if let Some(undo_tree_area) = undo_tree_area {
-            views_area = views_area.clip_right(undo_tree_area.width);
+        // The undo tree takes the right edge, a file tree on the right docking beside it. A
+        // floating undo tree takes no room: it covers the right edge of the views instead.
+        let float = config.undo.float;
+        let mut undo_tree_area = None;
+        if !float {
+            undo_tree_area = self.undo_tree.layout(views_area, cx.editor);
+            if let Some(undo_tree_area) = undo_tree_area {
+                views_area = views_area.clip_right(undo_tree_area.width);
+            }
         }
         let file_tree_area = self.file_tree.layout(views_area, cx.editor);
         if let Some(file_tree_area) = file_tree_area {
@@ -1866,6 +1871,9 @@ impl Component for EditorView {
             .into_iter()
             .flatten()
             .collect();
+        if float {
+            undo_tree_area = self.undo_tree.layout(views_area, cx.editor);
+        }
         // -1 for bufferline
         let mut editor_area = views_area;
         if use_bufferline {

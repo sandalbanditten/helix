@@ -420,6 +420,7 @@ files along. Files in the temporary directory and the messages git asks for, lik
 | `max-revisions` | The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps all | `1000` |
 | `diff` | What shows the diff of the revision under the cursor below the [undo tree](./undo-tree.md): `"none"`, `"builtin"` for a line diff of Helix's own, or `"difftastic"` for [`difft`](https://difftastic.wilfred.me.uk/), falling back to the builtin diff where it isn't installed | `"none"` |
 | `diff-height` | The rows of the undo tree's diff | `12` |
+| `float` | Whether the [undo tree](./undo-tree.md) floats over the right edge of the editor, covering what is there, rather than making room beside it | `false` |
 
 ### `[editor.buffer-picker]` Section
 

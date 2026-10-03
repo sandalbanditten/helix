@@ -54,6 +54,7 @@ branch you went into.
 | `J`, `K`             | Scroll the diff half a page down, up |
 | `+`, `-`             | Widen, narrow the undo tree |
 | `=`                  | Fit the width to the widest row |
+| `\|`                 | Toggle the widest and narrowest width |
 | `?`                  | Show these keys |
 | `Enter`              | Keep the revision and return focus to the editor |
 | `Escape`             | Go back to the start and return focus to the editor |
@@ -66,8 +67,10 @@ changes; `Enter` keeps the search and `Escape` goes back. Searches are shared: `
 tree go to the changes matching the last search, typed in the tree or in the editor, and the
 editor's `n` and `N` look for the tree's.
 
-The panel fits its width to the widest row when it appears, within limits; after `+` or `-` it
-keeps the width you set.
+The panel fits its width to the widest row when it appears, within limits; after `+`, `-` or `|`
+it keeps the width you set. With [`[editor.undo] float`](./editor.md#editorundo-section) it floats
+over the right edge of the editor instead of making room beside it, so the text keeps its width
+(and soft-wraps no differently) while the panel covers what is under it.
 
 ## Diff
 
@@ -84,7 +87,7 @@ editor, like `Ctrl-w j` or `Space w j`, moves there, and to the split above back
 the editor's motions scroll the diff, whose lines are cut at the edge rather than wrapped: `j` and
 `k` a line, `h` and `l` half the width, `Ctrl-d`, `Ctrl-u`, `Ctrl-f` and `Ctrl-b` by pages, `gg`
 and `ge` to the top and the bottom, `gh` and `gl` to the leftmost and rightmost columns, with
-counts and as remapped. `d`, `+`, `-`, `=`, `Enter` and `Escape` work as in the tree, and `?`
+counts and as remapped. `d`, `+`, `-`, `=`, `|`, `Enter` and `Escape` work as in the tree, and `?`
 shows the keys. `J` and `K` scroll the diff from the tree.
 
 ## Undo files
