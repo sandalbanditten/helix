@@ -5,6 +5,7 @@ pub mod action;
 pub mod annotations;
 pub mod clipboard;
 pub mod compilation;
+pub mod diff_view;
 pub mod dired;
 pub mod document;
 pub mod editor;

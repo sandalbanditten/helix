@@ -136,6 +136,52 @@ impl<'a> imara_diff::TokenSource for RopeLines<'a> {
     }
 }
 
+/// The lines of a text as `str::lines` counts them: without the empty line after a final line
+/// break. Each line keeps its line break.
+struct TextLines<'a>(RopeSlice<'a>);
+
+impl<'a> imara_diff::TokenSource for TextLines<'a> {
+    type Token = RopeSlice<'a>;
+    type Tokenizer = std::iter::Take<ropey::iter::Lines<'a>>;
+
+    fn tokenize(&self) -> Self::Tokenizer {
+        self.0.lines().take(self.estimate_tokens() as usize)
+    }
+
+    fn estimate_tokens(&self) -> u32 {
+        text_lines(self.0) as u32
+    }
+}
+
+/// The number of lines of `text` as `str::lines` counts them: an empty text has none, and a final
+/// line break ends the last line rather than starting another.
+pub fn text_lines(text: RopeSlice) -> usize {
+    let lines = text.len_lines();
+    if text.len_chars() == 0 {
+        0
+    } else if text.line(lines - 1).len_chars() == 0 {
+        lines - 1
+    } else {
+        lines
+    }
+}
+
+/// A line diff of `file`, with sliders moved by indentation like the diff gutter does.
+fn diff_lines(file: &InternedInput<RopeSlice>) -> Diff {
+    let mut diff = Diff::compute(Algorithm::Histogram, file);
+    diff.postprocess_with_heuristic(
+        file,
+        IndentHeuristic::new(|token| IndentLevel::for_ascii_line(file.interner[token].bytes(), 4)),
+    );
+    diff
+}
+
+/// The hunks of a line diff of `before` and `after`, over the lines [`text_lines`] counts.
+pub fn line_hunks(before: RopeSlice, after: RopeSlice) -> Vec<Hunk> {
+    let file = InternedInput::new(TextLines(before), TextLines(after));
+    diff_lines(&file).hunks().collect()
+}
+
 /// Compares `old` and `new` to generate a [`Transaction`] describing
 /// the steps required to get from `old` to `new`.
 pub fn compare_ropes(before: &Rope, after: &Rope) -> Transaction {
@@ -151,11 +197,7 @@ pub fn compare_ropes(before: &Rope, after: &Rope) -> Transaction {
         current_hunk: InternedInput::default(),
         char_diff: Diff::default(),
     };
-    let mut diff = Diff::compute(Algorithm::Histogram, &file);
-    diff.postprocess_with_heuristic(
-        &file,
-        IndentHeuristic::new(|token| IndentLevel::for_ascii_line(file.interner[token].bytes(), 4)),
-    );
+    let diff = diff_lines(&file);
     for hunk in diff.hunks() {
         builder.process_hunk(hunk.before, hunk.after)
     }
@@ -207,5 +249,38 @@ mod tests {
     #[test]
     fn deleted_file() {
         test_identity("foo", "");
+    }
+
+    #[test]
+    fn text_lines_leave_out_the_line_after_a_final_break() {
+        let lines = |text: &str| text_lines(Rope::from(text).slice(..));
+        assert_eq!(lines(""), 0);
+        assert_eq!(lines("a"), 1);
+        assert_eq!(lines("a\n"), 1);
+        assert_eq!(lines("a\r\nb"), 2);
+        assert_eq!(lines("a\n\n"), 2);
+    }
+
+    #[test]
+    fn line_hunks_count_lines_like_git() {
+        let hunks = |before: &str, after: &str| {
+            line_hunks(Rope::from(before).slice(..), Rope::from(after).slice(..))
+        };
+        assert_eq!(hunks("a\nb\n", "a\nb\n"), []);
+        // A final line break added changes the last line, adding none.
+        assert_eq!(
+            hunks("a\nb", "a\nb\n"),
+            [Hunk {
+                before: 1..2,
+                after: 1..2
+            }]
+        );
+        assert_eq!(
+            hunks("a\nc\n", "a\nb\nc\n"),
+            [Hunk {
+                before: 1..1,
+                after: 1..2
+            }]
+        );
     }
 }

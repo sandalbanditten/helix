@@ -61,6 +61,7 @@ thiserror.workspace = true
 spellbook.workspace = true
 
 kstring = "2.0"
+imara-diff = "0.2.0"
 sha2 = "0.11"
 
 [target.'cfg(windows)'.dependencies]
