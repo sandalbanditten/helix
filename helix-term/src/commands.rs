@@ -408,6 +408,8 @@ impl MappableCommand {
         file_explorer_in_current_directory, "Open file explorer at current working directory",
         focus_file_tree, "Focus/unfocus file tree",
         toggle_file_tree, "Toggle file tree",
+        focus_undo_tree, "Focus/unfocus undo tree",
+        toggle_undo_tree, "Toggle undo tree",
         code_action, "Perform code action",
         buffer_picker, "Open buffer picker",
         jumplist_picker, "Open jumplist picker",
@@ -3223,6 +3225,7 @@ fn focus_file_tree(cx: &mut Context) {
     }
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+            editor_view.undo_tree.unfocus(cx.editor);
             editor_view.file_tree.toggle_focus(cx.editor);
         }
     }));
@@ -3232,6 +3235,27 @@ fn toggle_file_tree(cx: &mut Context) {
     cx.callback.push(Box::new(|compositor, cx| {
         if let Some(editor_view) = compositor.find::<ui::EditorView>() {
             editor_view.file_tree.toggle(cx.editor);
+        }
+    }));
+}
+
+fn focus_undo_tree(cx: &mut Context) {
+    // Keys go to the tree from now on, so leave insert mode for good.
+    if cx.editor.mode == Mode::Insert {
+        normal_mode(cx);
+    }
+    cx.callback.push(Box::new(|compositor, cx| {
+        if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+            editor_view.file_tree.unfocus();
+            editor_view.undo_tree.toggle_focus(cx.editor);
+        }
+    }));
+}
+
+fn toggle_undo_tree(cx: &mut Context) {
+    cx.callback.push(Box::new(|compositor, cx| {
+        if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+            editor_view.undo_tree.toggle(cx.editor);
         }
     }));
 }

@@ -19,6 +19,7 @@
   - [Spell checking](./spell-checking.md)
   - [Compilation](./compilation.md)
   - [Auto-reload](./auto-reload.md)
+  - [Undo tree](./undo-tree.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)

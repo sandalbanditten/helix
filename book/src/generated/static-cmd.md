@@ -105,6 +105,8 @@
 | `file_explorer_in_current_directory` | Open file explorer at current working directory |  |
 | `focus_file_tree` | Focus/unfocus file tree | normal: `` <space>e ``, select: `` <space>e `` |
 | `toggle_file_tree` | Toggle file tree | normal: `` <space>E ``, select: `` <space>E `` |
+| `focus_undo_tree` | Focus/unfocus undo tree | normal: `` <space>u ``, select: `` <space>u `` |
+| `toggle_undo_tree` | Toggle undo tree | normal: `` <space>U ``, select: `` <space>U `` |
 | `code_action` | Perform code action | normal: `` <space>a ``, select: `` <space>a `` |
 | `buffer_picker` | Open buffer picker | normal: `` <space>b ``, select: `` <space>b `` |
 | `jumplist_picker` | Open jumplist picker | normal: `` <space>j ``, select: `` <space>j `` |

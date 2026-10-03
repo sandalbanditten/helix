@@ -129,6 +129,32 @@ impl History {
         self.revisions.len()
     }
 
+    /// The revision `revision` was made from; the root's is itself.
+    pub fn parent(&self, revision: usize) -> usize {
+        self.revisions[revision].parent
+    }
+
+    /// The child of `revision` that redo goes to.
+    pub fn last_child(&self, revision: usize) -> Option<usize> {
+        self.revisions[revision].last_child.map(NonZeroUsize::get)
+    }
+
+    /// When `revision` was made.
+    pub fn timestamp(&self, revision: usize) -> SystemTime {
+        self.revisions[revision].timestamp
+    }
+
+    /// The transaction that made `revision` from its parent, and its inversion.
+    pub fn changes(&self, revision: usize) -> (&Transaction, &Transaction) {
+        let revision = &self.revisions[revision];
+        (&revision.transaction, &revision.inversion)
+    }
+
+    /// Creates the [`Transaction`]s that go to `revision`, which becomes the current one.
+    pub fn jump(&mut self, revision: usize) -> Vec<Transaction> {
+        self.jump_to(revision)
+    }
+
     #[inline]
     pub const fn at_root(&self) -> bool {
         self.current == 0

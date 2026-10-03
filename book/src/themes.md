@@ -371,6 +371,13 @@ These scopes are used for theming the editor interface:
 | `ui.file-tree.unsaved`            | The `+` of files with unsaved changes, falling back to `info`                                  |
 | `ui.file-tree.error`              | Unreadable directories and broken links in the file tree, falling back to `error`              |
 | `ui.file-tree.match`              | Characters matching the file tree's search, falling back to bold `special`                     |
+| `ui.undo-tree`                    | The [undo tree](./undo-tree.md), falling back to `ui.file-tree`                                |
+| `ui.undo-tree.selected`           | The undo tree's cursor row, falling back to `ui.file-tree.selected`                            |
+| `ui.undo-tree.guide`              | The undo tree's lanes, falling back to `ui.file-tree.guide`                                    |
+| `ui.undo-tree.current`            | The `●` of the revision the buffer is or was at, falling back to `info`                        |
+| `ui.undo-tree.revision`           | Revision numbers and ages in the undo tree, falling back to `comment`                          |
+| `ui.undo-tree.saved`              | The `S` and `s` of written revisions, falling back to `diff.plus`                              |
+| `ui.undo-tree.match`              | Changes matching the undo tree's search, falling back to `ui.file-tree.match`                  |
 | `ui.dired.octal`                  | Octal permissions in [dired][dired-section] without `eza`'s colors, falling back to `constant.numeric` |
 | `ui.dired.permission.read`        | `r` of dired permissions, falling back to `warning`                                            |
 | `ui.dired.permission.write`       | `w` of dired permissions, falling back to `error`                                              |

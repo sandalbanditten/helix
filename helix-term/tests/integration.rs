@@ -27,4 +27,5 @@ mod test {
     mod spelling;
     mod splits;
     mod undo_files;
+    mod undo_tree;
 }

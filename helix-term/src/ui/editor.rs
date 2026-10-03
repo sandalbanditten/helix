@@ -12,6 +12,7 @@ use crate::{
         file_tree::FileTree,
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
+        undo_tree::UndoTree,
         Completion, ProgressSpinners, ReloadQuestion,
     },
 };
@@ -49,6 +50,7 @@ pub struct EditorView {
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
     pub(crate) file_tree: FileTree,
+    pub(crate) undo_tree: UndoTree,
     pub(crate) dired: Dired,
     pub(crate) reload_question: ReloadQuestion,
 }
@@ -75,6 +77,7 @@ impl EditorView {
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
             file_tree: FileTree::default(),
+            undo_tree: UndoTree::default(),
             dired: Dired::default(),
             reload_question: ReloadQuestion::default(),
         }
@@ -108,10 +111,10 @@ impl EditorView {
         surface: &mut Surface,
         is_focused: bool,
     ) {
-        // While the file tree has the keys, the text is drawn as unfocused; the statusline still
-        // shows the view's focus and mode.
+        // While a panel has the keys, the text is drawn as unfocused; the statusline still shows
+        // the view's focus and mode.
         let statusline_focused = is_focused;
-        let is_focused = is_focused && !self.file_tree.is_focused();
+        let is_focused = is_focused && !self.file_tree.is_focused() && !self.undo_tree.is_focused();
         let inner = view.inner_area(doc);
         let area = view.area;
         let theme = &editor.theme;
@@ -1023,16 +1026,17 @@ impl EditorView {
         let key_result = self.keymaps.get(mode, event);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
 
-        // A command other than the file tree's own, or a key without one, gives the editor its
-        // focus back.
-        let unfocus_file_tree = match &key_result {
-            KeymapResult::Matched(command) => !is_file_tree_command(command),
-            KeymapResult::MatchedSequence(commands) => !commands.iter().all(is_file_tree_command),
+        // A command other than the panels' own, or a key without one, gives the editor its focus
+        // back.
+        let unfocus_panels = match &key_result {
+            KeymapResult::Matched(command) => !is_panel_command(command),
+            KeymapResult::MatchedSequence(commands) => !commands.iter().all(is_panel_command),
             KeymapResult::NotFound | KeymapResult::Cancelled(_) => true,
             KeymapResult::Pending(_) => false,
         };
-        if unfocus_file_tree {
+        if unfocus_panels {
             self.file_tree.unfocus();
+            self.undo_tree.unfocus(cxt.editor);
         }
 
         let mut execute_command = |command: &commands::MappableCommand| {
@@ -1302,19 +1306,25 @@ impl EditorView {
             self.handle_non_key_input(cxt)
         }
 
-        // The views were drawn as unfocused while the file tree had the keys, which a press in
-        // the editor takes back below.
-        let file_tree_focused = self.file_tree.is_focused();
+        // The views were drawn as unfocused while a panel had the keys, which a press in the
+        // editor takes back below.
+        let file_tree_focused = self.file_tree.is_focused() || self.undo_tree.is_focused();
         // Whether a view was drawn as focused, revealing concealed text at its cursors.
         let drawn_focused =
             |editor: &Editor, view_id| editor.tree.focus == view_id && !file_tree_focused;
 
+        if let Some(result) = self.undo_tree.handle_mouse(event, cxt.editor) {
+            self.file_tree.unfocus();
+            return result;
+        }
         if let Some(result) = self.file_tree.handle_mouse(event, cxt.editor) {
+            self.undo_tree.unfocus(cxt.editor);
             return result;
         }
         // A press in the editor gives it its focus back.
         if matches!(event.kind, MouseEventKind::Down(_)) {
             self.file_tree.unfocus();
+            self.undo_tree.unfocus(cxt.editor);
         }
 
         let config = cxt.editor.config();
@@ -1582,6 +1592,7 @@ impl Component for EditorView {
 
         match event {
             Event::Paste(contents) => {
+                self.undo_tree.unfocus(cx.editor);
                 if self.file_tree.is_focused() {
                     let mut context = crate::compositor::Context {
                         editor: cx.editor,
@@ -1629,8 +1640,24 @@ impl Component for EditorView {
                     return EventResult::Consumed(None);
                 }
 
-                // A focused file tree gets the keys first, unless the editor is in the middle of
-                // a key sequence of its own.
+                // A focused panel gets the keys first, unless the editor is in the middle of a key
+                // sequence of its own.
+                if self.undo_tree.is_focused()
+                    && self.keymaps.pending().is_empty()
+                    && self.keymaps.sticky().is_none()
+                    && self.on_next_key.is_none()
+                    && cx.editor.count.is_none()
+                {
+                    let mut context = crate::compositor::Context {
+                        editor: cx.editor,
+                        scroll: None,
+                        jobs: cx.jobs,
+                    };
+                    let result = self.undo_tree.handle_key(key, &mut context);
+                    if matches!(result, EventResult::Consumed(_)) {
+                        return result;
+                    }
+                }
                 if self.file_tree.is_focused()
                     && self.keymaps.pending().is_empty()
                     && self.keymaps.sticky().is_none()
@@ -1812,6 +1839,11 @@ impl Component for EditorView {
 
         // -1 for commandline
         let mut views_area = area.clip_bottom(1);
+        // The undo tree takes the right edge, a file tree on the right docking beside it.
+        let undo_tree_area = self.undo_tree.layout(views_area, cx.editor);
+        if let Some(undo_tree_area) = undo_tree_area {
+            views_area = views_area.clip_right(undo_tree_area.width);
+        }
         let file_tree_area = self.file_tree.layout(views_area, cx.editor);
         if let Some(file_tree_area) = file_tree_area {
             views_area = if file_tree_area.left() == views_area.left() {
@@ -1820,6 +1852,10 @@ impl Component for EditorView {
                 views_area.clip_right(file_tree_area.width)
             };
         }
+        let docks: Vec<_> = [file_tree_area, undo_tree_area]
+            .into_iter()
+            .flatten()
+            .collect();
         // -1 for bufferline
         let mut editor_area = views_area;
         if use_bufferline {
@@ -1837,7 +1873,7 @@ impl Component for EditorView {
 
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
-            let statusline_area = dock::statusline_area(view.area, file_tree_area.as_slice());
+            let statusline_area = dock::statusline_area(view.area, &docks);
             self.render_view(
                 cx.editor,
                 doc,
@@ -1851,6 +1887,9 @@ impl Component for EditorView {
 
         if let Some(file_tree_area) = file_tree_area {
             self.file_tree.render(file_tree_area, surface, cx);
+        }
+        if let Some(undo_tree_area) = undo_tree_area {
+            self.undo_tree.render(undo_tree_area, surface, cx);
         }
 
         if config.auto_info {
@@ -1945,11 +1984,15 @@ impl Component for EditorView {
         }
 
         self.file_tree.render_command_line(area, surface, cx);
+        self.undo_tree.render_command_line(area, surface, cx);
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
         if self.file_tree.is_focused() {
             return self.file_tree.cursor(area, editor);
+        }
+        if self.undo_tree.is_focused() {
+            return self.undo_tree.cursor(area, editor);
         }
         let (view, doc) = current_ref!(editor);
         if view.hides_cursor(doc) {
@@ -1970,8 +2013,12 @@ impl Component for EditorView {
     }
 }
 
-fn is_file_tree_command(command: &commands::MappableCommand) -> bool {
-    matches!(command.name(), "focus_file_tree" | "toggle_file_tree")
+/// Whether `command` focuses or toggles a panel, which unfocuses the others itself.
+fn is_panel_command(command: &commands::MappableCommand) -> bool {
+    matches!(
+        command.name(),
+        "focus_file_tree" | "toggle_file_tree" | "focus_undo_tree" | "toggle_undo_tree"
+    )
 }
 
 fn canonicalize_key(key: &mut KeyEvent) {

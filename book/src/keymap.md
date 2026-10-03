@@ -302,6 +302,8 @@ This layer is a kludge of mappings, mostly pickers.
 | `F`     | Open file picker at current working directory                           | `file_picker_in_current_directory`         |
 | `e`     | Focus/unfocus the [file tree](#file-tree)                               | `focus_file_tree`                          |
 | `E`     | Toggle the [file tree](#file-tree)                                      | `toggle_file_tree`                         |
+| `u`     | Focus/unfocus the [undo tree](./undo-tree.md)                           | `focus_undo_tree`                          |
+| `U`     | Toggle the [undo tree](./undo-tree.md)                                  | `toggle_undo_tree`                         |
 | `.`     | Open file explorer at current buffer's directory                        | `file_explorer_in_current_buffer_directory`|
 | `b`     | Open buffer picker                                                      | `buffer_picker`                            |
 | `j`     | Open jumplist picker                                                    | `jumplist_picker`                          |

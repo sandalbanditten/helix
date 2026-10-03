@@ -254,6 +254,8 @@ pub struct Document {
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
 
     diff_handle: Option<DiffHandle>,
+    /// The version control's diff handle while the gutter diffs against another text.
+    vcs_diff_handle: Option<Option<DiffHandle>>,
     version_control_head: Option<Arc<ArcSwap<Box<str>>>>,
 
     // when document was used for most-recent-used buffer picker
@@ -820,6 +822,7 @@ impl Document {
             modified_since_accessed: false,
             language_servers: HashMap::new(),
             diff_handle: None,
+            vcs_diff_handle: None,
             config,
             version_control_head: None,
             focused_at: std::time::Instant::now(),
@@ -1444,7 +1447,7 @@ impl Document {
     pub fn set_vcs(&mut self, diff_base: Option<Vec<u8>>, head: Option<Arc<ArcSwap<Box<str>>>>) {
         match diff_base {
             Some(diff_base) => self.set_diff_base(diff_base),
-            None => self.diff_handle = None,
+            None => *self.vcs_diff_handle_mut() = None,
         }
         self.version_control_head = head;
     }
@@ -2014,16 +2017,34 @@ impl Document {
     }
 
     fn earlier_later_impl(&mut self, view: &mut View, uk: UndoKind, earlier: bool) -> bool {
-        if earlier {
+        self.travel(view, earlier, |history| {
+            if earlier {
+                history.earlier(uk)
+            } else {
+                history.later(uk)
+            }
+        })
+    }
+
+    /// Goes to `revision` of the history, committing pending changes first.
+    pub fn jump_to_revision(&mut self, view: &mut View, revision: usize) -> bool {
+        self.travel(view, true, |history| history.jump(revision))
+    }
+
+    /// Goes through the history with the transactions `go` hands out. Pending changes are
+    /// committed first if `commit`, else they keep the document where it is.
+    fn travel(
+        &mut self,
+        view: &mut View,
+        commit: bool,
+        go: impl FnOnce(&mut History) -> Vec<Transaction>,
+    ) -> bool {
+        if commit {
             self.append_changes_to_history(view);
         } else if !self.changes.is_empty() {
             return false;
         }
-        let txns = if earlier {
-            self.history.get_mut().earlier(uk)
-        } else {
-            self.history.get_mut().later(uk)
-        };
+        let txns = go(self.history.get_mut());
         let mut success = false;
         for txn in txns {
             if self.apply_impl(&txn, view.id, true) {
@@ -2266,14 +2287,45 @@ impl Document {
 
     /// Intialize/updates the differ for this document with a new base.
     pub fn set_diff_base(&mut self, diff_base: Vec<u8>) {
-        if let Ok((diff_base, ..)) = from_reader(&mut diff_base.as_slice(), Some(self.encoding)) {
-            if let Some(differ) = &self.diff_handle {
+        let text = self.text.clone();
+        let read = from_reader(&mut diff_base.as_slice(), Some(self.encoding));
+        let handle = self.vcs_diff_handle_mut();
+        if let Ok((diff_base, ..)) = read {
+            if let Some(differ) = handle {
                 differ.update_diff_base(diff_base);
                 return;
             }
-            self.diff_handle = Some(DiffHandle::new(diff_base, self.text.clone()))
+            *handle = Some(DiffHandle::new(diff_base, text))
         } else {
-            self.diff_handle = None;
+            *handle = None;
+        }
+    }
+
+    /// Makes the diff gutter show the changes against `base` rather than against the version
+    /// control's text, or against that again with `None`.
+    pub fn set_diff_override(&mut self, base: Option<Rope>) {
+        match base {
+            Some(base) => {
+                let handle = Some(DiffHandle::new(base, self.text.clone()));
+                let vcs = std::mem::replace(&mut self.diff_handle, handle);
+                self.vcs_diff_handle.get_or_insert(vcs);
+            }
+            None => {
+                if let Some(vcs) = self.vcs_diff_handle.take() {
+                    self.diff_handle = vcs;
+                    if let Some(handle) = &self.diff_handle {
+                        handle.update_document(self.text.clone(), false);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The diff handle of the version control, also while the gutter diffs against another text.
+    fn vcs_diff_handle_mut(&mut self) -> &mut Option<DiffHandle> {
+        match &mut self.vcs_diff_handle {
+            Some(vcs) => vcs,
+            None => &mut self.diff_handle,
         }
     }
 

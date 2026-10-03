@@ -233,6 +233,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "F" => file_picker_in_current_directory,
             "e" => focus_file_tree,
             "E" => toggle_file_tree,
+            "u" => focus_undo_tree,
+            "U" => toggle_undo_tree,
             "." => file_explorer_in_current_buffer_directory,
             "b" => buffer_picker,
             "j" => jumplist_picker,
