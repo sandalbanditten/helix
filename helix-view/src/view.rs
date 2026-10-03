@@ -10,7 +10,7 @@ use crate::{
 };
 
 use helix_core::{
-    char_idx_at_visual_offset,
+    anchor_at_visual_offset, char_idx_at_visual_offset,
     doc_formatter::TextFormat,
     fold,
     movement::{move_vertically_visual, Direction, Movement},
@@ -318,7 +318,7 @@ impl View {
                 viewport.height as isize - scrolloff_bottom as isize - 1
             };
             (offset.anchor, offset.vertical_offset) =
-                char_idx_at_visual_offset(doc_text, cursor, -v_off, 0, &text_fmt, &annotations);
+                anchor_at_visual_offset(doc_text, cursor, -v_off, &text_fmt, &annotations);
         }
 
         if text_fmt.soft_wrap {
@@ -408,11 +408,10 @@ impl View {
 
         let mut view_offset = doc.view_offset(self.id);
         let text_fmt = doc.text_format(self.inner_area(doc).width, None);
-        (view_offset.anchor, view_offset.vertical_offset) = char_idx_at_visual_offset(
+        (view_offset.anchor, view_offset.vertical_offset) = anchor_at_visual_offset(
             doc.text().slice(..),
             view_offset.anchor,
             view_offset.vertical_offset as isize + rows,
-            0,
             &text_fmt,
             &self.text_annotations(doc, None),
         );

@@ -75,11 +75,10 @@ pub fn align_view(doc: &mut Document, view: &View, align: Align) {
     };
 
     let text_fmt = doc.text_format(viewport.width, None);
-    (view_offset.anchor, view_offset.vertical_offset) = char_idx_at_visual_offset(
+    (view_offset.anchor, view_offset.vertical_offset) = anchor_at_visual_offset(
         doc_text,
         cursor,
         -(relative as isize),
-        0,
         &text_fmt,
         &view.text_annotations(doc, None),
     );
@@ -88,7 +87,7 @@ pub fn align_view(doc: &mut Document, view: &View, align: Align) {
 
 pub use document::Document;
 pub use editor::Editor;
-use helix_core::char_idx_at_visual_offset;
+use helix_core::anchor_at_visual_offset;
 pub use spellbook::Dictionary;
 pub use theme::Theme;
 pub use view::View;

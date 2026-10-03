@@ -7,7 +7,7 @@ use helix_core::str_utils::char_to_byte_idx;
 use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
 use helix_core::text_annotations::TextAnnotations;
 use helix_core::unicode::segmentation::UnicodeSegmentation;
-use helix_core::{visual_offset_from_block, Position, RopeSlice, Syntax};
+use helix_core::{anchor_row, Position, RopeSlice, Syntax};
 use helix_stdx::rope::RopeSliceExt;
 use helix_view::editor::{WhitespaceConfig, WhitespaceRenderValue};
 use helix_view::graphics::Rect;
@@ -89,9 +89,7 @@ pub fn render_text<'a>(
     theme: &Theme,
     mut decorations: DecorationManager,
 ) {
-    let row_off = visual_offset_from_block(text, anchor, anchor, text_fmt, text_annotations)
-        .0
-        .row;
+    let row_off = anchor_row(text, anchor, text_fmt, text_annotations);
 
     let mut formatter =
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, text_annotations, anchor);

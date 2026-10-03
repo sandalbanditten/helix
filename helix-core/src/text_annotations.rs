@@ -196,6 +196,14 @@ pub trait LineAnnotation {
         usize::MAX
     }
 
+    /// The number of virtual lines to reserve above the first line of the text, like the filler
+    /// rows a side-by-side diff shows above a file whose first lines the other side added.
+    ///
+    /// A view anchored at the start of the text shows them; scrolling down passes them first.
+    fn virtual_lines_above(&mut self) -> usize {
+        0
+    }
+
     /// This function is called at the end of a visual line to insert virtual text
     ///
     /// # Returns
@@ -614,6 +622,14 @@ impl<'a> TextAnnotations<'a> {
                 };
             }
         }
+    }
+
+    /// The number of virtual lines the line annotations reserve above the first line.
+    pub(crate) fn virtual_lines_above(&self) -> usize {
+        self.line_annotations
+            .iter()
+            .map(|(_, layer)| unsafe { layer.get().virtual_lines_above() })
+            .sum()
     }
 
     pub(crate) fn virtual_lines_at(

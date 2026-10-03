@@ -168,6 +168,24 @@ pub fn visual_offset_from_block(
     (last_pos, block_start)
 }
 
+/// The row of the block holding `anchor` that a view anchored at `anchor` starts at: the anchor's
+/// own row, except that a view anchored at the start of the text starts at the top of the first
+/// block, showing the virtual lines above the first line.
+pub fn anchor_row(
+    text: RopeSlice,
+    anchor: usize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> usize {
+    if anchor == 0 {
+        0
+    } else {
+        visual_offset_from_block(text, anchor, anchor, text_fmt, annotations)
+            .0
+            .row
+    }
+}
+
 /// Returns the height of the given text when softwrapping
 pub fn softwrapped_dimensions(text: RopeSlice, text_fmt: &TextFormat) -> (usize, u16) {
     let last_pos =
@@ -197,7 +215,8 @@ pub fn visual_offset_from_anchor(
 ) -> Result<(Position, usize), VisualOffsetError> {
     let mut formatter =
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, annotations, anchor);
-    let mut anchor_line = None;
+    // See `anchor_row`.
+    let mut anchor_line = (anchor == 0).then_some(0);
     let mut found_pos = None;
     let mut last_pos = Position::default();
 
@@ -359,9 +378,41 @@ pub fn pos_at_visual_coords(text: RopeSlice, coords: Position, tab_width: usize)
 /// the previous char_index is returned, together with the remaining vertical offset (`virtual_lines`)
 pub fn char_idx_at_visual_offset(
     text: RopeSlice,
+    anchor: usize,
+    row_offset: isize,
+    column: usize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> (usize, usize) {
+    let (block, row) = block_row(text, anchor, row_offset, text_fmt, annotations);
+    char_idx_at_visual_block_offset(text, block, row, column, text_fmt, annotations)
+}
+
+/// Where a view goes to show, at its top, the visual line `row_offset` rows below the top of a
+/// view anchored at `anchor`: its anchor and its vertical offset from there.
+///
+/// This is [`char_idx_at_visual_offset`] at column 0, except that a view anchored at the start
+/// of the text counts its rows from the top, above the first line (see [`anchor_row`]).
+pub fn anchor_at_visual_offset(
+    text: RopeSlice,
+    anchor: usize,
+    row_offset: isize,
+    text_fmt: &TextFormat,
+    annotations: &TextAnnotations,
+) -> (usize, usize) {
+    let (block, row) = block_row(text, anchor, row_offset, text_fmt, annotations);
+    match char_idx_at_visual_block_offset(text, block, row, 0, text_fmt, annotations) {
+        (0, _) => (0, row),
+        found => found,
+    }
+}
+
+/// The block holding the visual line `row_offset` rows below the top of a view anchored at
+/// `anchor`, and that line's row within the block.
+fn block_row(
+    text: RopeSlice,
     mut anchor: usize,
     mut row_offset: isize,
-    column: usize,
     text_fmt: &TextFormat,
     annotations: &TextAnnotations,
 ) -> (usize, usize) {
@@ -370,7 +421,10 @@ pub fn char_idx_at_visual_offset(
     loop {
         let (visual_pos_in_block, block_char_offset) =
             visual_offset_from_block(text, anchor, pos, text_fmt, annotations);
-        row_offset += visual_pos_in_block.row as isize;
+        // Only the first step can be at the start of the text; see `anchor_row`.
+        if pos != 0 {
+            row_offset += visual_pos_in_block.row as isize;
+        }
         anchor = block_char_offset;
         if row_offset >= 0 {
             break;
@@ -386,15 +440,7 @@ pub fn char_idx_at_visual_offset(
         pos = anchor;
         anchor -= 1;
     }
-
-    char_idx_at_visual_block_offset(
-        text,
-        anchor,
-        row_offset as usize,
-        column,
-        text_fmt,
-        annotations,
-    )
+    (anchor, row_offset as usize)
 }
 
 /// This function behaves the same as `char_idx_at_visual_offset`, except that
@@ -420,7 +466,8 @@ pub fn char_idx_at_visual_block_offset(
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, annotations, anchor);
     let mut last_char_idx = formatter.next_char_pos();
     let mut found_non_virtual_on_row = false;
-    let mut last_row = 0;
+    // Rows above the first line of the text come before any row with text.
+    let mut last_row = None;
     for grapheme in &mut formatter {
         match grapheme.visual_pos.row.cmp(&row) {
             Ordering::Equal => {
@@ -436,10 +483,10 @@ pub fn char_idx_at_visual_block_offset(
                 }
             }
             Ordering::Greater if found_non_virtual_on_row => return (last_char_idx, 0),
-            Ordering::Greater => return (last_char_idx, row - last_row),
+            Ordering::Greater => return (last_char_idx, row - last_row.unwrap_or(row)),
             Ordering::Less => {
                 if !grapheme.is_virtual() {
-                    last_row = grapheme.visual_pos.row;
+                    last_row = Some(grapheme.visual_pos.row);
                     last_char_idx = grapheme.char_idx;
                 }
             }
@@ -821,9 +868,14 @@ mod test {
         use crate::text_annotations::LineAnnotation;
         use quickcheck::{QuickCheck, TestResult};
 
-        struct VirtualLineAfterEveryThirdLine;
+        /// A virtual line after every third line, and `.0` above the first line.
+        struct VirtualLineAfterEveryThirdLine(usize);
 
         impl LineAnnotation for VirtualLineAfterEveryThirdLine {
+            fn virtual_lines_above(&mut self) -> usize {
+                self.0
+            }
+
             fn insert_virtual_lines(&mut self, _: usize, _: Position, doc_line: usize) -> Position {
                 Position::new(usize::from(doc_line.is_multiple_of(3)), 0)
             }
@@ -869,7 +921,7 @@ mod test {
             first: i8,
             second: i8,
             soft_wrap: bool,
-            virtual_lines: bool,
+            virtual_lines: Option<u8>,
             fold_lines: Vec<(u8, u8)>,
             conceal_words: bool,
         ) -> TestResult {
@@ -891,18 +943,19 @@ mod test {
             }));
             let mut annotations = TextAnnotations::default();
             annotations.add_folds(folds.outermost(), " … ".into());
-            if virtual_lines {
-                annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine));
+            if let Some(above) = virtual_lines {
+                annotations.add_line_annotation(Box::new(VirtualLineAfterEveryThirdLine(
+                    above as usize % 3,
+                )));
             }
             if conceal_words {
                 annotations.add_conceals(ConcealWords(text));
             }
             let scroll = |(anchor, vertical_offset): (usize, usize), rows: isize| {
-                char_idx_at_visual_offset(
+                anchor_at_visual_offset(
                     text,
                     anchor,
                     vertical_offset as isize + rows,
-                    0,
                     &text_fmt,
                     &annotations,
                 )
@@ -920,8 +973,86 @@ mod test {
 
         QuickCheck::new().tests(500).quickcheck(
             composes
-                as fn(Vec<String>, usize, i8, i8, bool, bool, Vec<(u8, u8)>, bool) -> TestResult,
+                as fn(
+                    Vec<String>,
+                    usize,
+                    i8,
+                    i8,
+                    bool,
+                    Option<u8>,
+                    Vec<(u8, u8)>,
+                    bool,
+                ) -> TestResult,
         );
+    }
+
+    #[test]
+    fn test_rows_above_the_first_line() {
+        use crate::text_annotations::LineAnnotation;
+
+        struct Above(usize);
+
+        impl LineAnnotation for Above {
+            fn virtual_lines_above(&mut self) -> usize {
+                self.0
+            }
+
+            fn insert_virtual_lines(&mut self, _: usize, _: Position, _: usize) -> Position {
+                Position::new(0, 0)
+            }
+        }
+
+        let text = Rope::from("ab\ncd\nef\n");
+        let slice = text.slice(..);
+        let text_fmt = TextFormat::default();
+        let mut annotations = TextAnnotations::default();
+        annotations.add_line_annotation(Box::new(Above(2)));
+
+        // The first line sits below the rows above it; later blocks start at their top.
+        let block =
+            |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
+        assert_eq!(block(0, 0), (Position::new(2, 0), 0));
+        assert_eq!(block(0, 4), (Position::new(3, 1), 0));
+        assert_eq!(block(3, 4), (Position::new(0, 1), 3));
+
+        // A view anchored at the start shows them.
+        assert_eq!(anchor_row(slice, 0, &text_fmt, &annotations), 0);
+        assert_eq!(anchor_row(slice, 3, &text_fmt, &annotations), 0);
+        let from_anchor = |anchor, pos| {
+            visual_offset_from_anchor(slice, anchor, pos, &text_fmt, &annotations, 10)
+                .unwrap()
+                .0
+        };
+        assert_eq!(from_anchor(0, 0), Position::new(2, 0));
+        assert_eq!(from_anchor(0, 3), Position::new(3, 0));
+        assert_eq!(from_anchor(3, 6), Position::new(1, 0));
+
+        // Scrolling passes them before the first line.
+        let scroll = |(anchor, offset): (usize, usize), rows: isize| {
+            anchor_at_visual_offset(
+                slice,
+                anchor,
+                offset as isize + rows,
+                &text_fmt,
+                &annotations,
+            )
+        };
+        assert_eq!(scroll((0, 0), 1), (0, 1));
+        assert_eq!(scroll((0, 0), 2), (0, 2), "the first line at the top");
+        assert_eq!(scroll((0, 0), 3), (3, 0));
+        assert_eq!(scroll((3, 0), -1), (0, 2));
+        assert_eq!(scroll((3, 0), -3), (0, 0));
+        assert_eq!(scroll((6, 0), -9), (0, 0), "no further than the top");
+
+        // As positions, the rows above are the first char.
+        let char_at = |anchor, rows| {
+            char_idx_at_visual_offset(slice, anchor, rows, 1, &text_fmt, &annotations)
+        };
+        assert_eq!(char_at(0, 0), (0, 0));
+        assert_eq!(char_at(0, 1), (0, 0));
+        assert_eq!(char_at(0, 2), (1, 0));
+        assert_eq!(char_at(0, 3), (4, 0));
+        assert_eq!(char_at(3, -2), (0, 0));
     }
 
     #[test]

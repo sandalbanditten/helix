@@ -251,12 +251,18 @@ impl<'t> DocumentFormatter<'t> {
         let block_line_idx = fold::row_start_line(annotations.folds(), text, line_idx);
         let block_char_idx = text.line_to_char(block_line_idx);
         annotations.reset_pos(block_char_idx);
+        // The first block starts below the rows reserved above the first line.
+        let row = if block_char_idx == 0 {
+            annotations.virtual_lines_above()
+        } else {
+            0
+        };
 
         DocumentFormatter {
             text,
             text_fmt,
             annotations,
-            visual_pos: Position { row: 0, col: 0 },
+            visual_pos: Position { row, col: 0 },
             graphemes: text.slice(block_char_idx..).graphemes(),
             char_pos: block_char_idx,
             exhausted: false,

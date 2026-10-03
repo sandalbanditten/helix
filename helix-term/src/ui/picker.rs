@@ -41,7 +41,7 @@ use std::{
 
 use crate::ui::{Prompt, PromptEvent};
 use helix_core::{
-    char_idx_at_visual_offset, fuzzy::MATCHER, movement::Direction,
+    anchor_at_visual_offset, fuzzy::MATCHER, movement::Direction,
     text_annotations::TextAnnotations, unicode::segmentation::UnicodeSegmentation, Position,
 };
 use helix_view::{
@@ -953,12 +953,11 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 if height < inner.height as usize {
                     let text_fmt = doc.text_format(inner.width, None);
                     let annotations = TextAnnotations::default();
-                    (offset.anchor, offset.vertical_offset) = char_idx_at_visual_offset(
+                    (offset.anchor, offset.vertical_offset) = anchor_at_visual_offset(
                         text,
                         middle,
                         // align to middle
                         -(inner.height as isize / 2),
-                        0,
                         &text_fmt,
                         &annotations,
                     );

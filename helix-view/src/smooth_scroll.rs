@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use helix_core::{
-    char_idx_at_visual_offset,
+    anchor_at_visual_offset,
     movement::{move_vertically_visual, Direction, Movement},
     visual_offset_from_anchor, Assoc, ChangeSet, Selection,
 };
@@ -562,11 +562,10 @@ impl Path {
             return Self::Rows(rows);
         }
 
-        let (anchor, vertical_offset) = char_idx_at_visual_offset(
+        let (anchor, vertical_offset) = anchor_at_visual_offset(
             text,
             to.anchor,
             to.vertical_offset as isize - rows,
-            0,
             &text_fmt,
             &annotations,
         );
@@ -606,11 +605,10 @@ impl Path {
         let text_fmt = doc.text_format(view.inner_area(doc).width, None);
         let annotations = view.text_annotations_at(doc, None, horizontal_offset, true);
         let walk_rows = |offset: ViewPosition, rows: isize| {
-            let (anchor, vertical_offset) = char_idx_at_visual_offset(
+            let (anchor, vertical_offset) = anchor_at_visual_offset(
                 text,
                 offset.anchor,
                 offset.vertical_offset as isize + rows,
-                0,
                 &text_fmt,
                 &annotations,
             );
