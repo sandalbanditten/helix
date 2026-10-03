@@ -4,6 +4,7 @@
 use std::{ops::Range, process::Stdio, time::Duration};
 
 use helix_core::{unicode::width::UnicodeWidthChar, Rope};
+use helix_view::smooth_scroll::SmoothOffset;
 use helix_view::{
     editor::UndoDiff,
     graphics::{Color, Rect, Style},
@@ -60,6 +61,51 @@ struct Line {
     styles: Vec<(Range<usize>, Style)>,
 }
 
+impl Line {
+    /// The columns the line takes.
+    fn width(&self) -> usize {
+        self.text.chars().map(|c| c.width().unwrap_or(0)).sum()
+    }
+}
+
+/// A move through the diff, made by one of the editor's motions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    Down,
+    Up,
+    Left,
+    Right,
+    HalfPageDown,
+    HalfPageUp,
+    PageDown,
+    PageUp,
+    Top,
+    Bottom,
+    Leftmost,
+    Rightmost,
+}
+
+impl Motion {
+    /// The move the editor's command `name` makes through the diff, if it is a motion.
+    pub fn of_command(name: &str) -> Option<Self> {
+        Some(match name {
+            "move_visual_line_down" | "move_line_down" | "scroll_down" => Self::Down,
+            "move_visual_line_up" | "move_line_up" | "scroll_up" => Self::Up,
+            "move_char_left" => Self::Left,
+            "move_char_right" => Self::Right,
+            "page_cursor_half_down" | "half_page_down" => Self::HalfPageDown,
+            "page_cursor_half_up" | "half_page_up" => Self::HalfPageUp,
+            "page_cursor_down" | "page_down" => Self::PageDown,
+            "page_cursor_up" | "page_up" => Self::PageUp,
+            "goto_file_start" => Self::Top,
+            "goto_file_end" | "goto_last_line" => Self::Bottom,
+            "goto_line_start" | "goto_first_nonwhitespace" => Self::Leftmost,
+            "goto_line_end" | "goto_line_end_newline" => Self::Rightmost,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Default)]
 pub struct DiffPane {
     pub compare: Compare,
@@ -69,8 +115,13 @@ pub struct DiffPane {
     lines: Vec<Line>,
     task: Option<JoinHandle<()>>,
     generation: u64,
-    /// The first line shown.
-    pub scroll: usize,
+    /// The first line shown, and the column each line is shown from.
+    scroll: usize,
+    column: usize,
+    /// The lines and columns shown last.
+    height: usize,
+    width: usize,
+    smooth_scroll: SmoothOffset,
     /// Whether `difft` is installed, once looked for.
     difft: Option<bool>,
 }
@@ -97,8 +148,7 @@ impl DiffPane {
         self.generation += 1;
         self.asked = Some(request.clone());
         let Some((old, new)) = texts.filter(|_| request.against.is_some()) else {
-            self.shown = Some(request);
-            self.lines.clear();
+            self.show(request, Vec::new());
             return;
         };
         let difft = request.tool == UndoDiff::Difftastic && self.find_difft(editor);
@@ -145,9 +195,9 @@ impl DiffPane {
         let Some(request) = self.asked.clone() else {
             return;
         };
-        self.lines = match output {
+        let lines = match output {
             Output::Ansi(ansi) => {
-                // Lines too long are wrapped when drawn.
+                // Wide enough for any line: lines are cut, not wrapped, where they are drawn.
                 let mut screen = Screen::new(u16::MAX, 1, true);
                 screen.push(&ansi);
                 let mut shown = screen.take_scrolled();
@@ -156,21 +206,56 @@ impl DiffPane {
             }
             Output::Unified(diff) => styled(&diff, theme),
         };
-        if self.shown.as_ref() != Some(&request) {
-            self.scroll = 0;
-        }
-        self.shown = Some(request);
+        self.show(request, lines);
         self.task = None;
     }
 
-    /// Scrolls the diff `rows` down, or up when negative, its lines wrapped at `width`.
-    pub fn scroll_by(&mut self, rows: isize, width: usize) {
-        let max = self.wrapped(width).count().saturating_sub(1);
-        self.scroll = self.scroll.saturating_add_signed(rows).min(max);
+    /// Shows `lines`, the diff of `request`: from the start if it is the diff of another one.
+    fn show(&mut self, request: Request, lines: Vec<Line>) {
+        if self.shown.as_ref() != Some(&request) {
+            (self.scroll, self.column) = (0, 0);
+            self.smooth_scroll.reset();
+        }
+        self.lines = lines;
+        self.shown = Some(request);
     }
 
-    /// Draws the diff in `area`, under a row naming the revisions it compares.
-    pub fn render(&self, area: Rect, surface: &mut Surface, base: Style, guide: Style) {
+    /// Moves through the diff by `motion`, `count` times.
+    pub fn go(&mut self, motion: Motion, count: usize) {
+        let page = self.height.max(1);
+        let last = self.lines.len().saturating_sub(page);
+        let widest = self.lines.iter().map(Line::width).max().unwrap_or(0);
+        let rightmost = widest.saturating_sub(self.width);
+        // Columns go by half the width: the pane is narrow.
+        let columns = (self.width / 2).max(1) * count;
+        let down = |rows: usize| self.scroll.saturating_add(rows * count).min(last);
+        let up = |rows: usize| self.scroll.saturating_sub(rows * count);
+        match motion {
+            Motion::Down => self.scroll = down(1),
+            Motion::Up => self.scroll = up(1),
+            Motion::HalfPageDown => self.scroll = down(page.div_ceil(2)),
+            Motion::HalfPageUp => self.scroll = up(page.div_ceil(2)),
+            Motion::PageDown => self.scroll = down(page),
+            Motion::PageUp => self.scroll = up(page),
+            Motion::Top => self.scroll = 0,
+            Motion::Bottom => self.scroll = last,
+            Motion::Left => self.column = self.column.saturating_sub(columns),
+            Motion::Right => self.column = self.column.saturating_add(columns).min(rightmost),
+            Motion::Leftmost => self.column = 0,
+            Motion::Rightmost => self.column = rightmost,
+        }
+    }
+
+    /// Draws the diff in `area`, under a row naming the revisions it compares in `header`'s
+    /// style, its lines cut at the edge. Scrolling glides.
+    pub fn render(
+        &mut self,
+        area: Rect,
+        surface: &mut Surface,
+        base: Style,
+        header: Style,
+        editor: &mut Editor,
+    ) {
         surface.clear_with(area, base);
         if area.height == 0 {
             return;
@@ -184,24 +269,28 @@ impl DiffPane {
             Some(Request { revision, .. }) => format!("─ {revision} "),
             None => "─ ".to_owned(),
         };
-        let header = format!("{title:─<width$}", width = area.width as usize);
-        surface.set_stringn(
-            area.x,
-            area.y,
-            &header,
-            area.width as usize,
-            base.patch(guide),
-        );
-        let rows = self.wrapped(area.width as usize).skip(self.scroll);
-        for (y, (line, chars)) in (area.y + 1..area.bottom()).zip(rows) {
-            let mut x = area.x;
-            for (index, c) in line
-                .text
-                .chars()
-                .enumerate()
-                .skip(chars.start)
-                .take(chars.len())
-            {
+        let title = format!("{title:─<width$}", width = area.width as usize);
+        surface.set_stringn(area.x, area.y, &title, area.width as usize, header);
+
+        let lines = area.clip_top(1);
+        (self.height, self.width) = (lines.height as usize, lines.width as usize);
+        self.scroll = self
+            .scroll
+            .min(self.lines.len().saturating_sub(self.height));
+        let scroll = self.smooth_scroll.frame(self.scroll, lines.height, editor);
+        for (y, line) in (lines.top()..lines.bottom()).zip(self.lines.iter().skip(scroll)) {
+            let (mut x, mut column) = (lines.x, 0);
+            for (index, c) in line.text.chars().enumerate() {
+                let width = c.width().unwrap_or(0);
+                // Part of a wide char cut by the left edge is left out.
+                let shown = column >= self.column;
+                column += width;
+                if !shown {
+                    continue;
+                }
+                if x >= lines.right() {
+                    break;
+                }
                 let style = line
                     .styles
                     .iter()
@@ -210,28 +299,10 @@ impl DiffPane {
                 let mut bytes = [0; 4];
                 let c = c.encode_utf8(&mut bytes);
                 x = surface
-                    .set_stringn(x, y, c, area.right().saturating_sub(x) as usize, style)
+                    .set_stringn(x, y, c, lines.right().saturating_sub(x) as usize, style)
                     .0;
             }
         }
-    }
-
-    /// The rows of the lines wrapped at `width` columns: each a line and its chars on the row.
-    fn wrapped(&self, width: usize) -> impl Iterator<Item = (&Line, Range<usize>)> {
-        self.lines.iter().flat_map(move |line| {
-            let mut rows = Vec::new();
-            let (mut start, mut columns) = (0, 0);
-            for (index, c) in line.text.chars().enumerate() {
-                let c_width = c.width().unwrap_or(0);
-                if columns + c_width > width && index > start {
-                    rows.push((line, start..index));
-                    (start, columns) = (index, 0);
-                }
-                columns += c_width;
-            }
-            rows.push((line, start..line.text.chars().count()));
-            rows
-        })
     }
 }
 
@@ -354,19 +425,42 @@ mod tests {
     }
 
     #[test]
-    fn long_lines_wrap() {
-        let pane = DiffPane {
-            lines: vec![
-                Line {
-                    text: "abcdefgh".into(),
-                    styles: Vec::new(),
-                },
-                Line::default(),
-            ],
+    fn motions_scroll_within_the_diff() {
+        let line = |text: &str| Line {
+            text: text.into(),
+            styles: Vec::new(),
+        };
+        let mut pane = DiffPane {
+            lines: (0..10)
+                .map(|i| line(&format!("{i}{}", "-".repeat(i * 4))))
+                .collect(),
+            height: 4,
+            width: 10,
             ..DiffPane::default()
         };
-        let rows: Vec<_> = pane.wrapped(3).map(|(_, chars)| chars).collect();
-        assert_eq!(rows, [0..3, 3..6, 6..8, 0..0]);
+        pane.go(Motion::Down, 3);
+        assert_eq!(pane.scroll, 3);
+        pane.go(Motion::PageDown, 1);
+        assert_eq!(pane.scroll, 6, "the last line ends the last page");
+        pane.go(Motion::HalfPageUp, 1);
+        assert_eq!(pane.scroll, 4);
+        pane.go(Motion::Top, 1);
+        assert_eq!(pane.scroll, 0);
+        pane.go(Motion::Right, 1);
+        assert_eq!(pane.column, 5);
+        pane.go(Motion::Rightmost, 1);
+        assert_eq!(
+            pane.column, 27,
+            "the widest line, 37 columns, ends at the edge"
+        );
+        pane.go(Motion::Left, 2);
+        assert_eq!(pane.column, 17);
+        assert_eq!(
+            Motion::of_command("page_cursor_half_down"),
+            Some(Motion::HalfPageDown)
+        );
+        assert_eq!(Motion::of_command("goto_line_end"), Some(Motion::Rightmost));
+        assert_eq!(Motion::of_command("delete_selection"), None);
     }
 
     #[test]

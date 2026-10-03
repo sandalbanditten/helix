@@ -15,7 +15,7 @@ It have a similar interface to vims and emacs, but be as helix-like as possible.
 
 ## Diff view
 Structural diff view using `difft` to use as `git difftool`.
-Should show both old and new in side-by-side buffers, with synchronized scrolling, i.e. just sync line, not column.
+Should show both old and new in side-by-side buffers, with synchronized scrolling, i.e. just sync line, not column, like nvim diff's `:scrollbind`.
 Should syntax highlight the code, also show unchanged code.
 Should also be callable for current buffer in helix.
 In this view `]g`, `[g` and their upper case friends should jump hunks.

@@ -21,7 +21,7 @@ use crate::ui::{
 /// The theme styles of the panel, resolved once per frame.
 pub struct Styles {
     pub(super) base: Style,
-    selected: Style,
+    pub(super) selected: Style,
     /// The color of the cursor's `>` mark.
     mark: Style,
     pub(super) guide: Style,
@@ -30,6 +30,7 @@ pub struct Styles {
     /// Revision numbers and ages.
     revision: Style,
     saved: Style,
+    inserted: Style,
     deleted: Style,
     matched: Style,
     pub(super) track: Style,
@@ -70,6 +71,7 @@ impl Styles {
             current: scope(&["ui.undo-tree.current"], &["info"]),
             revision: scope(&["ui.undo-tree.revision"], &["comment"]),
             saved: scope(&["ui.undo-tree.saved"], &["diff.plus"]),
+            inserted: theme.get("diff.plus"),
             deleted: theme.get("diff.minus"),
             matched: ["ui.undo-tree.match", "ui.file-tree.match"]
                 .iter()
@@ -119,6 +121,8 @@ pub struct Scene<'a> {
     pub marked: usize,
     /// The cursor's row, while the tree is focused.
     pub cursor: Option<usize>,
+    /// Whether the cursor's row has the `>` mark: while the tree part of the panel has the keys.
+    pub marked_cursor: bool,
     /// The first row as drawn, i.e. while smooth scrolling.
     pub start: usize,
     pub now: SystemTime,
@@ -154,7 +158,7 @@ impl Scene<'_> {
         }
         surface.set_style(area, style);
         let mut parts: Vec<(String, Style)> = Vec::with_capacity(8);
-        parts.push(if self.cursor == Some(row) {
+        parts.push(if self.cursor == Some(row) && self.marked_cursor {
             (">".into(), style.patch(styles.mark))
         } else {
             (" ".into(), style)
@@ -195,7 +199,7 @@ impl Scene<'_> {
         let change = match snippet {
             Snippet::Original => meta,
             Snippet::Deleted(_) => style.patch(styles.deleted),
-            Snippet::Inserted(_) => style,
+            Snippet::Inserted(_) => style.patch(styles.inserted),
         };
         let change = if self.matches.contains(&revision) {
             change.patch(styles.matched)
@@ -272,6 +276,7 @@ mod tests {
             columns: &columns,
             marked: 6,
             cursor,
+            marked_cursor: true,
             start: 0,
             now,
             matches: &[],
@@ -357,6 +362,7 @@ mod tests {
                 columns: &columns,
                 marked: revisions,
                 cursor: Some(rows.len() / 2),
+                marked_cursor: true,
                 start: rows.len() / 2,
                 now,
                 matches: &[],
@@ -380,6 +386,36 @@ mod tests {
                 start.elapsed()
             );
         }
+    }
+
+    #[test]
+    fn inserted_text_is_green_like_deleted_text_is_red() {
+        let (history, now) = history();
+        let rows = Rows::new(DocumentId::default(), &history);
+        let theme: Theme = toml::from_str(
+            r##"
+            "diff.plus" = "#00ff00"
+            "diff.minus" = "#ff0000"
+            "##,
+        )
+        .unwrap();
+        let area = Rect::new(0, 0, 34, rows.len() as u16);
+        let mut surface = Surface::empty(area);
+        Scene {
+            rows: &rows,
+            styles: &Styles::new(&theme),
+            columns: &Columns::new(&rows, now),
+            marked: 6,
+            cursor: None,
+            marked_cursor: false,
+            start: 0,
+            now,
+            matches: &[],
+        }
+        .render(area, &mut surface);
+        // `x = 2`, inserted by revision 6 in the first row, starts at column 16.
+        assert_eq!(surface[(16, 0)].symbol.as_str(), "x");
+        assert_eq!(surface[(16, 0)].fg, Color::Rgb(0, 255, 0));
     }
 
     #[test]

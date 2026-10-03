@@ -301,3 +301,69 @@ async fn difftastic_shows_the_diff_when_installed() -> anyhow::Result<()> {
     )
     .await
 }
+
+/// The rows of the diff part of the panel: below its header, in the panel's columns.
+fn diff_rows(app: &Application) -> Vec<String> {
+    let screen = screen(app);
+    let header = screen
+        .iter()
+        .position(|row| row.contains(" → "))
+        .expect("the diff is shown");
+    let column = screen[header].find('─').unwrap();
+    screen[header + 1..]
+        .iter()
+        .take(3)
+        .map(|row| row.get(column..).unwrap_or_default().trim_end().to_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_part_takes_focus_and_scrolls() -> anyhow::Result<()> {
+    let mut config = test_config();
+    config.editor.undo.diff = helix_view::editor::UndoDiff::Builtin;
+    config.editor.undo.diff_height = 3;
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text("#[x|]#\nl1\nl2\nl3\nl4\n")
+        .build()?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some(BRANCH), None),
+            (Some("<space>uj"), Some(&rest)),
+            (
+                Some(NOTHING),
+                Some(&|app| assert_eq!(diff_rows(app), ["@@ -1,4 +1,4 @@", "-x1", "+x12"])),
+            ),
+            // The editor's motions scroll the diff once the view below has the keys.
+            (
+                Some("<C-w>jj"),
+                Some(&|app| {
+                    assert_eq!(diff_rows(app), ["-x1", "+x12", " l1"]);
+                    // The buffer stays at the revision.
+                    assert_eq!(text(app), "x12\nl1\nl2\nl3\nl4\n");
+                }),
+            ),
+            (
+                Some("ge"),
+                Some(&|app| assert_eq!(diff_rows(app), [" l1", " l2", " l3"])),
+            ),
+            (
+                Some("gg"),
+                Some(&|app| assert_eq!(diff_rows(app), ["@@ -1,4 +1,4 @@", "-x1", "+x12"])),
+            ),
+            // Back to the tree part, where `j` goes to an older revision again.
+            (
+                Some("<C-w>kj"),
+                Some(&|app| assert_eq!(text(app), "x1\nl1\nl2\nl3\nl4\n")),
+            ),
+            // Any way to the view below works; `Esc` goes back to where browsing started.
+            (
+                Some("<space>wj<esc>"),
+                Some(&|app| assert_eq!(text(app), "x13\nl1\nl2\nl3\nl4\n")),
+            ),
+        ],
+        false,
+    )
+    .await
+}

@@ -1026,6 +1026,16 @@ impl EditorView {
         let key_result = self.keymaps.get(mode, event);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
 
+        // The undo tree answers some of the editor's commands while it has the keys.
+        if let KeymapResult::Matched(command) = &key_result {
+            if self
+                .undo_tree
+                .run_editor_command(command.name(), cxt.count(), cxt.editor)
+            {
+                return None;
+            }
+        }
+
         // A command other than the panels' own, or a key without one, gives the editor its focus
         // back.
         let unfocus_panels = match &key_result {

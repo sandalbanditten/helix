@@ -15,8 +15,8 @@ use helix_core::{
     fold,
     movement::{move_vertically_visual, Direction, Movement},
     text_annotations::TextAnnotations,
-    visual_offset_from_anchor, visual_offset_from_block, Position, Range, RopeSlice, Selection,
-    Transaction,
+    visual_offset_from_anchor, visual_offset_from_block, ChangeSet, Position, Range, RopeSlice,
+    Selection, Transaction,
     VisualOffsetError::{PosAfterMaxRow, PosBeforeAnchorRow},
 };
 
@@ -538,6 +538,15 @@ impl View {
             self.render_offset(doc).horizontal_offset,
             focused,
         )
+    }
+
+    /// Keeps the view scrolling smoothly over the text `changes` made: what is on screen moves
+    /// with the text, so that a scroll right after glides there rather than jumps. Otherwise a
+    /// change of the text shows the view at its new offset at once.
+    pub fn scroll_smoothly_across(&mut self, doc: &Document, changes: &ChangeSet) {
+        let mut smooth_scroll = std::mem::take(&mut self.smooth_scroll);
+        smooth_scroll.follow_changes(self, doc, changes);
+        self.smooth_scroll = smooth_scroll;
     }
 
     /// Whether the cursor and its decorations are hidden while the view smoothly scrolls.

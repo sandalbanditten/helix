@@ -111,6 +111,18 @@ const BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!(Esc)]], Action::GoBack),
 ]);
 
+/// The keys of the diff part of the panel: the panel's own. Moves through the diff are the
+/// editor's motions.
+const DIFF_BINDINGS: Bindings<Action> = Bindings(&[
+    bind(&[&[key!('d')]], Action::ToggleDiff),
+    bind(&[&[key!('+')]], Action::Grow),
+    bind(&[&[key!('-')]], Action::Shrink),
+    bind(&[&[key!('=')]], Action::Fit),
+    bind(&[&[key!('?')]], Action::Help),
+    bind(&[&[key!(Enter)]], Action::Keep),
+    bind(&[&[key!(Esc)]], Action::GoBack),
+]);
+
 pub type Lookup = panel_keys::Lookup<Action>;
 
 pub fn lookup(sequence: &[KeyEvent]) -> Lookup {
@@ -122,6 +134,29 @@ pub fn info(prefix: &[KeyEvent]) -> Info {
     BINDINGS.info(prefix, "Undo tree")
 }
 
+pub fn diff_lookup(sequence: &[KeyEvent]) -> Lookup {
+    DIFF_BINDINGS.lookup(sequence)
+}
+
+/// The keys of the diff part of the undo tree as an infobox: the editor's motions, under their
+/// default keys, and the panel's own keys.
+pub fn diff_info() -> Info {
+    let motions = [
+        ("j, k", "Scroll down, up"),
+        ("h, l", "Scroll half the width left, right"),
+        ("C-d, C-u", "Scroll half a page down, up"),
+        ("C-f, C-b", "Scroll a page down, up"),
+        ("gg, ge", "Go to the top, the bottom"),
+        ("gh, gl", "Go to the leftmost, rightmost column"),
+    ];
+    let mut body: Vec<_> = motions
+        .into_iter()
+        .map(|(keys, doc)| (keys.to_owned(), doc))
+        .collect();
+    body.extend(DIFF_BINDINGS.rows(&[]));
+    Info::new("Undo tree diff", &body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +164,7 @@ mod tests {
     #[test]
     fn every_sequence_is_bound_once() {
         assert!(BINDINGS.are_unique());
+        assert!(DIFF_BINDINGS.are_unique());
     }
 
     #[test]

@@ -50,8 +50,20 @@ impl<A: Action> Bindings<A> {
 
     /// The keys of the panel called `title`, or the ones continuing `prefix`, as an infobox.
     pub fn info(&self, prefix: &[KeyEvent], title: &'static str) -> Info {
-        let body: Vec<_> = self
-            .0
+        let body = self.rows(prefix);
+        // The sequences share their prefixes, and so their names, with the editor's.
+        let title = match prefix {
+            [] => title,
+            [key!('g')] => "Goto",
+            [key!('z')] => "View",
+            _ => "",
+        };
+        Info::new(title, &body)
+    }
+
+    /// The rows of the help: the keys continuing `prefix`, and what they do.
+    pub fn rows(&self, prefix: &[KeyEvent]) -> Vec<(String, &'static str)> {
+        self.0
             .iter()
             .filter_map(|binding| {
                 let keys: Vec<_> = binding
@@ -62,15 +74,7 @@ impl<A: Action> Bindings<A> {
                     .collect();
                 (!keys.is_empty()).then(|| (keys.join(", "), binding.action.doc()))
             })
-            .collect();
-        // The sequences share their prefixes, and so their names, with the editor's.
-        let title = match prefix {
-            [] => title,
-            [key!('g')] => "Goto",
-            [key!('z')] => "View",
-            _ => "",
-        };
-        Info::new(title, &body)
+            .collect()
     }
 
     /// Whether every key sequence triggers one action only.

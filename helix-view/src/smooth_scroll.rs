@@ -9,7 +9,7 @@ use std::time::Duration;
 use helix_core::{
     char_idx_at_visual_offset,
     movement::{move_vertically_visual, Direction, Movement},
-    visual_offset_from_anchor, Selection,
+    visual_offset_from_anchor, Assoc, ChangeSet, Selection,
 };
 use tokio::time::Instant;
 
@@ -385,6 +385,28 @@ impl SmoothScroll {
             self.animation = None;
         }
         next_frame
+    }
+
+    /// Takes the frame drawn last over to the text that `changes` made of it: what it showed
+    /// moves with the text, so that a scroll right after glides from there.
+    pub(crate) fn follow_changes(&mut self, view: &View, doc: &Document, changes: &ChangeSet) {
+        let Some(last) = self.last.as_ref().filter(|last| last.key.doc == doc.id()) else {
+            return;
+        };
+        let drawn = self
+            .animation
+            .as_ref()
+            .map_or(last.offset, |animation| animation.offset);
+        let offset = ViewPosition {
+            anchor: changes.map_pos(drawn.anchor, Assoc::Before),
+            ..drawn
+        };
+        self.last = Some(Shown {
+            key: FrameKey::new(view, doc),
+            offset,
+        });
+        self.animation = None;
+        self.hint = None;
     }
 
     /// The animation drawn for `doc` in the view, unless `doc` or its folds changed since the
@@ -959,6 +981,25 @@ mod tests {
         scroll_to_line(&view, &mut doc, 100);
         assert_eq!(view.update_smooth_scroll(&doc, now), None);
         assert_eq!(top_line(&view, &doc), 100);
+    }
+
+    /// A scroll right after an edit glides from what was on screen when the view is told so.
+    #[test]
+    fn view_glides_across_an_edit_it_follows() {
+        let now = Instant::now();
+        let (mut view, mut doc) = setup(500, smooth_scroll(true, false));
+        scroll_to_line(&view, &mut doc, 100);
+        view.update_smooth_scroll(&doc, now);
+        let insert = Transaction::insert(doc.text(), &Selection::point(0), "x\n".into());
+        doc.apply(&insert, view.id);
+        view.scroll_smoothly_across(&doc, insert.changes());
+        // The edit moved the text the view shows down a line, which the view followed.
+        assert_eq!(top_line(&view, &doc), 101);
+        scroll_to_line(&view, &mut doc, 300);
+        let tops = frames(&mut view, &doc, now, top_line);
+        assert!(tops.len() > 2, "{tops:?}");
+        assert!(tops[0] > 101 && tops[0] < 300, "{tops:?}");
+        assert_eq!(tops.last(), Some(&300));
     }
 
     #[test]

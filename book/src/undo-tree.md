@@ -22,11 +22,12 @@ history of the focused buffer, `Space U` keeps it shown, following the focused b
 ```
 
 Each row is a revision: its number, how long ago it was made, `S` for the revision written last
-and `s` for those written before, and the first line it inserted, or deleted (after a `-`) when it
-inserted nothing. The newest revision is on top; a branch joins the revision it started from
+and `s` for those written before, and the first line it inserted (green), or deleted (red, after a
+`-`) when it inserted nothing. The newest revision is on top; a branch joins the revision it started from
 (`├─┘`). `●` marks the revision the buffer is at, or was at when the tree got focus.
 
 While the tree has focus, moving through it takes the buffer to the revision under the cursor,
+the view gliding to the change with [smooth scrolling](./editor.md#editorsmooth-scroll-section) on,
 and the [diff gutter](./editor.md#editorguttersdiff-section) shows the changes against the
 revision you started from. `Enter` keeps the revision reached, `Escape` goes back to the start;
 any other key of the editor keeps the revision and runs in the editor. Afterwards, `U` follows the
@@ -50,7 +51,7 @@ branch you went into.
 | `/`                  | Search the text revisions inserted or deleted, with a regex |
 | `n`, `N`             | Go to the next, previous match |
 | `d`                  | Toggle the diff against the start |
-| `J`, `K`             | Scroll the diff down, up |
+| `J`, `K`             | Scroll the diff half a page down, up |
 | `+`, `-`             | Widen, narrow the undo tree |
 | `=`                  | Fit the width to the widest row |
 | `?`                  | Show these keys |
@@ -76,7 +77,15 @@ like `─ 1 → 2 ──`. `d` switches to the diff from the revision browsing s
 under the cursor, and back. `"difftastic"` runs [`difft`](https://difftastic.wilfred.me.uk/), which
 diffs the syntax of the file's language, named by the file's path; `"builtin"` shows a unified
 diff of the lines. The diff is worked out in the background a quarter of a second after the cursor
-stops, so moving through the tree stays fast; long lines wrap.
+stops, so moving through the tree stays fast.
+
+The diff part takes the keys like a split below the tree: whatever moves to the split below in the
+editor, like `Ctrl-w j` or `Space w j`, moves there, and to the split above back to the tree. There
+the editor's motions scroll the diff, whose lines are cut at the edge rather than wrapped: `j` and
+`k` a line, `h` and `l` half the width, `Ctrl-d`, `Ctrl-u`, `Ctrl-f` and `Ctrl-b` by pages, `gg`
+and `ge` to the top and the bottom, `gh` and `gl` to the leftmost and rightmost columns, with
+counts and as remapped. `d`, `+`, `-`, `=`, `Enter` and `Escape` work as in the tree, and `?`
+shows the keys. `J` and `K` scroll the diff from the tree.
 
 ## Undo files
 

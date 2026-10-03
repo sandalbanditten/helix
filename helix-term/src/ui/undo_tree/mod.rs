@@ -31,7 +31,7 @@ use helix_view::{
 use tui::buffer::Buffer as Surface;
 
 use self::{
-    diff::{Compare, DiffPane, Output, Request},
+    diff::{Compare, DiffPane, Motion, Output, Request},
     keys::{Action, Lookup},
     render::{Columns, Scene, Styles},
     rows::Rows,
@@ -102,6 +102,8 @@ pub struct UndoTree {
     revealed: Option<(DocumentId, usize)>,
     search: Search,
     diff: DiffPane,
+    /// Whether the diff part of the panel has the keys, rather than the tree part.
+    diff_focused: bool,
 }
 
 impl UndoTree {
@@ -157,6 +159,7 @@ impl UndoTree {
         self.pending.clear();
         self.search.prompt = None;
         self.diff.compare = Compare::Parent;
+        self.diff_focused = false;
         if let Some(doc) = editor.document_mut(browse.doc) {
             doc.set_diff_override(None);
         }
@@ -269,13 +272,15 @@ impl UndoTree {
             columns: &Columns::new(rows, now),
             marked,
             cursor: self.is_focused().then_some(cursor_row),
+            marked_cursor: !self.diff_focused,
             start,
             now,
             matches: &self.search.matches,
         }
         .render(area, surface);
-        if let Some(diff_area) = diff_area {
-            self.render_diff(diff_area, current, surface, cx.editor);
+        match diff_area {
+            Some(diff_area) => self.render_diff(diff_area, current, surface, cx.editor),
+            None => self.diff_focused = false,
         }
     }
 
@@ -340,9 +345,41 @@ impl UndoTree {
             }
         }
         let styles = Styles::new(&editor.theme);
+        let mut header = styles.base.patch(styles.guide);
+        if self.diff_focused {
+            header = header.patch(styles.selected);
+        }
         self.diff
-            .render(content, surface, styles.base, styles.guide);
+            .render(content, surface, styles.base, header, editor);
         dock::render_rail(surface, area, Side::Right, 0..0, styles.track, styles.thumb);
+    }
+
+    /// Runs the editor's command `name`, `count` times, if the panel has the keys and the command
+    /// is one of the panel's: moving between the views moves between the tree and the diff
+    /// part of the panel, and in the diff part the editor's motions move through the diff.
+    /// Returns whether it ran.
+    pub fn run_editor_command(&mut self, name: &str, count: usize, editor: &Editor) -> bool {
+        if !self.is_focused() {
+            return false;
+        }
+        match name {
+            "jump_view_down" => {
+                self.diff_focused = editor.config().undo.diff != UndoDiff::None;
+                true
+            }
+            "jump_view_up" => {
+                self.diff_focused = false;
+                true
+            }
+            _ if self.diff_focused => match Motion::of_command(name) {
+                Some(motion) => {
+                    self.diff.go(motion, count);
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        }
     }
 
     /// Takes the diff that the request of `generation` came out as.
@@ -380,7 +417,13 @@ impl UndoTree {
         }
         let mut sequence = std::mem::take(&mut self.pending);
         sequence.push(key);
-        match keys::lookup(&sequence) {
+        // The diff part has a few keys of its own; the editor's motions move through it.
+        let lookup = if self.diff_focused {
+            keys::diff_lookup(&sequence)
+        } else {
+            keys::lookup(&sequence)
+        };
+        match lookup {
             Lookup::Action(action) => self.run(action, cx.editor),
             Lookup::Prefix => {
                 cx.editor.autoinfo = Some(keys::info(&sequence));
@@ -468,15 +511,12 @@ impl UndoTree {
                 };
                 None
             }
-            Action::DiffDown | Action::DiffUp => {
-                let rows = editor.config().undo.diff_height.max(2) as isize / 2;
-                let rows = if action == Action::DiffDown {
-                    rows
-                } else {
-                    -rows
-                };
-                let width = self.width.saturating_sub(1) as usize;
-                self.diff.scroll_by(rows, width);
+            Action::DiffDown => {
+                self.diff.go(Motion::HalfPageDown, 1);
+                None
+            }
+            Action::DiffUp => {
+                self.diff.go(Motion::HalfPageUp, 1);
                 None
             }
             Action::NextMatch | Action::PreviousMatch => {
@@ -498,7 +538,11 @@ impl UndoTree {
                 None
             }
             Action::Help => {
-                editor.autoinfo = Some(keys::info(&[]));
+                editor.autoinfo = Some(if self.diff_focused {
+                    keys::diff_info()
+                } else {
+                    keys::info(&[])
+                });
                 None
             }
             Action::Keep => {
@@ -532,7 +576,13 @@ impl UndoTree {
             .documents
             .get_mut(&doc_id)
             .expect("the target exists");
+        doc.append_changes_to_history(view);
+        let from = doc.get_current_revision();
         doc.jump_to_revision(view, revision);
+        // The view glides to where the revision changed the text rather than jumping there.
+        if let Some(changes) = doc.history.get_mut().changes_since(from) {
+            view.scroll_smoothly_across(doc, changes.changes());
+        }
         view.ensure_cursor_in_view(doc, scrolloff);
     }
 
