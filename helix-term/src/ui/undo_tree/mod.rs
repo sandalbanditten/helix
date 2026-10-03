@@ -31,7 +31,7 @@ use helix_view::{
 use tui::buffer::Buffer as Surface;
 
 use self::{
-    diff::{Compare, DiffPane, Motion, Output, Request},
+    diff::{Compare, DiffPane, Motion, Request, Texts},
     keys::{Action, Lookup},
     render::{Columns, Scene, Styles},
     rows::Rows,
@@ -39,6 +39,7 @@ use self::{
 use crate::{
     compositor::{Component, Context, Event, EventResult},
     ui::{
+        diff_view::inline::Line,
         dock::{self, Side},
         search, Prompt, PromptEvent,
     },
@@ -322,7 +323,6 @@ impl UndoTree {
                 doc: doc_id,
                 revision: current,
                 against,
-                width: content.width,
                 tool: editor.config().undo.diff,
             };
             if !self.diff.is_asked(&request) {
@@ -341,7 +341,14 @@ impl UndoTree {
                     || "buffer".to_owned(),
                     |path| get_relative_path(path).to_string_lossy().into_owned(),
                 );
-                self.diff.ask(request, Some((old, new)), path, editor);
+                let texts = Texts {
+                    old,
+                    new,
+                    path,
+                    language: doc.language_name().map(ToOwned::to_owned),
+                    tab_width: doc.tab_width(),
+                };
+                self.diff.ask(request, Some(texts), editor);
             }
         }
         let styles = Styles::new(&editor.theme);
@@ -391,13 +398,8 @@ impl UndoTree {
     }
 
     /// Takes the diff that the request of `generation` came out as.
-    pub(crate) fn diff_ready(
-        &mut self,
-        generation: u64,
-        output: Output,
-        theme: &helix_view::Theme,
-    ) {
-        self.diff.ready(generation, output, theme);
+    pub(crate) fn diff_ready(&mut self, generation: u64, lines: Vec<Line>) {
+        self.diff.ready(generation, lines);
     }
 
     /// Draws the line of a search over the command line of `area`, the screen.

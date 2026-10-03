@@ -5,8 +5,9 @@
 //! [`DiffView`] is owned by the [`EditorView`]. It works out how the texts line up in the
 //! background, opens the panes once that is known, and keeps them in step while they are shown.
 
+pub(crate) mod inline;
 mod panes;
-mod run;
+pub(crate) mod run;
 mod set;
 pub(crate) mod styles;
 mod tree;

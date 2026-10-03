@@ -256,8 +256,8 @@ async fn the_diff_shows_what_the_revision_changed() -> anyhow::Result<()> {
                 Some(&|app| {
                     let screen = screen(app).join("\n");
                     assert!(screen.contains("─ 1 → 2 ─"), "{screen}");
-                    assert!(screen.contains("-x1"), "{screen}");
-                    assert!(screen.contains("+x12"), "{screen}");
+                    assert!(screen.contains("- x1"), "{screen}");
+                    assert!(screen.contains("+ x12"), "{screen}");
                 }),
             ),
             // Against the revision browsing started from.
@@ -267,7 +267,7 @@ async fn the_diff_shows_what_the_revision_changed() -> anyhow::Result<()> {
                 Some(&|app| {
                     let screen = screen(app).join("\n");
                     assert!(screen.contains("─ 3 → 2 ─"), "{screen}");
-                    assert!(screen.contains("-x13"), "{screen}");
+                    assert!(screen.contains("- x13"), "{screen}");
                 }),
             ),
         ],
@@ -291,9 +291,8 @@ async fn difftastic_shows_the_diff_when_installed() -> anyhow::Result<()> {
                 Some(NOTHING),
                 Some(&|app| {
                     let screen = screen(app).join("\n");
-                    // difft's own header: the name it was given and the language it took.
-                    assert!(screen.contains("buffer --- Text"), "{screen}");
-                    assert!(screen.contains("x12"), "{screen}");
+                    assert!(screen.contains("- x1"), "{screen}");
+                    assert!(screen.contains("+ x12"), "{screen}");
                 }),
             ),
         ],
@@ -333,24 +332,24 @@ async fn the_diff_part_takes_focus_and_scrolls() -> anyhow::Result<()> {
             (Some("<space>uj"), Some(&rest)),
             (
                 Some(NOTHING),
-                Some(&|app| assert_eq!(diff_rows(app), ["@@ -1,4 +1,4 @@", "-x1", "+x12"])),
+                Some(&|app| assert_eq!(diff_rows(app), ["- x1", "+ x12", "  l1"])),
             ),
             // The editor's motions scroll the diff once the view below has the keys.
             (
                 Some("<C-w>jj"),
                 Some(&|app| {
-                    assert_eq!(diff_rows(app), ["-x1", "+x12", " l1"]);
+                    assert_eq!(diff_rows(app), ["+ x12", "  l1", "  l2"]);
                     // The buffer stays at the revision.
                     assert_eq!(text(app), "x12\nl1\nl2\nl3\nl4\n");
                 }),
             ),
             (
                 Some("ge"),
-                Some(&|app| assert_eq!(diff_rows(app), [" l1", " l2", " l3"])),
+                Some(&|app| assert_eq!(diff_rows(app), ["  l1", "  l2", "  l3"])),
             ),
             (
                 Some("gg"),
-                Some(&|app| assert_eq!(diff_rows(app), ["@@ -1,4 +1,4 @@", "-x1", "+x12"])),
+                Some(&|app| assert_eq!(diff_rows(app), ["- x1", "+ x12", "  l1"])),
             ),
             // Back to the tree part, where `j` goes to an older revision again.
             (
