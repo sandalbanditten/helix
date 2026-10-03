@@ -305,6 +305,70 @@ mod tests {
         );
     }
 
+    /// Times laying out and drawing the undo tree of large histories with branches. Run it with
+    /// `cargo test --release -p helix-term --lib measure_undo_tree -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_undo_tree() {
+        use std::time::Instant;
+
+        for revisions in [1000, 10_000] {
+            let mut history = History::default();
+            let mut state = State {
+                doc: Rope::from("fn main() {}\n".repeat(100)),
+                selection: Selection::point(0),
+            };
+            for revision in 0..revisions {
+                if revision % 7 == 6 {
+                    if let Some(undo) = history.undo().cloned() {
+                        undo.apply(&mut state.doc);
+                    }
+                }
+                let at = revision * 31 % state.doc.len_chars();
+                let transaction =
+                    Transaction::change(&state.doc, [(at, at, Some("word ".into()))].into_iter());
+                history.commit_revision(&transaction, &state);
+                transaction.apply(&mut state.doc);
+            }
+            let start = Instant::now();
+            let graph = super::super::graph::Graph::new(
+                &(0..history.len())
+                    .map(|r| history.parent(r))
+                    .collect::<Vec<_>>(),
+            );
+            eprintln!(
+                "{revisions} revisions: graph {:?}, {} lanes wide",
+                start.elapsed(),
+                graph.width / 2 + 1
+            );
+            let start = Instant::now();
+            let rows = Rows::new(DocumentId::default(), &history);
+            eprintln!("{revisions} revisions: rows {:?}", start.elapsed());
+            let theme = Theme::default();
+            let area = Rect::new(0, 0, 40, 50);
+            let mut surface = Surface::empty(area);
+            let start = Instant::now();
+            let now = SystemTime::now();
+            let styles = Styles::new(&theme);
+            let columns = Columns::new(&rows, now);
+            Scene {
+                rows: &rows,
+                styles: &styles,
+                columns: &columns,
+                marked: revisions,
+                cursor: Some(rows.len() / 2),
+                start: rows.len() / 2,
+                now,
+                matches: &[],
+            }
+            .render(area, &mut surface);
+            eprintln!(
+                "{revisions} revisions: frame of 50 rows {:?}",
+                start.elapsed()
+            );
+        }
+    }
+
     #[test]
     fn rows_are_cut_at_the_edge() {
         assert_eq!(drawn(None, 12)[5], "│ │ ○   2 2m");

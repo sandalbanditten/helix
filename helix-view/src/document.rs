@@ -2901,6 +2901,34 @@ mod test {
         doc.append_changes_to_history(view);
     }
 
+    /// Times going through the history of a large buffer the way the undo tree does. Run it
+    /// with `cargo test --release -p helix-view --lib measure_browsing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_browsing() {
+        let line = "    let value = compute(first, second) + offset; // a comment\n";
+        let (mut doc, mut view) = doc_in_view(&line.repeat(250_000 / line.len()));
+        for revision in 0..1000 {
+            let at = revision * 997 % doc.text().len_chars();
+            let transaction =
+                Transaction::change(doc.text(), [(at, at, Some("word ".into()))].into_iter());
+            doc.apply(&transaction, view.id);
+            doc.append_changes_to_history(&mut view);
+        }
+        let start = std::time::Instant::now();
+        for revision in (900..1000).rev() {
+            doc.jump_to_revision(&mut view, revision);
+        }
+        eprintln!("250 KB, a step back: {:?}", start.elapsed() / 100);
+        let start = std::time::Instant::now();
+        doc.jump_to_revision(&mut view, 0);
+        doc.jump_to_revision(&mut view, 999);
+        eprintln!(
+            "250 KB, 1000 revisions back and forth: {:?}",
+            start.elapsed() / 2
+        );
+    }
+
     #[test]
     fn a_reload_counts_as_saved_and_undo_takes_it_back() {
         let (mut doc, mut view) = doc_in_view("one\ntwo\n");

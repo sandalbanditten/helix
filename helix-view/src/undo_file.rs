@@ -522,6 +522,120 @@ mod tests {
         moved(&dir.join("missing"), Path::new("/p"), Path::new("/q")).unwrap();
     }
 
+    /// A text of about `bytes` bytes, like source code.
+    fn source(bytes: usize) -> Rope {
+        let line = "    let value = compute(first, second) + offset; // a comment\n";
+        Rope::from(line.repeat(bytes / line.len()))
+    }
+
+    /// Commits `revisions` revisions to `history` of `text`, each typing a word somewhere, every
+    /// seventh after undoing the one before: a history with branches.
+    fn typed(text: &mut Rope, history: &mut History, revisions: usize) {
+        let mut seed = 12345_u64;
+        for revision in 0..revisions {
+            if revision % 7 == 6 {
+                if let Some(undo) = history.undo().cloned() {
+                    undo.apply(text);
+                }
+            }
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let at = (seed >> 33) as usize % text.len_chars();
+            let state = State {
+                doc: text.clone(),
+                selection: Selection::point(at),
+            };
+            let transaction =
+                Transaction::change(text, [(at, at, Some("word ".into()))].into_iter());
+            history.commit_revision(&transaction, &state);
+            transaction.apply(text);
+        }
+    }
+
+    fn timed<T>(what: &str, f: impl FnOnce() -> T) -> T {
+        let start = std::time::Instant::now();
+        let result = f();
+        eprintln!("{what}: {:?}", start.elapsed());
+        result
+    }
+
+    /// Times reading and writing undo files of large histories, and moving a directory among many
+    /// undo files. Run it with `cargo test --release -p helix-view --lib measure_undo_files --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_undo_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Path::new("/project/src/main.rs");
+        for size in [250_000, 10_000_000] {
+            let text = source(size);
+            timed(&format!("hash of {} KB", size / 1000), || hash(&text));
+        }
+        for revisions in [1000, 10_000] {
+            let (mut text, mut history) = (source(250_000), History::default());
+            typed(&mut text, &mut history, revisions);
+            let mut state = None;
+            let pending = timed(&format!("{revisions} revisions: prepare whole"), || {
+                prepare(&mut state, &history, dir.path(), path).unwrap()
+            });
+            timed(&format!("{revisions} revisions: write whole"), || {
+                pending.write(&text).unwrap()
+            });
+            let file = file_of(dir.path(), path).unwrap();
+            eprintln!(
+                "{revisions} revisions: {} KB",
+                fs::metadata(&file).unwrap().len() / 1000
+            );
+            timed(&format!("{revisions} revisions: read"), || {
+                read(dir.path(), path, &text, 0).unwrap()
+            });
+            timed(
+                &format!("{revisions} revisions: read, pruned to 1000"),
+                || read(dir.path(), path, &text, 1000).unwrap(),
+            );
+            typed(&mut text, &mut history, 10);
+            let pending = timed(&format!("{revisions} revisions: prepare 10 more"), || {
+                prepare(&mut state, &history, dir.path(), path).unwrap()
+            });
+            assert!(pending.append);
+            timed(&format!("{revisions} revisions: append 10"), || {
+                pending.write(&text).unwrap()
+            });
+        }
+
+        let many = tempfile::tempdir().unwrap();
+        let mut history = History::default();
+        let mut small = Rope::from("a\n");
+        edited(&mut small, &mut history, 1);
+        let paths: Vec<PathBuf> = (0..10_000)
+            .map(|i| PathBuf::from(format!("/project/dir{}/file{i}.rs", i / 100)))
+            .collect();
+        timed("10000 undo files: write", || {
+            for path in &paths {
+                prepare(&mut None, &history, many.path(), path)
+                    .unwrap()
+                    .write(&small)
+                    .unwrap();
+            }
+        });
+        timed("10000 undo files: move a directory of 100", || {
+            moved(
+                many.path(),
+                Path::new("/project/dir42"),
+                Path::new("/project/moved"),
+            )
+            .unwrap()
+        });
+        assert!(read(
+            many.path(),
+            Path::new("/project/moved/file4200.rs"),
+            &small,
+            0
+        )
+        .is_some());
+    }
+
     #[test]
     fn pruned_histories_are_written_whole() {
         let dir = tempfile::tempdir().unwrap();
