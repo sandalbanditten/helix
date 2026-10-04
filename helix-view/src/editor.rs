@@ -279,11 +279,10 @@ impl Default for FileExplorerConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DiredConfig {
-    /// Whether listings take eza's colors, with the rules of `LS_COLORS`, `EZA_COLORS` and
-    /// `EXA_COLORS`, rather than the theme's. The theme is used when none of them is set.
+    /// Whether listings take the colors of `LS_COLORS` and `EZA_COLORS` rather than the theme's.
     /// Defaults to `true`.
     pub colors: bool,
-    /// Whether names show the icons `eza` shows, which need a Nerd Font. Defaults to `true`.
+    /// Whether names show file icons, which need a Nerd Font. Defaults to `true`.
     pub icons: bool,
 }
 
@@ -332,8 +331,7 @@ pub struct DiffConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DiffTool {
-    /// `difft`'s structural diff, falling back to the builtin diff where it isn't installed or
-    /// fails.
+    /// `difft`'s structural diff, falling back to the builtin diff.
     #[default]
     Difftastic,
     /// A line diff of Helix's own.
@@ -344,21 +342,17 @@ pub enum DiffTool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct UndoConfig {
-    /// Whether written files keep their undo history in undo files, read when they are opened
-    /// again. Defaults to `false`.
+    /// Whether written files keep their undo history in undo files. Defaults to `false`.
     pub persist: bool,
     /// The directory of the undo files. Defaults to `undo` in Helix's state directory.
     pub dir: Option<PathBuf>,
-    /// The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps
-    /// all. Defaults to `1000`.
+    /// The most revisions an undo file keeps, `0` for all. Defaults to `1000`.
     pub max_revisions: usize,
-    /// What shows the diff of the revision under the cursor below the undo tree, if anything.
-    /// Defaults to `none`.
+    /// What shows the diff of the revision under the cursor below the undo tree. Defaults to `none`.
     pub diff: UndoDiff,
     /// The rows of the undo tree's diff. Defaults to `12`.
     pub diff_height: u16,
-    /// Whether the undo tree floats over the editor's right edge rather than making room beside
-    /// it. Defaults to `false`.
+    /// Whether the undo tree floats over the editor. Defaults to `false`.
     pub float: bool,
 }
 
@@ -411,8 +405,7 @@ pub enum CompilationOpen {
     Beside,
     /// In the output's split, like `gf` anywhere.
     Replace,
-    /// Back in the layout the output covers from the split it is shown in, which has no split
-    /// of its own: in a split showing the file, else in that split.
+    /// In the split the output covers.
     #[default]
     Return,
 }
@@ -436,9 +429,8 @@ pub struct FileTreeConfig {
     pub flatten_dirs: bool,
     /// How the entries of a directory are ordered. Defaults to `directories-first`.
     pub sort: FileTreeSort,
-    /// Where entry colors come from: `false` uses the theme, `true` reads `LS_COLORS` and then
-    /// `EZA_COLORS` from the environment (falling back to the colors of GNU `ls` when neither is
-    /// set), and a string is an `LS_COLORS` specification. Defaults to `true`.
+    /// Where entry colors come from: the theme, the environment's `LS_COLORS` and `EZA_COLORS`, or an
+    /// `LS_COLORS` string. Defaults to `true`, the environment.
     pub ls_colors: LsColors,
 }
 
@@ -479,15 +471,14 @@ pub enum FileTreeSide {
     Right,
 }
 
-/// How the entries of a directory are ordered in the file tree. Names compare naturally, so
-/// `file2` comes before `file10`.
+/// How the entries of a directory are ordered in the file tree.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FileTreeSort {
     /// Directories before files.
     #[default]
     DirectoriesFirst,
-    /// Directories among files, like `eza`.
+    /// Directories among files.
     Alphabetical,
 }
 
@@ -706,8 +697,7 @@ pub struct Config {
     /// This prevents data loss if the editor is interrupted while writing the file, but may
     /// confuse some file watching/hot reloading programs. Defaults to `true`.
     pub atomic_save: bool,
-    /// Whether to reload buffers whose files change on disk, asking first when they have unsaved
-    /// changes. Defaults to `true`.
+    /// Whether to reload buffers whose files change on disk. Defaults to `true`.
     pub auto_reload: bool,
     /// Whether to automatically remove all trailing line-endings after the final one on write.
     /// Defaults to `false`.
@@ -736,8 +726,7 @@ pub struct Config {
     /// Whether to read settings from [EditorConfig](https://editorconfig.org) files. Defaults to
     /// `true`.
     pub editor_config: bool,
-    /// Spell checking: which dictionaries to use and how to filter tokens. Off by default (no
-    /// dictionaries); languages can override this in `languages.toml`.
+    /// Spell checking. Off by default.
     pub spelling: SpellingConfig,
     /// Whether to render rainbow colors for matching brackets. Defaults to `false`.
     pub rainbow_brackets: bool,
@@ -1052,8 +1041,7 @@ pub struct BreadcrumbsConfig {
     pub separator: String,
     /// Whether the separator is also shown before the first breadcrumb.
     pub leading_separator: bool,
-    /// Whether the outermost breadcrumbs are left out when the trail does not fit into the
-    /// statusline.
+    /// Whether the outermost breadcrumbs are left out when they do not fit.
     pub truncate: bool,
 }
 
@@ -1438,8 +1426,7 @@ impl SmoothScrollConfig {
     }
 }
 
-/// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math, from the
-/// language's `conceals.scm` query.
+/// Text shown as the symbol it stands for, like `α` for `alpha`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ConcealConfig {
@@ -1462,8 +1449,7 @@ impl Default for ConcealConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct FoldingConfig {
-    /// Whether everything is folded when a document is first shown in a view. Defaults to
-    /// `false`.
+    /// Whether everything is folded when a document is first shown. Defaults to `false`.
     pub start_folded: bool,
     /// The text that folded text is drawn as. Defaults to ` … `.
     #[serde(deserialize_with = "deserialize_fold_placeholder")]
@@ -1752,8 +1738,7 @@ pub struct Editor {
     pub tree: Tree,
     pub next_document_id: DocumentId,
     pub documents: BTreeMap<DocumentId, Document>,
-    /// The listings of the dired buffers closed last, newest first, whose lines can still be
-    /// pasted into other dired buffers.
+    /// The listings of the dired buffers closed last, whose lines can still be pasted.
     pub closed_listings: Vec<Box<crate::dired::Listing>>,
 
     // We Flatten<> to resolve the inner DocumentSavedEventFuture. For that we need a stream of streams, hence the Once<>.
@@ -2029,8 +2014,7 @@ impl Editor {
         }
     }
 
-    /// Redraws no later than `deadline`, sooner than the usual redraw debounce allows. Used to
-    /// draw the frames of animations.
+    /// Redraws no later than `deadline`, for the frames of animations.
     pub(crate) fn schedule_redraw(&mut self, deadline: Instant) {
         if deadline < self.redraw_timer.deadline() {
             self.redraw_timer.as_mut().reset(deadline);
@@ -2221,8 +2205,7 @@ impl Editor {
         })
     }
 
-    /// Copies `from` to the new path `to` like `cp -rp`, telling the language servers about
-    /// the files it creates.
+    /// Copies `from` to the new path `to`, telling the language servers about the files it creates.
     pub fn copy_path(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         let is_dir = fs::symlink_metadata(from)?.is_dir();
         let undo_dir = self.config().undo.persisted();
@@ -2256,8 +2239,8 @@ impl Editor {
         Ok(())
     }
 
-    /// Tells the language servers that `path` is about to be created, applying the edits they
-    /// ask for. Paired with [`Self::did_create_path`] once it exists.
+    /// Tells the language servers that `path` is about to be created. Paired with
+    /// [`Self::did_create_path`].
     pub fn will_create_path(&mut self, path: &Path, is_dir: bool) {
         let path = canonicalize(path);
         let language_servers: Vec<_> = self
@@ -2634,8 +2617,8 @@ impl Editor {
         id
     }
 
-    /// Starts the history of the document `doc_id` afresh at its current text, which then
-    /// counts as saved, so undo cannot go back to before it. Commit pending changes first.
+    /// Starts the history of the document `doc_id` afresh at its current text, which counts as
+    /// saved.
     pub fn reset_history(&mut self, doc_id: DocumentId) {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
             return;
@@ -2788,8 +2771,7 @@ impl Editor {
         }
     }
 
-    /// Whether closing `view` leaves no view: it is the last one, or it and its partner pane of
-    /// the diff view are.
+    /// Whether closing `view` leaves no view.
     pub fn closes_last_view(&self, view: ViewId) -> bool {
         let panes = self.diff_panes(view).map(|(docs, _)| docs);
         self.tree.views().all(|(other, _)| {
@@ -2943,8 +2925,7 @@ impl Editor {
         Ok(())
     }
 
-    /// Reloads the document with its file's text `disk`, read apart: see
-    /// [`Document::apply_reload`]. Its views follow, and language servers learn of the change.
+    /// Reloads the document with its file's text `disk`; see [`Document::apply_reload`].
     pub fn apply_reload(&mut self, doc_id: DocumentId, disk: DiskText, changes: &Transaction) {
         let scrolloff = self.config().scrolloff;
         let view_id = self.get_synced_view_id(doc_id);

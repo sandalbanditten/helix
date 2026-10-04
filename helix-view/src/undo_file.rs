@@ -1,6 +1,5 @@
 //! The undo files of documents: where they are, reading one when its file is opened, and writing
-//! it after the file is written. The format is helix-core's
-//! [`undo_file`](helix_core::history::undo_file).
+//! it after the file is written, in the format of [`helix_core::history::undo_file`].
 
 use std::{
     ffi::OsString,

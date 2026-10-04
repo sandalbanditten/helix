@@ -196,8 +196,7 @@ pub struct FilePickerData {
 }
 type FilePicker = Picker<PathBuf, FilePickerData>;
 
-/// Walks the files below `root` the way the file picker lists them: honouring the ignore
-/// settings in `config` and skipping VCS directories and archives.
+/// Walks the files below `root` the way the file picker lists them.
 pub fn workspace_files(root: &Path, config: &FilePickerConfig) -> impl Iterator<Item = PathBuf> {
     use ignore::WalkBuilder;
 

@@ -91,8 +91,8 @@ impl EditorView {
         self.file_tree.is_focused() || self.undo_tree.is_focused() || self.diff_view.tree_focused()
     }
 
-    /// Whether the question about buffers changed on disk is up: only in normal mode between
-    /// key sequences, so that keys typed for something else never answer it.
+    /// Whether the question about buffers changed on disk is up, in normal mode between key
+    /// sequences.
     fn asks_about_reloads(&mut self, editor: &Editor) -> bool {
         editor.mode() == Mode::Normal
             && self.keymaps.pending().is_empty()

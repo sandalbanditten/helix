@@ -43,8 +43,7 @@ impl Registers {
         }
     }
 
-    /// How many times values were written with [`Registers::write`], and the register written
-    /// last, to tell whether and where a command wrote any.
+    /// How many times values were written with [`Registers::write`], and the register written last.
     pub fn written(&self) -> (u64, Option<char>) {
         self.written
     }

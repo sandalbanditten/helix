@@ -151,8 +151,8 @@ impl<'a> DecorationManager<'a> {
 pub struct Cursor<'a> {
     pub cache: &'a CursorCache,
     pub primary_cursor: usize,
-    /// Whether the cursor goes in front of virtual text at its position, like an inlay hint,
-    /// rather than on the grapheme after it. Typing in insert mode lands in front of it.
+    /// Whether the cursor goes in front of virtual text at its position, like an inlay hint, rather
+    /// than on the grapheme after it.
     pub before_virtual_text: bool,
 }
 impl Decoration for Cursor<'_> {

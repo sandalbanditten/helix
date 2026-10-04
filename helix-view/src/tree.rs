@@ -371,8 +371,7 @@ impl Tree {
         self.is_zoomed().then_some(self.focus)
     }
 
-    /// The zoomed views while several cover the area, side by side. The focus moves among them
-    /// only, as within a layout of their own.
+    /// The zoomed views while several cover the area, side by side.
     fn zoomed_together(&self) -> Option<&[ViewId]> {
         (self.is_zoomed() && self.zoomed.len() > 1).then_some(&self.zoomed)
     }
@@ -487,8 +486,7 @@ impl Tree {
         self.zoomed = zoomed;
     }
 
-    /// `count` areas side by side in `area`, the way a vertical layout splits it: a column apart,
-    /// the last one taking what rounding leaves.
+    /// `count` areas side by side in `area`, the way a vertical layout splits it.
     fn side_by_side(area: Rect, count: usize) -> impl Iterator<Item = Rect> {
         let count = count.max(1) as u16;
         let width = area.width.saturating_sub(count.saturating_sub(2)) / count;

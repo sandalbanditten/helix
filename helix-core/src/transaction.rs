@@ -106,16 +106,8 @@ impl ChangeSet {
         &self.changes
     }
 
-    /// Returns the char ranges of the old and new text around each cluster of changes.
-    ///
-    /// Each window is padded by `padding` chars on both sides (clamped to the text bounds), so a
-    /// change in the middle of a token still yields a window covering the whole token plus its
-    /// neighbours. Clusters separated by a retained run no longer than `padding` are merged into
-    /// a single window, so the number of windows is bounded by the number of well-separated edits
-    /// rather than the document size.
-    ///
-    /// The old and new ranges usually differ in size: deleting "foo" gives a longer window into
-    /// the old text, and inserting it a longer window into the new text.
+    /// Returns the char ranges of the old and new text around each cluster of changes, padded by
+    /// `padding` chars on both sides. Clusters closer than `padding` are merged.
     pub fn changed_ranges(
         &self,
         padding: usize,

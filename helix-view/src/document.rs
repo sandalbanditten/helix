@@ -137,8 +137,7 @@ pub type DocumentSavedEventFuture = BoxFuture<'static, DocumentSavedEventResult>
 #[derive(Debug, Clone)]
 pub struct DiskText {
     pub text: Rope,
-    /// When the file was modified, as of before its text was read: a write in between still
-    /// shows as a change later.
+    /// When the file was modified, as of before its text was read.
     pub mtime: SystemTime,
 }
 
@@ -207,12 +206,11 @@ pub struct Document {
     /// Current indent style.
     pub indent_style: IndentStyle,
     editor_config: EditorConfig,
-    /// The languages (dictionaries) to spell check this buffer against, or empty to disable spell
-    /// checking. A word is flagged only when every dictionary rejects it. Resolved by
+    /// The languages to spell check this buffer against, resolved by
     /// [`Document::detect_spelling`].
     spelling_languages: Vec<SpellingLanguage>,
-    /// A manual `:set-spelling-language` choice, which takes precedence over `.editorconfig` and
-    /// the configuration. An empty `Vec` forces spell checking off.
+    /// A `:set-spelling-language` choice, which takes precedence over `.editorconfig` and the
+    /// configuration.
     spelling_language_override: Option<Vec<SpellingLanguage>>,
     /// Whether misspellings are shown like other diagnostics rather than only underlined.
     spelling_messages: bool,
@@ -240,8 +238,7 @@ pub struct Document {
     // Last time we wrote to the file. This will carry the time the file was last opened if there
     // were no saves.
     last_saved_time: SystemTime,
-    /// The text of the file as last read or written, which tells a change on disk from a rewrite
-    /// of the same text.
+    /// The text of the file as last read or written.
     disk_text: Rope,
 
     last_saved_revision: usize,
@@ -269,8 +266,7 @@ pub struct Document {
     /// The run this document shows, if it is the compilation buffer.
     pub compilation: Option<Box<crate::compilation::Compilation>>,
 
-    /// The side of a diff this document shows, if it is a pane of the diff view. A pane is
-    /// read-only: only [`Document::replace_diff_text`] changes its text.
+    /// The side of a diff this document shows, if it is a pane of the diff view.
     pub diff_view: Option<Box<crate::diff_view::Pane>>,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
@@ -1330,8 +1326,7 @@ impl Document {
         }
     }
 
-    /// The spell checking configuration: `[editor.spelling]` with the language's `spelling` layered
-    /// over it.
+    /// The spell checking configuration of the document's language.
     pub fn spelling_config(&self) -> SpellingConfig {
         self.config.load().spelling.merged(
             self.language_config()
@@ -1339,10 +1334,7 @@ impl Document {
         )
     }
 
-    /// Resolves the spell checking settings of this document. The languages are, in precedence
-    /// order, a manual `:set-spelling-language` override, the `.editorconfig`
-    /// `spelling_language`, or the configured ones, of which the detected language when `detect`
-    /// is set. Re-run when any of these or the text change.
+    /// Resolves the spell checking settings of this document.
     pub fn detect_spelling(&mut self) {
         let config = self.spelling_config();
         self.spelling_messages = config.messages();
@@ -1363,15 +1355,12 @@ impl Document {
         };
     }
 
-    /// Whether `diagnostic` is shown like any diagnostic: with its message, in the gutter, the
-    /// statusline and pickers, and by `]d`. Misspellings are only underlined unless
-    /// `spelling.messages` is set.
+    /// Whether `diagnostic` is shown like any diagnostic, rather than only underlined.
     pub fn shows_diagnostic(&self, diagnostic: &Diagnostic) -> bool {
         self.spelling_messages || diagnostic.provider != DiagnosticProvider::Spelling
     }
 
-    /// Whether the message of `diagnostic` is shown inline and under the cursor. The loci of a
-    /// compilation buffer only underline, as their messages are its text already.
+    /// Whether the message of `diagnostic` is shown inline and under the cursor.
     pub fn shows_diagnostic_message(&self, diagnostic: &Diagnostic) -> bool {
         self.shows_diagnostic(diagnostic) && diagnostic.provider != DiagnosticProvider::Compilation
     }
@@ -1382,7 +1371,7 @@ impl Document {
     }
 
     /// Overrides the spelling languages of the configuration and `.editorconfig`, or stops
-    /// overriding them with `None`. Takes effect at the next [`Document::detect_spelling`].
+    /// overriding them with `None`.
     pub fn set_spelling_language_override(&mut self, languages: Option<Vec<SpellingLanguage>>) {
         self.spelling_language_override = languages;
     }
@@ -1423,9 +1412,7 @@ impl Document {
         };
     }
 
-    /// Turns the text into the file's, `disk`, by `changes`, made against the current text by
-    /// [`compare_ropes`](helix_core::diff::compare_ropes). The reload is a step of the history,
-    /// which undo takes back, and the text counts as saved.
+    /// Turns the text into the file's, `disk`, by `changes`, as a step of the history.
     pub fn apply_reload(&mut self, view: &mut View, disk: DiskText, changes: &Transaction) {
         // The file's permissions may have changed too.
         self.detect_readonly();
@@ -1441,8 +1428,7 @@ impl Document {
         self.detect_indent_and_line_ending();
     }
 
-    /// Takes `disk` as what the file holds while the text stays, so that a plain write
-    /// overwrites the file.
+    /// Takes `disk` as what the file holds while the text stays.
     pub fn ignore_disk_change(&mut self, disk: DiskText) {
         self.last_saved_time = disk.mtime;
         self.disk_text = disk.text;
@@ -1457,8 +1443,7 @@ impl Document {
         self.version_control_head = head;
     }
 
-    /// Takes the history of the document's file from its undo file, when undo files are kept and
-    /// the file has one that holds this text. Only for a document just opened.
+    /// Takes the history of a document just opened from its file's undo file, if there is one.
     pub fn restore_undo_file(&mut self) {
         debug_assert!(self.history.get_mut().at_root() && self.changes.is_empty());
         let config = self.config.load();
@@ -1477,8 +1462,7 @@ impl Document {
         }
     }
 
-    /// Prepares writing the undo file along with the document's text to `path`, when undo files
-    /// are kept: of a file, with every change in the history.
+    /// Prepares writing the undo file along with the document's text to `path`.
     fn prepare_undo_file(&mut self, path: &Path) -> Option<undo_file::PendingWrite> {
         let dir = self.config.load().undo.persisted()?;
         let special = self.dired.is_some() || self.compilation.is_some();
@@ -1546,8 +1530,7 @@ impl Document {
         });
     }
 
-    /// Sets the language along with `syntax`, the syntax tree of the text parsed already, as in
-    /// the background.
+    /// Sets the language along with `syntax`, the syntax tree of the text parsed already.
     pub fn set_parsed_language(
         &mut self,
         language_config: Option<Arc<syntax::config::LanguageConfiguration>>,
@@ -1597,8 +1580,7 @@ impl Document {
         &self.view_data(view_id).folds
     }
 
-    /// The conceals of the document's syntax tree, except those that the cursors of `reveal`'s
-    /// selection show as they are, or `None` if the document has no conceals.
+    /// The conceals of the document's syntax tree, except those `reveal` shows as they are.
     pub(crate) fn conceals<'a>(
         &'a self,
         reveal: Option<(&'a Selection, ConcealReveal)>,
@@ -1939,8 +1921,7 @@ impl Document {
         }
         success
     }
-    /// Replaces the text of a pane of the diff view, which can't be edited otherwise, with `text`
-    /// shown as `pane`. What is on screen moves along with the text that stays.
+    /// Replaces the text of a pane of the diff view with `text` shown as `pane`.
     pub fn replace_diff_text(
         &mut self,
         text: &Rope,
@@ -2064,8 +2045,8 @@ impl Document {
         self.travel(view, true, |history| history.jump(revision))
     }
 
-    /// Goes through the history with the transactions `go` hands out. Pending changes are
-    /// committed first if `commit`, else they keep the document where it is.
+    /// Goes through the history with the transactions `go` hands out, committing pending changes
+    /// first if `commit`.
     fn travel(
         &mut self,
         view: &mut View,
@@ -2131,8 +2112,7 @@ impl Document {
         self.id
     }
 
-    /// If there are unsaved modifications. A compilation buffer has none: it is output, closed and
-    /// quit without asking.
+    /// If there are unsaved modifications.
     pub fn is_modified(&self) -> bool {
         if self.compilation.is_some() {
             return false;
@@ -2157,8 +2137,8 @@ impl Document {
         self.last_saved_revision = current_revision;
     }
 
-    /// Starts the history afresh at the current text, which counts as saved. Commit pending
-    /// changes first; views go through [`Editor::reset_history`](crate::Editor::reset_history).
+    /// Starts the history afresh at the current text, which counts as saved; see
+    /// [`Editor::reset_history`](crate::Editor::reset_history).
     pub(crate) fn reset_history(&mut self) {
         debug_assert!(self.changes.is_empty());
         self.history.set(History::default());
@@ -2180,8 +2160,7 @@ impl Document {
         self.disk_text = text;
     }
 
-    /// When the file was last modified as far as the document knows: when it was opened, last
-    /// written or reloaded.
+    /// When the file was last modified as far as the document knows.
     pub fn last_saved_time(&self) -> SystemTime {
         self.last_saved_time
     }
@@ -2334,8 +2313,8 @@ impl Document {
         }
     }
 
-    /// Makes the diff gutter show the changes against `base` rather than against the version
-    /// control's text, or against that again with `None`.
+    /// Makes the diff gutter show the changes against `base`, or against the version control's
+    /// text with `None`.
     pub fn set_diff_override(&mut self, base: Option<Rope>) {
         match base {
             Some(base) => {
@@ -2627,20 +2606,15 @@ impl Document {
         self.extend_diagnostics(diagnostics);
     }
 
-    /// Replaces the diagnostics of every language server with `diagnostics`, keeping those of
-    /// internal providers such as the spell checker.
+    /// Replaces the diagnostics of every language server with `diagnostics`.
     pub fn replace_lsp_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
         self.diagnostics
             .retain(|d| d.provider.language_server_id().is_none());
         self.extend_diagnostics(diagnostics);
     }
 
-    /// Replaces `provider`'s diagnostics that overlap any of `regions` with `diagnostics`, leaving
-    /// every other diagnostic untouched.
-    ///
-    /// This is the incremental counterpart to [`Document::replace_diagnostics`] for a provider that
-    /// re-examined only parts of the document, such as the areas around an edit. `regions` are
-    /// char ranges in the current text, and `diagnostics` are expected to fall within them.
+    /// Replaces `provider`'s diagnostics that overlap any of the char ranges `regions` with
+    /// `diagnostics`.
     pub fn splice_diagnostics(
         &mut self,
         diagnostics: impl IntoIterator<Item = Diagnostic>,

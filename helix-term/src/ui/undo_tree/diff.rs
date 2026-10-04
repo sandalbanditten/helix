@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-/// How long the cursor rests before the diff is worked out, like vim-mundo's preview.
+/// How long the cursor rests before the diff is worked out.
 const DELAY: Duration = Duration::from_millis(250);
 /// The unchanged lines shown around each hunk.
 const CONTEXT: u32 = 3;

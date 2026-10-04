@@ -36,8 +36,7 @@ pub struct SyntaxHighlighting<'a> {
     pub range: ops::Range<u32>,
 }
 
-/// Fixed styles of char ranges, sorted and disjoint. Unlike highlights they need no theme scope,
-/// so they can take any color, like the ones `LS_COLORS` gives dired listings.
+/// Fixed styles of char ranges, sorted and disjoint, which need no theme scope.
 pub type StyleSpans<'a> = &'a [(ops::Range<usize>, Style)];
 
 #[allow(clippy::too_many_arguments)]

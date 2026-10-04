@@ -714,8 +714,7 @@ pub struct WriteOptions {
     pub force: bool,
     pub auto_format: bool,
     pub code_actions: bool,
-    /// Whether the buffer closes or the editor quits right after, so that a dired buffer makes
-    /// its copies before the write returns.
+    /// Whether the buffer closes or the editor quits right after.
     pub closing: bool,
 }
 

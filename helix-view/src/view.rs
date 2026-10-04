@@ -374,11 +374,8 @@ impl View {
         self.offset_coords_to_in_view(doc, scrolloff).is_none()
     }
 
-    /// Scrolls the view `offset` visual rows in `direction`.
-    ///
-    /// With `sync_cursor` all selections move the same distance, keeping their position on
-    /// screen. Otherwise they stay put, unless the primary cursor would leave the `scrolloff`
-    /// margin, in which case it is moved to the edge of the margin.
+    /// Scrolls the view `offset` visual rows in `direction`. With `sync_cursor` all selections move
+    /// along, otherwise the primary cursor stays within the `scrolloff` margin.
     pub fn scroll(
         &mut self,
         doc: &mut Document,
@@ -509,7 +506,7 @@ impl View {
     }
 
     /// The offset to draw the view at: its real offset, or the current frame while it smoothly
-    /// scrolls there. This is also what is on screen, for mapping screen coordinates.
+    /// scrolls there.
     pub fn render_offset(&self, doc: &Document) -> ViewPosition {
         self.smooth_scroll
             .offset(doc, self.id)
@@ -539,9 +536,7 @@ impl View {
         )
     }
 
-    /// Keeps the view scrolling smoothly over the text `changes` made: what is on screen moves
-    /// with the text, so that a scroll right after glides there rather than jumps. Otherwise a
-    /// change of the text shows the view at its new offset at once.
+    /// Keeps the view scrolling smoothly over the text `changes` made.
     pub fn scroll_smoothly_across(&mut self, doc: &Document, changes: &ChangeSet) {
         let mut smooth_scroll = std::mem::take(&mut self.smooth_scroll);
         smooth_scroll.follow_changes(self, doc, changes);
@@ -663,9 +658,8 @@ impl View {
         self.text_annotations_at(doc, theme, doc.view_offset(self.id).horizontal_offset, true)
     }
 
-    /// Get the text annotations for the view scrolled to `horizontal_offset`, which the layout
-    /// of inline diagnostics depends on. Only a `focused` view reveals concealed text at its
-    /// cursors.
+    /// Get the text annotations for the view scrolled to `horizontal_offset`. Only a `focused` view
+    /// reveals concealed text at its cursors.
     pub(crate) fn text_annotations_at<'a>(
         &self,
         doc: &'a Document,
@@ -1466,8 +1460,7 @@ mod tests {
     /// `doc_revisions`, while `view1`'s `doc_revisions` is left pointing at the
     /// pre-edit revision. Pushing a jump into `view1` afterwards reproduces the
     /// exact situation `push` fails to guard against.
-    /// A document whose history restarts, like a dired buffer listed anew, keeps the views
-    /// that showed it working: they follow it to its first revision.
+    /// The views of a document whose history restarts follow it to its first revision.
     #[test]
     fn views_follow_a_restarted_history() {
         let config = Arc::new(ArcSwap::new(Arc::new(Config::default())));
