@@ -15,6 +15,7 @@ mod tree;
 pub use panes::{changed_text, goto_end_hunk, goto_hunk, open_file, Rows};
 
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -225,8 +226,12 @@ impl Parsed {
 /// The files a diff of many compares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Many {
-    /// The files of two directories.
-    Directories(PathBuf, PathBuf),
+    /// The files of two directories, versions of the directory `versions_of` if it is known.
+    Directories {
+        old: PathBuf,
+        new: PathBuf,
+        versions_of: Option<PathBuf>,
+    },
     /// The files below a directory that changed since HEAD.
     Changes(PathBuf),
 }
@@ -253,7 +258,11 @@ pub fn open_paths(
             view.open(request, editor);
             return Ok(());
         }
-        [old, new] if old.is_dir() && new.is_dir() => Many::Directories(old.clone(), new.clone()),
+        [old, new] if old.is_dir() && new.is_dir() => Many::Directories {
+            old: old.clone(),
+            new: new.clone(),
+            versions_of: git_work_tree(|var| std::env::var_os(var)),
+        },
         [old, new] | [old, new, _] if !old.is_dir() && !new.is_dir() => {
             // The editor quits without a view, so one waits for the panes.
             let placeholder = editor.new_file(Action::VerticalSplit);
@@ -267,6 +276,15 @@ pub fn open_paths(
     let placeholder = editor.new_file(Action::VerticalSplit);
     view.open_many(many, None, Some(placeholder), editor);
     Ok(())
+}
+
+/// The work tree whose versions git's dir diff, `git difftool -d`, hands over when it runs Helix,
+/// as told by the environment variables `var` looks up. Git runs the tool at the work tree's top.
+fn git_work_tree(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if var("GIT_DIFFTOOL_DIRDIFF")? != "true" {
+        return None;
+    }
+    Some(var("GIT_WORK_TREE").map_or_else(helix_stdx::env::current_working_dir, PathBuf::from))
 }
 
 /// The two panes shown.
@@ -485,7 +503,7 @@ impl DiffView {
         let config = editor.config();
         let sort = config.file_tree.sort;
         let dir = match &many {
-            Many::Directories(_, new) => new.clone(),
+            Many::Directories { new, .. } => new.clone(),
             Many::Changes(dir) => dir.clone(),
         };
         let reader = Reader {
@@ -496,13 +514,17 @@ impl DiffView {
                 .is_trusted(),
         };
         editor.set_status(match &many {
-            Many::Directories(..) => "Comparing the directories…",
+            Many::Directories { .. } => "Comparing the directories…",
             Many::Changes(_) => "Looking for changes…",
         });
         let providers = reader.providers.clone();
         job::in_background(
             move || match &many {
-                Many::Directories(old, new) => DiffSet::of_directories(old, new, sort),
+                Many::Directories {
+                    old,
+                    new,
+                    versions_of,
+                } => DiffSet::of_directories(old, new, versions_of.as_deref(), sort),
                 Many::Changes(dir) => DiffSet::of_changes(dir, &providers, reader.trust, sort),
             },
             move |editor, compositor, set| {
@@ -948,5 +970,24 @@ fn pane(request: &Request, side: Side, alignment: Arc<Alignment>, partner: Docum
         file: request.file.clone(),
         origin: request.origin,
         wrap: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_tells_the_work_tree_of_its_dir_diff() {
+        let git = |var: &str| match var {
+            "GIT_DIFFTOOL_DIRDIFF" => Some("true".into()),
+            "GIT_WORK_TREE" => Some("/src/hotstone".into()),
+            _ => None,
+        };
+        assert_eq!(git_work_tree(git), Some("/src/hotstone".into()));
+        let one_file_at_a_time =
+            |var: &str| (var == "GIT_WORK_TREE").then(|| "/src/hotstone".into());
+        assert_eq!(git_work_tree(one_file_at_a_time), None);
+        assert_eq!(git_work_tree(|_| None), None);
     }
 }

@@ -693,7 +693,10 @@ async fn the_diff_tree_lists_the_files_with_their_lines() -> anyhow::Result<()> 
         })
         .await;
     let app = &session.app;
-    assert!(shows(app, "new +3 -2"), "the root sums the files up");
+    assert!(
+        shows(app, "old → new +3 -2"),
+        "the root is named after the directories and sums the files up"
+    );
     assert!(shows(app, "b.rs +1 -1"));
     assert!(shows(app, "c.rs +1"));
     assert!(!shows(app, "same.rs"));

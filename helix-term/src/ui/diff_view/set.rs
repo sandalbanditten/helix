@@ -54,6 +54,8 @@ impl FileDiff {
 pub struct DiffSet {
     /// The directory the paths are relative to, the tree's root.
     pub root: PathBuf,
+    /// What the diff is called, the name of the tree's root.
+    pub name: String,
     /// What the old and the new side are, shown after the files' names, if anything.
     pub sides: [Option<String>; 2],
     /// The files that differ, in the order of the tree.
@@ -62,8 +64,14 @@ pub struct DiffSet {
 
 impl DiffSet {
     /// The files differing between the directories `old` and `new`, walked like the file picker
-    /// walks: ignored files are left out, hidden ones kept, `.git` skipped.
-    pub fn of_directories(old: &Path, new: &Path, sort: FileTreeSort) -> anyhow::Result<Self> {
+    /// walks: ignored files are left out, hidden ones kept, `.git` skipped. `versions_of` is the
+    /// directory the two are versions of, if any, as git's work tree is in its dir diff.
+    pub fn of_directories(
+        old: &Path,
+        new: &Path,
+        versions_of: Option<&Path>,
+        sort: FileTreeSort,
+    ) -> anyhow::Result<Self> {
         let (old_files, new_files) = (walk(old)?, walk(new)?);
         let mut paths: Vec<_> = old_files.keys().chain(new_files.keys()).collect();
         paths.sort();
@@ -86,20 +94,23 @@ impl DiffSet {
             });
         }
         sort_files(&mut files, sort);
-        let name = |dir: &Path| {
-            dir.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        };
-        let sides = if name(old) == name(new) {
-            [
-                Some(old.display().to_string()),
-                Some(new.display().to_string()),
-            ]
-        } else {
-            [name(old), name(new)]
+        let (name, sides) = match versions_of {
+            Some(dir) => (
+                dir_name(dir),
+                ["old", "new"].map(|side| Some(side.to_owned())),
+            ),
+            None if dir_name(old) == dir_name(new) => (
+                dir_name(new),
+                [old, new].map(|dir| Some(dir.display().to_string())),
+            ),
+            None => (
+                format!("{} → {}", dir_name(old), dir_name(new)),
+                [old, new].map(|dir| Some(dir_name(dir))),
+            ),
         };
         Ok(Self {
             root: new.to_path_buf(),
+            name,
             sides,
             files,
         })
@@ -170,6 +181,7 @@ impl DiffSet {
         sort_files(&mut files, sort);
         Ok(Self {
             root: dir.to_path_buf(),
+            name: dir_name(dir),
             sides: [Some("HEAD".to_owned()), None],
             files,
         })
@@ -301,6 +313,14 @@ fn walk(dir: &Path) -> anyhow::Result<BTreeMap<PathBuf, PathBuf>> {
     Ok(files)
 }
 
+/// The name of `dir`, or all of its path if it has none, like `/`.
+fn dir_name(dir: &Path) -> String {
+    dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 fn same_contents(a: &Path, b: &Path) -> bool {
     let size = |path: &Path| fs::metadata(path).map(|metadata| metadata.len()).ok();
     size(a) == size(b) && fs::read(a).ok() == fs::read(b).ok()
@@ -329,8 +349,8 @@ mod tests {
         write(old.path(), "gone.rs", "a\n");
         write(new.path(), "src/new.rs", "a\n");
         write(new.path(), ".git/HEAD", "ref\n");
-        let set = DiffSet::of_directories(old.path(), new.path(), FileTreeSort::DirectoriesFirst)
-            .unwrap();
+        let sort = FileTreeSort::DirectoriesFirst;
+        let set = DiffSet::of_directories(old.path(), new.path(), None, sort).unwrap();
         let paths: Vec<_> = set.files.iter().map(|file| file.path.as_path()).collect();
         assert_eq!(
             paths,
@@ -340,6 +360,38 @@ mod tests {
         assert_eq!(set.files[1].old, Text::Missing);
         assert_eq!(set.files[2].new, Text::Missing);
         assert_eq!(set.root, new.path());
+    }
+
+    #[test]
+    fn directory_diffs_are_named_after_what_they_compare() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = |path: &str| {
+            let dir = parent.path().join(path);
+            fs::create_dir_all(&dir).unwrap();
+            dir
+        };
+        let (old, new) = (dir("v1.0"), dir("v1.1"));
+        let sort = FileTreeSort::DirectoriesFirst;
+        let set = DiffSet::of_directories(&old, &new, None, sort).unwrap();
+        assert_eq!(set.name, "v1.0 → v1.1");
+        assert_eq!(set.sides, [Some("v1.0".into()), Some("v1.1".into())]);
+
+        let (old, new) = (dir("a/src"), dir("b/src"));
+        let set = DiffSet::of_directories(&old, &new, None, sort).unwrap();
+        assert_eq!(set.name, "src");
+        assert_eq!(
+            set.sides,
+            [old, new].map(|dir| Some(dir.display().to_string())),
+            "the same names tell nothing apart"
+        );
+
+        // As `git difftool -d` hands over versions of the work tree.
+        let (old, new) = (dir("git-difftool.X/left"), dir("git-difftool.X/right"));
+        let set =
+            DiffSet::of_directories(&old, &new, Some(Path::new("/src/hotstone")), sort).unwrap();
+        assert_eq!(set.name, "hotstone");
+        assert_eq!(set.sides, [Some("old".into()), Some("new".into())]);
+        assert_eq!(set.root, new, "the files are the new directory's");
     }
 
     #[test]
@@ -360,6 +412,7 @@ mod tests {
     fn panes_are_named_after_the_sides() {
         let set = DiffSet {
             root: PathBuf::new(),
+            name: String::new(),
             sides: [Some("left".into()), Some("right".into())],
             files: Vec::new(),
         };
@@ -446,8 +499,9 @@ mod tests {
             }
         }
         let start = Instant::now();
-        let set = DiffSet::of_directories(old.path(), new.path(), FileTreeSort::DirectoriesFirst)
-            .unwrap();
+        let set =
+            DiffSet::of_directories(old.path(), new.path(), None, FileTreeSort::DirectoriesFirst)
+                .unwrap();
         eprintln!(
             "10000 identical files in two directories: {} differ, found in {:?}",
             set.files.len(),

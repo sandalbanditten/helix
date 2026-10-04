@@ -186,12 +186,8 @@ pub struct DiffTree {
 
 impl DiffTree {
     pub fn new(set: &DiffSet, config: &FileTreeConfig) -> Self {
-        let name = set
-            .root
-            .file_name()
-            .map_or_else(|| set.root.as_os_str().to_owned(), ToOwned::to_owned);
         let paths = set.files.iter().map(|file| file.path.as_path());
-        let tree = Tree::from_paths(name, paths, config.sort);
+        let tree = Tree::from_paths(set.name.clone().into(), paths, config.sort);
         let changes = set.files.iter().map(|file| file.change(&set.root));
         let paths = set.files.iter().map(|file| file.path.clone()).collect();
         Self {
@@ -608,6 +604,7 @@ mod tests {
     fn tree(paths: &[&str]) -> DiffTree {
         let set = DiffSet {
             root: "/repo".into(),
+            name: "repo".into(),
             sides: [None, None],
             files: paths
                 .iter()

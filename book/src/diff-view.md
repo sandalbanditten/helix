@@ -63,8 +63,9 @@ When a diff has many files, the diff tree lists them on the left, or on the righ
 tree's [`side`](./editor.md#editorfile-tree-section), in place of the file tree. Each file shows
 the lines it adds and removes, like `+12 -3` in `git diff --stat`, and each directory the sums
 of its files. The marks next to them tell new, deleted and changed files apart, and directories
-get theirs like in the file tree. The file shown is marked. The diffs of the files next to it are worked out ahead,
-so `]g` and `[g` get there without waiting.
+get theirs like in the file tree. The root is named after the directory diffed, or the two, like
+`v1.0 → v1.1`. A `*` marks the file shown. The diffs of the files next to it are worked out
+ahead, so `]g` and `[g` get there without waiting.
 
 `Space e` focuses the diff tree on the file shown, and `Space E` hides or shows it. While it is
 focused it takes these keys; any other key gives the editor its focus back and runs there.
@@ -113,8 +114,9 @@ Git's config drops quotes that aren't escaped, so keep the `\"`;
 `git difftool` then shows each changed file in a Helix of its own, one after the other. Git hands
 over temporary copies, and `$MERGED` names the file: the panes are named like `src/main.rs (old)`
 and `src/main.rs (new)`, and `gf` opens `src/main.rs` in the working tree. `git difftool -d`
-(`--dir-diff`) shows all of them in one Helix, with the diff tree; its `$MERGED` is empty. Both
-take what `git diff` takes, like `git difftool -d HEAD~3` or `git difftool -d main...`.
+(`--dir-diff`) shows all of them in one Helix, with the diff tree named after the repository and
+the panes named the same way; its `$MERGED` is empty. Both take what `git diff` takes, like
+`git difftool -d HEAD~3` or `git difftool -d main...`.
 
 ## Colors
 
