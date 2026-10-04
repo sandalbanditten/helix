@@ -1,9 +1,5 @@
 //! Alignments from the JSON `difft` prints for a pair of files with `DFT_DISPLAY=json`, an
-//! unstable format (enabled by `DFT_UNSTABLE=yes`) read here as difftastic 0.71 prints it.
-//!
-//! A changed pair comes with `aligned_lines`, the line of each file shown on each row, and with
-//! `chunks` holding the byte ranges that changed of each line. Created, deleted and unchanged
-//! files come without them.
+//! unstable format read here as difftastic 0.71 prints it.
 
 use std::collections::BTreeMap;
 

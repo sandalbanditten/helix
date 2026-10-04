@@ -153,8 +153,7 @@ impl<'a> imara_diff::TokenSource for TextLines<'a> {
     }
 }
 
-/// The number of lines of `text` as `str::lines` counts them: an empty text has none, and a final
-/// line break ends the last line rather than starting another.
+/// The number of lines of `text` as `str::lines` counts them.
 pub fn text_lines(text: RopeSlice) -> usize {
     let lines = text.len_lines();
     if text.len_chars() == 0 {

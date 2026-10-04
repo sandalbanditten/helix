@@ -885,10 +885,9 @@ fn edited(text: &str) -> String {
         .collect()
 }
 
-/// Times opening `:diff` on big buffers, the cost a frame of the diff adds, also with a pane of
-/// fillers drawn with a character, and a diff of many files, all in one editor. Run it with
-/// `cargo test --release --features integration --test integration measure_diff_view --
-/// --ignored --nocapture`, then `cargo build --release` for a real `hx`.
+/// Times opening `:diff` on big buffers, the cost a frame of the diff adds, and a diff of many
+/// files. Run it with `cargo test --release --features integration --test integration
+/// measure_diff_view -- --ignored --nocapture`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "a measurement, not a check"]
 async fn measure_diff_view() -> anyhow::Result<()> {

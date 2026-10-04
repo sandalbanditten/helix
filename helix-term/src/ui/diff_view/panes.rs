@@ -158,8 +158,8 @@ fn offset_at(
     }
 }
 
-/// Selects the hunk `count` hunks after or before each selection of the focused pane, like `]g`
-/// and `[g` select the changes of the diff gutter. Returns whether there was one.
+/// Selects the hunk `count` hunks after or before each selection of the focused pane. Returns
+/// whether there was one.
 pub fn goto_hunk(editor: &mut Editor, direction: Direction, count: usize) -> bool {
     let mode = editor.mode;
     let (view, doc) = current!(editor);
@@ -252,8 +252,7 @@ fn has_lines(pane: &Pane, rows: &ops::Range<u32>) -> bool {
         .is_some_and(|row| row < rows.end)
 }
 
-/// What selecting the hunk on the rows `rows` of `pane` selects: its lines on the pane's side,
-/// or the first char of the line after it where the side has only fillers there.
+/// What selecting the hunk on the rows `rows` of `pane` selects.
 fn hunk_range(pane: &Pane, text: RopeSlice, rows: &ops::Range<u32>) -> Range {
     let alignment = &pane.alignment;
     let first = alignment.line_at_or_after(pane.side, rows.start);
@@ -271,9 +270,8 @@ fn hunk_range(pane: &Pane, text: RopeSlice, rows: &ops::Range<u32>) -> Range {
     }
 }
 
-/// Opens the file the focused pane shows a side of in the diff's place, at the line on the
-/// cursor's row: the diff closes, and the file opens in the view it was asked for from. Returns
-/// whether the focused buffer is a pane.
+/// Opens the file the focused pane shows a side of in the diff's place, at the cursor's row.
+/// Returns whether the focused buffer is a pane.
 pub fn open_file(editor: &mut Editor) -> bool {
     let (view, doc) = current_ref!(editor);
     let Some(pane) = doc.diff_view.as_ref() else {
@@ -337,8 +335,7 @@ pub fn changed_text(
     spans
 }
 
-/// Paints the rows of a pane: the background of its changed lines, with the rows padding them
-/// where the other side's line wraps to more, and of its fillers.
+/// Paints the rows of a pane: its changed lines and their padding, and its fillers.
 pub struct Rows<'a> {
     pane: &'a Pane,
     text: RopeSlice<'a>,
@@ -418,8 +415,7 @@ impl<'a> Rows<'a> {
         }
     }
 
-    /// Paints `rows`, the last of the virtual rows after `line`, or of those above the first line
-    /// without one: the rows padding the line, then the fillers.
+    /// Paints `rows`, the last of the virtual rows after `line`, or above the first line without one.
     fn paint_virtual(
         &mut self,
         renderer: &mut TextRenderer,
@@ -438,8 +434,7 @@ impl<'a> Rows<'a> {
         self.paint_fillers(renderer, fillers_start..rows.end);
     }
 
-    /// Asks for the grapheme where `line` ends, at its line break or at the end of the text,
-    /// while the pane wraps lines.
+    /// Asks for the grapheme where `line` ends, while the pane wraps lines.
     fn hook_line_end(&mut self, line: usize) -> usize {
         self.next_line = line;
         if self.pane.wrap.is_none() || line >= self.text.len_lines() {

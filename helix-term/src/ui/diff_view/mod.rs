@@ -1,9 +1,5 @@
-//! The diff view: two read-only panes side by side, zoomed over the editor, one per text of a
-//! diff. Their rows line up, and they scroll together. A diff of many files lists them in the
-//! diff tree, docked where the file tree docks.
-//!
-//! [`DiffView`] is owned by the [`EditorView`]. It works out how the texts line up in the
-//! background, opens the panes once that is known, and keeps them in step while they are shown.
+//! The diff view: two read-only panes side by side, zoomed over the editor, whose rows line up. A
+//! diff of many files lists them in the diff tree. [`DiffView`] is owned by the [`EditorView`].
 
 pub(crate) mod inline;
 mod panes;
@@ -61,8 +57,7 @@ const STATS_INTERVAL: Duration = Duration::from_millis(100);
 /// Two texts to compare, and what they are.
 #[derive(Debug, Clone)]
 pub struct Request {
-    /// The path of the file the texts are of, relative where it can be, which picks the
-    /// language.
+    /// The path of the file the texts are of, which picks the language.
     path: PathBuf,
     old: Rope,
     new: Rope,
@@ -113,10 +108,8 @@ impl Request {
         })
     }
 
-    /// The diff of the file `old` and the file `new`, either of which may be `/dev/null`, as
-    /// when git runs a diff tool for a file added or deleted. They are versions of the file at
-    /// `path` if given, as git's temporary files are of `$MERGED`: named after it, and `gf`
-    /// opens it.
+    /// The diff of the file `old` and the file `new`, either of which may be `/dev/null`. They are
+    /// versions of the file at `path` if given.
     pub fn files(
         old: &Path,
         new: &Path,
@@ -237,9 +230,8 @@ pub enum Many {
 }
 
 /// Opens the diff the command line asks for with `paths`: of a file against its committed
-/// version, of two files or two directories, or of the changes since HEAD below a directory, the
-/// working directory without paths. A third path names what two files are versions of, as git's
-/// `$MERGED` does; an empty one, as of a directory diff, names nothing.
+/// version, of two files or two directories, or of the changes since HEAD below a directory. A
+/// third path names what two files are versions of.
 pub fn open_paths(
     paths: &[PathBuf],
     editor: &mut Editor,
@@ -278,8 +270,8 @@ pub fn open_paths(
     Ok(())
 }
 
-/// The work tree whose versions git's dir diff, `git difftool -d`, hands over when it runs Helix,
-/// as told by the environment variables `var` looks up. Git runs the tool at the work tree's top.
+/// The work tree whose versions `git difftool -d` hands over, from the environment variables
+/// `var` looks up.
 fn git_work_tree(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     if var("GIT_DIFFTOOL_DIRDIFF")? != "true" {
         return None;
@@ -309,13 +301,11 @@ struct Files {
     placeholder: Option<DocumentId>,
     /// Whether the panes closed to open their file, which keeps the tree.
     keep: bool,
-    /// Whether the file being opened shows its last hunk rather than its first, as `[g` coming
-    /// from the next file asks.
+    /// Whether the file being opened shows its last hunk rather than its first.
     last_hunk: bool,
     /// The diff of the next file in the tree, worked out ahead so that `]g` gets there fast.
     prefetch: Option<(usize, JoinHandle<()>)>,
-    /// The diffs of the files next to the one shown, by their index: worked out ahead, or shown
-    /// last, so that `]g` and `[g` get there fast.
+    /// The diffs of the files next to the one shown, by their index.
     cache: Vec<(usize, Diff)>,
 }
 
@@ -460,9 +450,7 @@ impl DiffView {
         }
     }
 
-    /// Keeps the panes in step once the editor is laid out for a frame: they wrap their lines
-    /// as their views are wide now, the one without the focus scrolls along with the focused one,
-    /// and its cursor goes to the same row.
+    /// Keeps the panes in step once the editor is laid out for a frame.
     pub fn follow_size(&mut self, editor: &mut Editor) {
         let Some(pair) = &self.pair else {
             return;
@@ -488,9 +476,8 @@ impl DiffView {
         }
     }
 
-    /// Looks for the files of `many` in the background and shows the first one's diff once
-    /// found, with the others in the diff tree. `origin` is the view focused when it was asked
-    /// for, `placeholder` a buffer shown meanwhile.
+    /// Looks for the files of `many` in the background and shows the first one's diff once found.
+    /// `origin` is the view focused when it was asked for, `placeholder` a buffer shown meanwhile.
     pub fn open_many(
         &mut self,
         many: Many,
@@ -644,8 +631,7 @@ impl DiffView {
         ));
     }
 
-    /// Shows the next file's diff, at its first hunk, or the previous one's at its last: where
-    /// `]g` and `[g` go past the hunks of a file of a diff of many.
+    /// Shows the next file's diff, at its first hunk, or the previous one's at its last.
     pub fn goto_next_file(&mut self, direction: Direction, editor: &mut Editor) {
         let Some(files) = &mut self.files else {
             return;
@@ -828,8 +814,7 @@ async fn parse(request: &Request, loader: Arc<Loader>) -> Parsed {
     }
 }
 
-/// Counts the lines added and removed in the files of `set` in the background, handing them to
-/// the diff tree of the diff of many `generation` now and then.
+/// Counts the lines added and removed in the files of `set` in the background.
 fn spawn_stats(set: &DiffSet, reader: Reader, generation: u64) {
     let (root, files) = (set.root.clone(), set.files.clone());
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);

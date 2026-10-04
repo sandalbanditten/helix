@@ -1,6 +1,5 @@
-//! A diff shown inline, as `git diff` shows one: a few unchanged lines around each hunk, then the
-//! hunk's removed lines and its added ones, colored by syntax and by what changed. The undo tree
-//! shows the changes of a revision like this.
+//! A diff shown inline: a few unchanged lines around each hunk, then the hunk's removed lines and
+//! its added ones, colored by syntax and by what changed.
 
 use std::ops::Range;
 

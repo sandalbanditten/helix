@@ -43,9 +43,8 @@ impl DiffProviderRegistry {
             })
     }
 
-    /// Calls `f` with the diff base of each of `files`, all in the repository holding `dir`, or
-    /// `None` where there is none, until it returns `false`. The repository is opened once. Runs
-    /// on the calling thread.
+    /// Calls `f` with the diff base of each of `files`, all in the repository holding `dir`, until it
+    /// returns `false`.
     pub fn for_each_diff_base(
         &self,
         dir: &Path,
@@ -85,8 +84,7 @@ impl DiffProviderRegistry {
         })
     }
 
-    /// The files whose changes move HEAD of the repository holding `file`, and so the diff base
-    /// and the name of HEAD.
+    /// The files whose changes move HEAD of the repository holding `file`.
     pub fn head_files(&self, file: &Path) -> Vec<PathBuf> {
         self.providers
             .iter()
@@ -118,9 +116,7 @@ impl DiffProviderRegistry {
         });
     }
 
-    /// Iterates over the status of the repository containing `cwd` on the calling thread, until
-    /// `f` returns `false`. Besides the changes between the index and the working tree it
-    /// reports what `options` asks for.
+    /// Iterates over the status of the repository containing `cwd` until `f` returns `false`.
     pub fn for_each_status_entry(
         &self,
         cwd: &Path,
@@ -138,9 +134,8 @@ impl DiffProviderRegistry {
             .ok_or_else(|| anyhow!("no diff provider returns success"))
     }
 
-    /// The status of everything below the directory `dir` like `eza --git` sees it: each change
-    /// on its side and renames as a deletion and an addition. Also tells which of the absolute
-    /// `paths` the index tracks. Runs on the calling thread.
+    /// The status of everything below the directory `dir`, each change on its side, and which of the
+    /// absolute `paths` the index tracks.
     pub fn status_by_side(
         &self,
         dir: &Path,

@@ -1,5 +1,4 @@
-//! The diff tree: the files of a diff of many, docked where the file tree docks and drawn like it,
-//! each with the lines added and removed after its name. `Enter` shows a file's diff.
+//! The diff tree: the files of a diff of many, docked where the file tree docks.
 
 use std::{
     collections::HashMap,
@@ -292,8 +291,7 @@ impl DiffTree {
         dock::fitted_width(widest, self.max_width)
     }
 
-    /// Handles `key` while the tree is focused. A key it does not bind is ignored, for the
-    /// editor to handle.
+    /// Handles `key` while the tree is focused, ignoring keys it does not bind.
     pub fn handle_key(&mut self, key: KeyEvent, cx: &mut Context) -> (EventResult, Request) {
         cx.editor.autoinfo = None;
         if let Some(edit) = &mut self.search.edit {
@@ -567,8 +565,7 @@ impl DiffTree {
         }
     }
 
-    /// Handles a mouse event over the panel: the wheel scrolls, a click shows a file's diff or
-    /// expands or collapses a directory. `None` leaves the event to the editor.
+    /// Handles a mouse event over the panel. `None` leaves the event to the editor.
     pub fn handle_mouse(&mut self, event: &MouseEvent, editor: &Editor) -> Option<Request> {
         let area = self.area?;
         let inside = (area.left()..area.right()).contains(&event.column)

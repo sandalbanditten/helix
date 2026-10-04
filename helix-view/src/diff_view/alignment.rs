@@ -1,8 +1,5 @@
 //! How two texts line up side by side: the line of each text shown on each row, and what changed
-//! about the lines.
-//!
-//! Lines are counted like [`text_lines`](helix_core::diff::text_lines) counts them, so the empty
-//! line after a final line break is no line of its own.
+//! about the lines. Lines are counted like [`text_lines`](helix_core::diff::text_lines) does.
 
 use std::{borrow::Cow, ops::Range};
 
@@ -62,7 +59,7 @@ pub enum LineChange {
 
 impl LineChange {
     /// The change made of the byte ranges `parts` of `line`, if any of them holds more than
-    /// whitespace. The ranges may overlap and come in any order, but must lie on char boundaries.
+    /// whitespace. The ranges must lie on char boundaries.
     pub fn of_parts(line: RopeSlice, parts: impl IntoIterator<Item = Range<u32>>) -> Option<Self> {
         let text = Cow::<str>::from(line);
         let mut parts: Vec<_> = parts.into_iter().collect();

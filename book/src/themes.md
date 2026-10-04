@@ -416,11 +416,11 @@ These scopes are used for theming the editor interface:
 | `diagnostic.deprecated`           | Diagnostics with deprecated tag (editing area)                                                 |
 | `diagnostic.spelling`             | Misspellings (editing area)                                                                    |
 | `tabstop`                         | Snippet placeholder                                                                            |
-| `diff.plus.line`                  | Added lines in the [diff view](./diff-view.md), defaulting to a background of 19% `diff.plus` over `ui.background` |
-| `diff.plus.text`                  | The text that changed within added lines, defaulting to a background of 38% `diff.plus`         |
-| `diff.minus.line`                 | Removed lines in the diff view, defaulting to a background of 19% `diff.minus`                  |
-| `diff.minus.text`                 | The text that changed within removed lines, defaulting to a background of 38% `diff.minus`      |
-| `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text`; the foreground colors the [`filler-character`](./editor.md#editordiff-section), defaulting to `ui.virtual.indent-guide`'s |
+| `diff.plus.line`                  | Added lines in the [diff view](./diff-view.md)                                                 |
+| `diff.plus.text`                  | The text that changed within added lines                                                       |
+| `diff.minus.line`                 | Removed lines in the diff view                                                                 |
+| `diff.minus.text`                 | The text that changed within removed lines                                                     |
+| `diff.filler`                     | Filler rows in the diff view; `fg` colors the filler character                                 |
 
 [editor-section]: ./configuration.md#editor-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

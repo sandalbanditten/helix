@@ -22,8 +22,7 @@ use crate::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
 #[cfg(test)]
 mod test;
 
-/// `file` with its symlinks resolved. A file deleted from the working tree, which HEAD may still
-/// have, is resolved by its directory.
+/// `file` with its symlinks resolved.
 fn realpath(file: &Path) -> Result<PathBuf> {
     if file.exists() {
         return gix::path::realpath(file).context("resolve symlinks");
@@ -56,8 +55,8 @@ pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
     committed_version(&repo, &file)
 }
 
-/// Calls `f` with the diff base of each of `files`, as [`get_diff_base`] reads it, opening their
-/// repository, the one holding `dir`, once. Stops once `f` returns `false`.
+/// Calls `f` with the diff base of each of `files` in the repository holding `dir`, until it
+/// returns `false`.
 pub fn for_each_diff_base(
     dir: &Path,
     files: &[PathBuf],
@@ -127,8 +126,7 @@ pub fn get_current_head_name(file: &Path, trust_full: bool) -> Result<Arc<ArcSwa
     Ok(Arc::new(ArcSwap::from_pointee(name.into_boxed_str())))
 }
 
-/// The files whose changes move HEAD of the repository holding `file`: HEAD itself, the packed
-/// refs, and the loose ref of the branch HEAD is on, which need not exist.
+/// The files whose changes move HEAD of the repository holding `file`.
 pub fn head_files(file: &Path) -> Result<Vec<PathBuf>> {
     debug_assert!(file.is_absolute());
     let file = gix::path::realpath(file).context("resolve symlinks")?;

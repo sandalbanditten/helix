@@ -1,13 +1,8 @@
 //! The diff view: two texts side by side, lined up by rows, with what changed highlighted.
 //!
 //! [`Alignment`] says which line of each text is shown on each row and what changed about the
-//! lines. It comes from difftastic's structural diff ([`difftastic`]) or from Helix's own line
-//! diff ([`builtin`]).
-//!
-//! Each side is shown by a read-only document holding its text as it is, a [`Pane`]. The rows on
-//! which a side has no line are virtual lines of the pane ([`FillerLines`]), so both panes are as
-//! tall and their rows line up. While the panes wrap lines ([`Wrap`]), a row is as tall as the
-//! taller of its lines, the shorter one padded with virtual lines.
+//! lines. Each side is shown by a read-only document, a [`Pane`], whose rows without a line are
+//! virtual lines ([`FillerLines`]).
 
 pub mod alignment;
 pub mod builtin;
@@ -43,8 +38,7 @@ pub struct Pane {
 }
 
 impl Pane {
-    /// The filler rows of the pane showing `text`, and the rows padding its wrapped lines, as
-    /// virtual lines.
+    /// The filler rows of the pane showing `text`, as virtual lines.
     pub fn filler_lines<'a>(&'a self, text: RopeSlice<'a>) -> FillerLines<'a> {
         FillerLines {
             pane: self,
@@ -71,8 +65,7 @@ impl Pane {
         }
     }
 
-    /// The virtual rows after `line`: those padding it to the height of its row, then the fillers
-    /// facing lines of the other side it has none for.
+    /// The virtual rows after `line`: those padding it to the height of its row, then the fillers.
     pub fn rows_after(&self, line: u32) -> (usize, usize) {
         let after = &self.alignment.fillers(self.side).after;
         let count = after
@@ -176,9 +169,8 @@ fn line_rows(text: RopeSlice, line: usize, format: &TextFormat) -> usize {
     rows
 }
 
-/// The filler rows of a pane as virtual lines: above its first line, and after the lines facing
-/// lines of the other side that it has none for. Lines also get the rows padding them to the
-/// height of their row.
+/// The filler rows of a pane as virtual lines, and the rows padding its lines to the height of
+/// their row.
 pub struct FillerLines<'a> {
     pane: &'a Pane,
     text: RopeSlice<'a>,

@@ -24,8 +24,7 @@ pub fn has_difft() -> bool {
     *FOUND.get_or_init(|| helix_stdx::env::which("difft").is_ok())
 }
 
-/// Lines up `old` and `new`, the texts of the file shown as `path`, with `tool`. difftastic falls
-/// back to the builtin diff where it isn't installed or fails.
+/// Lines up `old` and `new`, the texts of the file shown as `path`, with `tool`.
 pub async fn align(tool: DiffTool, path: String, old: Rope, new: Rope) -> Outcome {
     let fallback = match tool {
         DiffTool::Builtin => None,
@@ -62,7 +61,7 @@ pub async fn align(tool: DiffTool, path: String, old: Rope, new: Rope) -> Outcom
 }
 
 /// Runs `difft` on `old` and `new`, the texts of the file shown as `path`, returning the JSON it
-/// prints. The path picks the language, as when git runs it.
+/// prints.
 async fn difftastic(path: &str, old: &Rope, new: &Rope) -> Result<Vec<u8>, String> {
     let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
     let (old_file, new_file) = (dir.path().join("old"), dir.path().join("new"));
@@ -92,8 +91,7 @@ async fn difftastic(path: &str, old: &Rope, new: &Rope) -> Result<Vec<u8>, Strin
     Ok(output.stdout)
 }
 
-/// What went wrong, from what `difft` printed to `stderr`: its first line, or the message of a
-/// panic, which follows the line telling where it happened.
+/// What went wrong, from what `difft` printed to `stderr`.
 fn failure(stderr: &str) -> String {
     let mut lines = stderr
         .lines()
@@ -128,8 +126,7 @@ mod tests {
         assert_eq!(failure(""), "difft failed: no reason given");
     }
 
-    /// Times `difft` and reading its output on changes to this repository's biggest files: one
-    /// it takes long on, one it panics on. Run it with
+    /// Times `difft` and reading its output on changes to this repository's biggest files. Run it with
     /// `cargo test --release -p helix-term --lib measure_difftastic -- --ignored --nocapture`.
     #[test]
     #[ignore = "a measurement, not a check"]

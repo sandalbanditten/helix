@@ -1,10 +1,6 @@
 //! The colors of the diff view, from the theme's `diff.plus.line`, `diff.plus.text`,
-//! `diff.minus.line`, `diff.minus.text` and `diff.filler`.
-//!
-//! A theme without them gets backgrounds blended from its own colors, as difftastic.nvim does:
-//! `diff.plus` or `diff.minus` over `ui.background`, lightly for a changed line and more strongly
-//! for the text that changed in it, and `ui.text` very lightly for the gray of the fillers. The
-//! character the fillers may be drawn with takes the color of the indent guides.
+//! `diff.minus.line`, `diff.minus.text` and `diff.filler`, or blended from `diff.plus`,
+//! `diff.minus` and `ui.text`.
 
 use helix_view::{
     diff_view::Side,
@@ -112,8 +108,7 @@ pub fn is_dark(theme: &Theme) -> bool {
     }
 }
 
-/// The red, green and blue of `color`, the terminal palette's colors as xterm shows them. `None`
-/// for the terminal's own colors.
+/// The red, green and blue of `color`. `None` for the terminal's own colors.
 fn rgb(color: Option<Color>) -> Option<(u8, u8, u8)> {
     const ANSI: [(u8, u8, u8); 16] = [
         (0, 0, 0),

@@ -1,8 +1,4 @@
 //! Helix's own diff: a line diff whose changed lines show the words that changed.
-//!
-//! The lines of a hunk are lined up in order, the extra lines of the longer side facing fillers.
-//! Within a hunk the words of both sides are diffed as one text, so a word moving to another line
-//! of the hunk still matches; this follows the intra-line diff of helix PR #15631.
 
 use std::ops::Range;
 
@@ -14,12 +10,11 @@ use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 
 use super::alignment::{Alignment, LineChange, Row};
 
-/// The largest hunk whose words are diffed, in lines of both sides and in bytes; the lines of a
-/// larger one change as a whole.
+/// The largest hunk whose words are diffed, in lines of both sides and in bytes.
 const MAX_WORD_DIFF_LINES: usize = 200;
 const MAX_WORD_DIFF_BYTES: usize = 64 * 1024;
 
-/// Lines added and removed, as `git diff --numstat` counts them.
+/// Lines added and removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Stats {
     pub added: u32,

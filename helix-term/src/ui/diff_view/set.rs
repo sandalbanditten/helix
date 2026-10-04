@@ -1,5 +1,5 @@
 //! The files of a diff of many: two directories compared, or the changes of a repository since
-//! HEAD. They are found in the background, and so are the lines added and removed in each.
+//! HEAD.
 
 use std::{
     cell::RefCell,
@@ -63,9 +63,8 @@ pub struct DiffSet {
 }
 
 impl DiffSet {
-    /// The files differing between the directories `old` and `new`, walked like the file picker
-    /// walks: ignored files are left out, hidden ones kept, `.git` skipped. `versions_of` is the
-    /// directory the two are versions of, if any, as git's work tree is in its dir diff.
+    /// The files differing between the directories `old` and `new`, versions of the directory
+    /// `versions_of` if given.
     pub fn of_directories(
         old: &Path,
         new: &Path,
@@ -116,8 +115,7 @@ impl DiffSet {
         })
     }
 
-    /// The files below `dir` that changed since HEAD, in the index or the working tree, new
-    /// ones included.
+    /// The files below `dir` that changed since HEAD.
     pub fn of_changes(
         dir: &Path,
         providers: &DiffProviderRegistry,
@@ -226,9 +224,8 @@ impl Reader {
         Some(builtin::stats(old.slice(..), new.slice(..)))
     }
 
-    /// Calls `f` with the lines added and removed in each of `files` whose texts can be read,
-    /// until it returns `false`. The committed versions are read in one go, from the repository
-    /// holding `root`.
+    /// Calls `f` with the lines added and removed in each of `files` whose texts can be read, until it
+    /// returns `false`.
     pub fn each_stats(
         &self,
         root: &Path,
@@ -279,8 +276,7 @@ pub fn read(path: &Path) -> anyhow::Result<Rope> {
     Ok(Rope::from(text))
 }
 
-/// The lines added and removed below each directory, by its path, from those of its files; the
-/// root's path is empty.
+/// The lines added and removed below each directory, by its path.
 pub fn sums<'a>(stats: impl IntoIterator<Item = (&'a Path, Stats)>) -> HashMap<PathBuf, Stats> {
     let mut sums: HashMap<PathBuf, Stats> = HashMap::new();
     for (path, stats) in stats {
@@ -424,8 +420,7 @@ mod tests {
         assert_eq!(set.names(&file), ["src/a.rs (left)", "src/a.rs (right)"]);
     }
 
-    /// Times finding the files of diffs of many and counting their lines: 2000 files changed
-    /// since HEAD, and two directories of 10000 identical files. Run it with
+    /// Times finding the files of diffs of many and counting their lines. Run it with
     /// `cargo test --release -p helix-term --lib measure_diff_sets -- --ignored --nocapture`.
     #[test]
     #[ignore = "a measurement, not a check"]
