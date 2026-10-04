@@ -1,6 +1,5 @@
-//! What searches share, in the editor and in the undo tree: the regex of a query as the search
-//! config says, the prompt it is typed in, which completes and recalls the searches kept in a
-//! register, and how a query that is no regex is shown.
+//! What searches share, in the editor and in the undo tree: the regex of a query and the prompt it
+//! is typed in.
 
 use std::{borrow::Cow, fmt::Display, sync::Arc};
 
@@ -22,9 +21,7 @@ pub const REGISTER: char = '/';
 /// Why a query is no regex.
 pub type RegexError = Box<dyn std::error::Error + Send + Sync>;
 
-/// The regex a search for `query` looks for: ignoring case unless `query` has capitals, if
-/// `config` says so, with `^` and `$` at the ends of lines, which end in `crlf` ones if the text
-/// has them.
+/// The regex a search for `query` looks for, as `config` says.
 pub fn regex(query: &str, config: &SearchConfig, crlf: bool) -> Result<rope::Regex, RegexError> {
     let case_insensitive = config.smart_case && !query.chars().any(char::is_uppercase);
     rope::RegexBuilder::new()

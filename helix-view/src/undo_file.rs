@@ -1,14 +1,6 @@
 //! The undo files of documents: where they are, reading one when its file is opened, and writing
 //! it after the file is written. The format is helix-core's
 //! [`undo_file`](helix_core::history::undo_file).
-//!
-//! A write appends the revisions made since the last one, unless the undo file changed in
-//! between, which another Helix writing the same file does: then it is written anew, from this
-//! history, so the last write wins.
-//!
-//! Undo files follow their files when Helix moves or copies them. Each one records its file's
-//! path, which tells the ones of the files in a directory apart from others whose names happen to
-//! begin alike, and finds the files whose names are hashes.
 
 use std::{
     ffi::OsString,
@@ -65,13 +57,11 @@ pub struct UndoFileState {
     file: PathBuf,
     /// The revisions in it, or on their way there: the first one the next write appends.
     revisions: usize,
-    /// The undo file as the last write of it left it, or as it was read; `None` while a write is
-    /// under way, and when the next one writes it anew.
+    /// The undo file as the last write of it left it, or as it was read.
     stamp: Arc<Mutex<Option<Stamp>>>,
 }
 
-/// Whether `path` gets an undo file: not in a temporary directory, not a message git asks for,
-/// and a path an undo file can record.
+/// Whether `path` gets an undo file.
 pub fn is_kept(path: &Path) -> bool {
     let git_message = path
         .file_name()
@@ -90,8 +80,8 @@ fn temporary_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The name of the undo file of `path`: the path with its separators turned into `%`, like
-/// Vim's, or `#` and a hash of the path where that is too long a name.
+/// The name of the undo file of `path`: the path with its separators turned into `%`, or a hash
+/// of a path too long for that.
 pub fn name(path: &Path) -> Option<OsString> {
     let escaped = escape(path)?;
     let name = if escaped.len() <= MAX_NAME {
@@ -136,8 +126,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Reads the undo file in `dir` of the file at `path`, whose text is `text`. Returns its history,
-/// at most `max_revisions` long unless that is `0`, if it is the history of this file and text.
+/// Reads the undo file in `dir` of the file at `path`, whose text is `text`. Returns its history
+/// if it is the history of this file and text.
 pub fn read(
     dir: &Path,
     path: &Path,
@@ -186,14 +176,12 @@ pub fn read(
     Some((history, state))
 }
 
-/// Takes the undo files in `dir` of the file or directory moved from `from` to `to` along: of
-/// the file, or of the files below the directory.
+/// Moves the undo files in `dir` of the file or directory moved from `from` to `to`.
 pub fn moved(dir: &Path, from: &Path, to: &Path) -> io::Result<()> {
     carry(dir, from, to, |from, to| fs::rename(from, to))
 }
 
-/// Copies the undo files in `dir` of the file or directory copied from `from` to `to`, for the
-/// copies.
+/// Copies the undo files in `dir` of the file or directory copied from `from` to `to`.
 pub fn copied(dir: &Path, from: &Path, to: &Path) -> io::Result<()> {
     carry(dir, from, to, |from, to| fs::copy(from, to).map(drop))
 }
@@ -280,8 +268,7 @@ pub struct PendingWrite {
 }
 
 /// Prepares the write of the undo file in `dir` of `path`, about to be written at the current
-/// revision of `history`: the revisions the undo file lacks, or all of them where it has to be
-/// written anew. `state` takes them as written.
+/// revision of `history`.
 pub fn prepare(
     state: &mut Option<UndoFileState>,
     history: &History,

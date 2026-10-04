@@ -1,19 +1,8 @@
 //! Undo files: a [`History`] on disk, as a log of records that each write of the file appends to.
 //!
 //! An undo file starts with a header (`HXUNDO`, a version byte and the time of the root
-//! revision) followed by records, each a little-endian `u32` length, a kind byte and the
-//! record's payload:
-//!
-//! - a path: the file the history belongs to; the last one counts, so moving the file appends
-//!   another,
-//! - a revision: its parent, timestamp, transaction and inversion; revisions number up from 1 in
-//!   the order of their records,
-//! - a write: a revision written to the file,
-//! - a head: the revision the file holds, with the length and hash of its text. The last one
-//!   counts; each write of the file appends a write and a head.
-//!
-//! A record cut short at the end, as a crash in the middle of appending leaves it, is left out;
-//! anything else malformed rejects the file. Numbers are LEB128 varints.
+//! revision) followed by records, each a little-endian `u32` length, a kind byte and a payload:
+//! the file's path, a revision, a write of a revision, or the head revision the file holds.
 
 use std::{
     collections::BTreeSet,
@@ -88,8 +77,7 @@ pub fn header(history: &History) -> Vec<u8> {
     out
 }
 
-/// Appends a record of `path`, the file the history belongs to. Paths that are no UTF-8 cannot
-/// be recorded.
+/// Appends a record of `path`, the file the history belongs to.
 pub fn put_path(out: &mut Vec<u8>, path: &Path) -> Option<()> {
     let path = path.to_str()?;
     record(out, PATH, |out| put_str(out, path));
@@ -119,8 +107,7 @@ pub fn put_written(out: &mut Vec<u8>, head: &Head) {
     });
 }
 
-/// The records of `history` for an undo file of `path`, up to the writes made before. A whole
-/// undo file is the [`header`], these, and then [`put_written`] of the write that adds them.
+/// The records of `history` for an undo file of `path`, up to the writes made before.
 pub fn put_whole(out: &mut Vec<u8>, history: &History, path: &Path) -> Option<()> {
     put_path(out, path)?;
     put_revisions(out, history, 1);
@@ -210,9 +197,7 @@ pub fn read_path(bytes: &[u8]) -> Option<PathBuf> {
 
 impl History {
     /// Drops the oldest revisions until at most `max` are left, keeping the current one and its
-    /// ancestors so that the tree stays whole: either the root goes, when it has a single child
-    /// that takes its place, or the oldest leaf that the current revision does not descend from.
-    /// Revisions are numbered anew. Returns whether any were dropped.
+    /// ancestors. Returns whether any were dropped.
     pub fn prune(&mut self, max: usize) -> bool {
         let len = self.revisions.len();
         if len <= max {

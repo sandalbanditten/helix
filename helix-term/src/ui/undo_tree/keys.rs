@@ -114,8 +114,7 @@ const BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!(Esc)]], Action::GoBack),
 ]);
 
-/// The keys of the diff part of the panel: the panel's own. Moves through the diff are the
-/// editor's motions.
+/// The panel's own keys in the diff part of the panel, besides the editor's motions.
 const DIFF_BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!('d')]], Action::ToggleDiff),
     bind(&[&[key!('+')]], Action::Grow),
@@ -142,8 +141,7 @@ pub fn diff_lookup(sequence: &[KeyEvent]) -> Lookup {
     DIFF_BINDINGS.lookup(sequence)
 }
 
-/// The keys of the diff part of the undo tree as an infobox: the editor's motions, under their
-/// default keys, and the panel's own keys.
+/// The keys of the diff part of the undo tree as an infobox.
 pub fn diff_info() -> Info {
     let motions = [
         ("j, k", "Scroll down, up"),

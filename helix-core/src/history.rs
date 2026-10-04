@@ -27,8 +27,7 @@ pub struct State {
 ///
 /// Each revision with children also has a last child revision. When using `U` to redo a
 /// change, the last child transaction will be applied to the current state of the buffer.
-/// The last child is the newest one until undo or a jump goes through another: like in Vim,
-/// redo follows the branch visited last.
+/// Redo follows the branch visited last.
 ///
 /// The current revision is the one currently displayed in the buffer.
 ///
@@ -160,8 +159,7 @@ impl History {
         self.current == 0
     }
 
-    /// Notes that `revision` was written to the file. Writing the same revision again right
-    /// after counts as one write.
+    /// Notes that `revision` was written to the file.
     pub fn record_save(&mut self, revision: usize) {
         if self.saves.last() != Some(&revision) {
             self.saves.push(revision);
@@ -188,8 +186,7 @@ impl History {
         down_txns.chain(up_txns).reduce(|acc, tx| tx.compose(acc))
     }
 
-    /// The transactions leading from `revision` to the current revision, in the order they
-    /// apply: the steps [`changes_since`](Self::changes_since) composes.
+    /// The transactions leading from `revision` to the current revision, in the order they apply.
     pub fn transactions_since(&self, revision: usize) -> Vec<Transaction> {
         let lca = self.lowest_common_ancestor(revision, self.current);
         let up = self.path_up(revision, lca);
@@ -365,9 +362,8 @@ impl History {
         }
     }
 
-    /// The number of the write the current revision is at or after, counting from 1 (0 before
-    /// the first), and whether the current revision is that write's: no changes were made
-    /// since. A revision is after the last write of one of its ancestors.
+    /// The number of the write the current revision is at or after, counting from 1, and whether
+    /// the current revision is that write's.
     fn current_write(&self) -> (usize, bool) {
         let mut ancestors: HashSet<usize> = self.path_up(self.current, 0).into_iter().collect();
         ancestors.insert(0);
@@ -380,9 +376,7 @@ impl History {
         (number, written)
     }
 
-    /// Creates the [`Transaction`]s that go back `writes` file writes, like Vim's `:earlier
-    /// {N}f`: with changes since the last write, one write back is that write. Before the
-    /// first write is the root.
+    /// Creates the [`Transaction`]s that go back `writes` file writes.
     fn jump_writes_backward(&mut self, writes: usize) -> Vec<Transaction> {
         let (current, written) = self.current_write();
         let target = if written { current } else { current + 1 };
@@ -392,8 +386,7 @@ impl History {
         }
     }
 
-    /// Creates the [`Transaction`]s that go forward `writes` file writes, like Vim's `:later
-    /// {N}f`. After the last write is the newest revision.
+    /// Creates the [`Transaction`]s that go forward `writes` file writes.
     fn jump_writes_forward(&mut self, writes: usize) -> Vec<Transaction> {
         let target = self.current_write().0.saturating_add(writes);
         // Writes count from 1.
@@ -627,7 +620,7 @@ mod test {
         apply(state, transaction.as_slice());
     }
 
-    /// Deletes the char at `pos` as a revision of its own, like `x` in Vim.
+    /// Deletes the char at `pos` as a revision of its own.
     fn delete_char(history: &mut History, state: &mut State, pos: usize) {
         let transaction = Transaction::change(&state.doc, [(pos, pos + 1, None)].into_iter());
         history.commit_revision(&transaction, state);
@@ -808,7 +801,7 @@ mod test {
         assert_eq!("a\n", state.doc);
     }
 
-    /// Vim's `:earlier {N}f` and `:later {N}f`, across writes in two branches.
+    /// `:earlier {N}f` and `:later {N}f`, across writes in two branches.
     #[test]
     fn earlier_and_later_go_by_file_writes() {
         let mut history = History::default();

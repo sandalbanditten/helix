@@ -239,8 +239,7 @@ fn rest(_: &Application) {
     std::thread::sleep(std::time::Duration::from_millis(600));
 }
 
-/// Keys that change nothing but have the editor handle what came in meanwhile: a step without
-/// keys would wait for an event forever.
+/// Keys that change nothing but have the editor handle what came in meanwhile.
 const NOTHING: &str = "zz";
 
 #[tokio::test(flavor = "multi_thread")]

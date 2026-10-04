@@ -1,5 +1,4 @@
-//! Drawing the undo tree: a row per revision reading `[cursor][graph] number age mark change`,
-//! rows joining lanes between them, and the rail between the panel and the editor.
+//! Drawing the undo tree: a row per revision, and the rail between the panel and the editor.
 
 use std::time::SystemTime;
 
@@ -103,8 +102,7 @@ impl Columns {
         }
     }
 
-    /// The columns a row of `rows` takes to show `revision`'s change whole, the cursor mark and
-    /// the rail included.
+    /// The columns a row of `rows` takes to show `revision`'s change whole.
     pub fn width(&self, rows: &Rows, revision: usize) -> usize {
         let change = rows.snippets[revision].text().chars().count();
         // mark, graph, number, age, written mark, change, rail

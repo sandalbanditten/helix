@@ -1,5 +1,4 @@
-//! What the undo tree shows of a history: its graph and what each revision changed, made anew
-//! when the history changes.
+//! What the undo tree shows of a history: its graph and what each revision changed.
 
 use std::time::SystemTime;
 
@@ -141,8 +140,7 @@ impl Rows {
     }
 }
 
-/// How long ago `time` was, in short: `now`, `40s`, `3m`, `2h`, `5d`, then the date as `09-30`,
-/// or the year for an earlier year.
+/// How long ago `time` was, in short: `now`, `40s`, `3m`, `2h`, `5d`, then the date.
 pub fn age(time: SystemTime, now: SystemTime) -> String {
     age_in(time, now, TimeZone::system)
 }

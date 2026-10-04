@@ -330,20 +330,16 @@ Options for the [compilation buffer](./compilation.md).
 
 ### `[editor.undo]` Section
 
-Undo files keep the undo history of written files between sessions, like Vim's `undofile`. A
-file's undo file is written along with it and read when it is opened again, unless the file
-changed in between. Moving or copying files with the file tree, dired or `:move` takes their undo
-files along. Files in the temporary directory and the messages git asks for, like
-`COMMIT_EDITMSG`, get none. When another Helix writes the same file, the last write wins.
+Options for the [undo tree](./undo-tree.md) and undo files.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `persist` | Whether written files keep their undo history in undo files | `false` |
-| `dir` | The directory of the undo files, one per file, named after its path with `%` for each `/` | `undo` in the state directory, `~/.local/state/helix/undo` on Linux |
-| `max-revisions` | The most revisions an undo file keeps: the oldest are dropped when it is read. `0` keeps all | `1000` |
-| `diff` | What lines up the diff of the revision under the cursor below the [undo tree](./undo-tree.md): `"none"` shows no diff, `"builtin"` a line diff of Helix's own, and `"difftastic"` [`difft`](https://difftastic.wilfred.me.uk/), falling back to the builtin diff where it isn't installed | `"none"` |
-| `diff-height` | The rows of the undo tree's diff | `12` |
-| `float` | Whether the [undo tree](./undo-tree.md) floats over the right edge of the editor, covering what is there, rather than making room beside it | `false` |
+| `persist` | Whether to keep the undo history of written files between sessions | `false` |
+| `dir` | The directory of the undo files | `undo` in the state directory, `~/.local/state/helix/undo` on Linux |
+| `max-revisions` | The most revisions an undo file keeps, or `0` for all | `1000` |
+| `diff` | How the undo tree shows what a revision changed: `"none"` for not at all, `"builtin"` or `"difftastic"` | `"none"` |
+| `diff-height` | The height of the undo tree's diff | `12` |
+| `float` | Whether the undo tree floats over the editor rather than making room beside it | `false` |
 
 ### `[editor.diff]` Section
 

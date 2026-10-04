@@ -1,10 +1,5 @@
-//! The undo tree docked beside the editor.
-//!
-//! [`UndoTree`] is owned by the [`EditorView`](crate::ui::EditorView), which reserves its columns
-//! on the right, draws it and hands it keys while it is focused. Unfocused, it shows the history
-//! of the focused buffer. Focused, it browses it: moving through the tree takes the buffer to the
-//! revisions on the way, the diff gutter showing the changes against the revision browsing
-//! started from. `Enter` keeps the revision reached, `Esc` goes back.
+//! The undo tree docked beside the editor, owned by the [`EditorView`](crate::ui::EditorView).
+//! Focused, moving through it takes the buffer to the revisions on the way.
 
 mod diff;
 mod graph;
@@ -69,8 +64,7 @@ struct Browse {
 struct Search {
     /// The line a search is typed in.
     prompt: Option<Prompt>,
-    /// What the prompt last told its callback: the line and the event. The prompt is no layer of
-    /// the compositor, so the tree acts on what it told after handing it each key.
+    /// What the prompt last told its callback: the line and the event.
     reported: Rc<RefCell<Option<(String, PromptEvent)>>>,
     /// The revision the cursor was on when the search was typed.
     origin: Option<usize>,
@@ -127,8 +121,7 @@ impl UndoTree {
         }
     }
 
-    /// Focuses the tree on the focused buffer's history, or gives focus back to the editor,
-    /// keeping the revision the buffer is at.
+    /// Focuses the tree on the focused buffer's history, or gives focus back to the editor.
     pub fn toggle_focus(&mut self, editor: &mut Editor) {
         if self.is_focused() {
             self.unfocus(editor);
@@ -181,8 +174,7 @@ impl UndoTree {
         }
     }
 
-    /// Makes the rows those of the shown buffer's history as it is. Returns the revision the
-    /// buffer is at.
+    /// Makes the rows those of the shown buffer's history. Returns the revision the buffer is at.
     fn refresh(&mut self, editor: &mut Editor) -> Option<usize> {
         let (_, doc_id) = self.target(editor)?;
         let doc = editor.document_mut(doc_id)?;
@@ -297,8 +289,7 @@ impl UndoTree {
         (area.clip_bottom(diff.height), Some(diff))
     }
 
-    /// Draws the diff of `current`, the revision under the cursor, asking for it first if it
-    /// hasn't been.
+    /// Draws the diff of `current`, the revision under the cursor.
     fn render_diff(
         &mut self,
         area: Rect,
@@ -369,10 +360,8 @@ impl UndoTree {
         );
     }
 
-    /// Runs the editor's command `name`, `count` times, if the panel has the keys and the command
-    /// is one of the panel's: moving between the views moves between the tree and the diff
-    /// part of the panel, and in the diff part the editor's motions move through the diff.
-    /// Returns whether it ran.
+    /// Runs the editor's command `name`, `count` times, if the panel has the keys and handles the
+    /// command. Returns whether it ran.
     pub fn run_editor_command(&mut self, name: &str, count: usize, editor: &Editor) -> bool {
         if !self.is_focused() {
             return false;
@@ -417,8 +406,7 @@ impl UndoTree {
         }
     }
 
-    /// Handles `key` while the tree is focused. A key it does not bind is ignored, for the
-    /// editor to handle.
+    /// Handles `key` while the tree is focused, ignoring keys it does not bind.
     pub fn handle_key(&mut self, key: KeyEvent, cx: &mut Context) -> EventResult {
         cx.editor.autoinfo = None;
         if self.search.prompt.is_some() {
@@ -601,8 +589,8 @@ impl UndoTree {
         view.ensure_cursor_in_view(doc, scrolloff);
     }
 
-    /// The next revision below (`down`) or above `from` whose changes match the search, and
-    /// whether the search wrapped around to find it, which it does if `wrap`.
+    /// The next revision below (`down`) or above `from` whose changes match the search, and whether
+    /// the search wrapped around to find it.
     fn find(&self, from: usize, down: bool, wrap: bool) -> Option<(usize, bool)> {
         let rows = self.rows.as_ref()?;
         let matches = self.search.matches.iter().copied();
@@ -627,9 +615,7 @@ impl UndoTree {
         }
     }
 
-    /// The next revision below (`down`) or above `current` whose changes match the last search,
-    /// the editor's or the tree's, telling as the editor's `n` and `N` do when it wrapped around
-    /// or there is none.
+    /// The next revision below (`down`) or above `current` whose changes match the last search.
     fn find_next(&mut self, current: usize, down: bool, editor: &mut Editor) -> Option<usize> {
         let register = editor.registers.last_search_register;
         let query = editor.registers.first(register, editor)?.into_owned();
@@ -683,10 +669,7 @@ impl UndoTree {
             .collect()
     }
 
-    /// Hands `event` to the line of the search, then follows what it told: like the editor's
-    /// search, the buffer goes to the first match below where the search started as the query is
-    /// typed, and back there while it matches nothing; `Enter` keeps the search for `n` and `N`,
-    /// `Esc` goes back.
+    /// Hands `event` to the line of the search, then goes to the first match as the query is typed.
     fn handle_search(&mut self, event: &Event, cx: &mut Context) {
         let Some(prompt) = &mut self.search.prompt else {
             return;
@@ -712,9 +695,8 @@ impl UndoTree {
         }
     }
 
-    /// Takes the buffer to the first revision below `origin` whose changes match `query`, or
-    /// back to `origin` while none does or `query` is empty or no regex. A query that is no
-    /// regex when it is `entered` says why.
+    /// Takes the buffer to the first revision below `origin` whose changes match `query`, or back to
+    /// `origin` while none does.
     fn search_from(&mut self, origin: usize, query: &str, entered: bool, cx: &mut Context) {
         let regex = self.regex(query, cx.editor);
         let found = match regex {
@@ -740,8 +722,7 @@ impl UndoTree {
         self.browse_to(target, cx.editor);
     }
 
-    /// Handles a mouse event over the panel: a click browses to the revision of its row, the
-    /// wheel scrolls. Returns `None` for events elsewhere.
+    /// Handles a mouse event over the panel. Returns `None` for events elsewhere.
     pub fn handle_mouse(&mut self, event: &MouseEvent, editor: &mut Editor) -> Option<EventResult> {
         let area = self.area?;
         let inside = (area.left()..area.right()).contains(&event.column)

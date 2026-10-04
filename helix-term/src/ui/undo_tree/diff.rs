@@ -1,6 +1,5 @@
-//! The diff below the undo tree: what the revision under the cursor changed, inline and colored
-//! like the diff view, lined up by `difft` or by Helix's own line diff. It is worked out in the
-//! background once the cursor rests.
+//! The diff below the undo tree: what the revision under the cursor changed, worked out in the
+//! background.
 
 use std::time::Duration;
 
@@ -239,8 +238,7 @@ impl DiffPane {
         }
     }
 
-    /// Draws the diff in `area`, under a row naming the revisions it compares in `header`'s
-    /// style, its lines cut at the edge. Scrolling glides.
+    /// Draws the diff in `area`, under a row naming the revisions it compares.
     pub fn render(
         &mut self,
         area: Rect,

@@ -9,8 +9,8 @@ use helix_view::{doc, editor::UndoConfig, undo_file};
 
 use super::*;
 
-/// A project directory with a file holding `text`, and a directory for undo files. Both are
-/// under Cargo's target directory: files in the temporary directory get no undo files.
+/// A project directory with a file holding `text`, and a directory for undo files, outside the
+/// temporary directory.
 struct Project {
     _dir: tempfile::TempDir,
     file: PathBuf,

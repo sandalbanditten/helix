@@ -1,10 +1,5 @@
-//! The undo history as a graph like `git log --graph` draws, the newest revision on top.
-//!
-//! Each revision is a row with a node in a lane, `│` lines going down from it to its parent.
-//! Where revisions share a parent, the lanes of the later ones close into the earliest one's
-//! on a row of their own above the parent: `├─┘`, `├─┴─┘`, with `┼` where another lane passes.
-//! A revision without children takes the first free lane, so the leftmost lane leads from the
-//! newest revision down to the root.
+//! The undo history as a graph, the newest revision on top. Each revision is a row with a node in
+//! a lane, and the lanes of revisions sharing a parent join above it: `├─┘`.
 
 /// The glyph of a node in a graph; drawing it can choose another.
 pub const NODE: char = '○';
