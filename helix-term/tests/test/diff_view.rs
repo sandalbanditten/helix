@@ -868,38 +868,45 @@ async fn measure_diff_view() -> anyhow::Result<()> {
         let parse = start.elapsed();
         drop(loader);
 
-        // Typed beforehand: each key draws the big buffer anew.
-        session.keys(":diff").await?;
-        session.send("<ret>")?;
-        let (open, busy) = time_until(&mut session, "the panes", |app| panes(app).is_some()).await;
-        let [(_, old_doc), _] = panes(&session.app).unwrap();
-        assert_eq!(
-            doc!(session.app.editor, &old_doc).syntax().is_some(),
-            parsed,
-            "parsed like the buffer"
-        );
         eprintln!(
-            "{lines} lines, {} hunks: builtin diff {align:?}, a parse {parse:?}{}; \
-             :diff shown after {open:?}, the editor busy {busy:?} at most",
+            "{lines} lines, {} hunks: builtin diff {align:?}, a parse {parse:?}{}",
             alignment.hunks().len(),
             if parsed { "" } else { " (timed out)" },
         );
+        for wrap in [false, true] {
+            let label = if wrap { "wrapped" } else { "unwrapped" };
+            session
+                .keys(&format!(":set soft-wrap.enable {wrap}<ret>"))
+                .await?;
+            // Typed beforehand: each key draws the big buffer anew.
+            session.keys(":diff").await?;
+            session.send("<ret>")?;
+            let (open, busy) =
+                time_until(&mut session, "the panes", |app| panes(app).is_some()).await;
+            let [(_, old_doc), _] = panes(&session.app).unwrap();
+            assert_eq!(
+                doc!(session.app.editor, &old_doc).syntax().is_some(),
+                parsed,
+                "parsed like the buffer"
+            );
 
-        // Scrolling a line a frame, the diff against the buffer beside itself.
-        let scroll = "<C-e>".repeat(FRAMES as usize);
-        let start = Instant::now();
-        session.keys(&scroll).await?;
-        let diff = start.elapsed();
-        session.keys(":q<ret>:vsplit<ret>").await?;
-        let start = Instant::now();
-        session.keys(&scroll).await?;
-        let plain = start.elapsed();
-        eprintln!(
-            "{lines} lines: a frame scrolling the diff {:?}, a split {:?}",
-            diff / FRAMES,
-            plain / FRAMES,
-        );
-        session.keys("<C-w>o").await?;
+            // Scrolling a row a frame, the diff against the buffer beside itself.
+            let scroll = "zj".repeat(FRAMES as usize);
+            let start = Instant::now();
+            session.keys(&scroll).await?;
+            let diff = start.elapsed();
+            session.keys(":q<ret>:vsplit<ret>").await?;
+            let start = Instant::now();
+            session.keys(&scroll).await?;
+            let plain = start.elapsed();
+            eprintln!(
+                "{lines} lines, {label}: :diff shown after {open:?}, the editor busy {busy:?} at \
+                 most; a frame scrolling the diff {:?}, a split {:?}",
+                diff / FRAMES,
+                plain / FRAMES,
+            );
+            session.keys("<C-w>o").await?;
+        }
     }
 
     let many = helix_stdx::path::canonicalize(dir.path().join("many"));

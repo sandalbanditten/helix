@@ -708,7 +708,8 @@ text to conceal and its symbols come from the language's `conceals.scm` query (s
 [Adding conceal queries](./guides/conceal.md)); `hx --health` lists the languages that have one.
 
 Only the cursors of the focused view reveal concealed text. A selection that starts or ends inside
-concealed text reveals it too, and nothing is concealed while jump labels are shown. Moving the
+concealed text reveals it too, and nothing is concealed while jump labels are shown, nor in the
+panes of the [diff view](./diff-view.md). Moving the
 cursor up or down keeps to the columns as they are shown.
 
 | Key | Description | Default |

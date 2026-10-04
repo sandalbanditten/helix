@@ -7,11 +7,17 @@ text that changed within a line brighter. Gray filler rows face the lines the ot
 so lines that correspond sit on the same row. Both sides are highlighted by their syntax and shown
 whole, unchanged code included.
 
-The two panes cover the editor and scroll together, line by line, like Vim's `scrollbind`; each
+The two panes cover the editor and scroll together, row by row, like Vim's `scrollbind`; each
 keeps its own horizontal scroll. Moving the cursor in one pane moves the other's to the same row,
-so switching panes with `Ctrl-w w` keeps your place. The panes are read-only and don't wrap. The
-filler rows are not part of the text: line numbers, relative ones included, count only real lines.
-`:q` in either pane closes both and brings back the layout from before.
+so switching panes with `Ctrl-w w` keeps your place. The panes are read-only, and show their text
+as it is, without [concealing](./editor.md#editorconceal-section) any of it. The filler rows are
+not part of the text: line numbers, relative ones included, count only real lines. `:q` in either
+pane closes both and brings back the layout from before.
+
+The panes wrap long lines when [soft wrap](./editor.md#editorsoft-wrap-section) is on for their
+language, like any buffer; `:set soft-wrap.enable true` turns it on for a diff shown. A row is then
+as tall as the taller of its two lines, and the shorter one gets rows in its own color below it,
+so the lines after them still face each other.
 
 ## Opening a diff
 
