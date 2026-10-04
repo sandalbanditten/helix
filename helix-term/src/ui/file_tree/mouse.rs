@@ -1,6 +1,4 @@
 //! The mouse in the file tree: clicking rows, the wheel, and the rail between tree and editor.
-//! Dragging the rail's thumb scrolls, pressing its track pages, and dragging it sideways resizes
-//! the tree. The first move of a drag decides which of the two it is.
 
 use helix_view::{
     editor::{Action as OpenAction, FileTreeSide},
@@ -48,8 +46,7 @@ impl Gesture {
 }
 
 impl FileTree {
-    /// Handles a mouse event over the tree, or one of a drag that started on its rail. `None`
-    /// leaves the event to the editor.
+    /// Handles a mouse event over the tree. `None` leaves the event to the editor.
     pub fn handle_mouse(&mut self, event: &MouseEvent, editor: &mut Editor) -> Option<EventResult> {
         let area = self.area?;
         let MouseEvent {

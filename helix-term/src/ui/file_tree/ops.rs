@@ -1,5 +1,4 @@
-//! The file operations of the tree, on absolute paths. They go through the editor, so language
-//! servers hear about them and open buffers follow them.
+//! The file operations of the tree, on absolute paths.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -23,8 +22,8 @@ pub fn open(editor: &mut Editor, path: &Path, action: Action) -> Result<()> {
     })
 }
 
-/// Moves the entry at `from` to `to`, creating missing directories on the way, and returns where
-/// it ended up. With `into_directory`, moving onto a directory moves into it, like `:move`.
+/// Moves the entry at `from` to `to`, or into `to` if `into_directory`, and returns where it
+/// ended up.
 pub fn rename(
     editor: &mut Editor,
     from: &Path,
@@ -57,12 +56,8 @@ pub fn create(editor: &mut Editor, path: &Path, directory: bool) -> Result<()> {
     Ok(())
 }
 
-/// Copies each `from` to its new path `to` like `cp -rp` off the main thread, one after another
-/// and creating missing directories on the way, until one fails; what that one had copied is
-/// removed again. Language servers hear about each copy before and after it. `then` gets the
-/// number of copies made and the failure of the next one, if any, on the main thread.
-///
-/// Commands that close buffers or quit wait for the copies, and for `then`.
+/// Copies each `from` to its new path `to` in the background until one fails. `then` gets the
+/// number of copies made and the failure, if any, on the main thread.
 pub fn copy_in_background(
     editor: &mut Editor,
     copies: Vec<(PathBuf, PathBuf)>,
@@ -112,8 +107,7 @@ pub fn copy_in_background(
     .wait_before_exiting()
 }
 
-/// A name for a new entry like `name`: `name` itself unless `taken`, else the first free one of
-/// `stem-1.ext`, `stem-2.ext` and so on. A directory's name has no extension.
+/// A name for a new entry like `name`: `name` itself unless `taken`, else one like `stem-1.ext`.
 pub fn free_name(name: &OsStr, is_dir: bool, taken: impl Fn(&OsStr) -> bool) -> OsString {
     if !taken(name) {
         return name.to_owned();
@@ -138,8 +132,7 @@ pub fn free_name(name: &OsStr, is_dir: bool, taken: impl Fn(&OsStr) -> bool) -> 
         .expect("some name is free")
 }
 
-/// Deletes the entry at `path` for good and closes the buffers below it. Refuses while one of
-/// them has unsaved changes.
+/// Deletes the entry at `path` and closes the buffers below it, unless one has unsaved changes.
 pub fn delete(editor: &mut Editor, path: &Path) -> Result<()> {
     let below: Vec<_> = editor
         .documents()

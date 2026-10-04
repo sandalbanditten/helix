@@ -359,18 +359,18 @@ These scopes are used for theming the editor interface:
 | `ui.virtual.conceal`              | Concealed text (see the [`editor.conceal` config][editor-section])                             |
 | `ui.menu`                         | Code and command completion menus                                                              |
 | `ui.menu.selected`                | Selected autocomplete item                                                                     |
-| `ui.menu.scroll`                  | `fg` sets thumb color, `bg` sets track color of scrollbar; the file tree uses `fg` for its thumb |
-| `ui.file-tree`                    | The [file tree][file-tree-section], falling back to `ui.background` and `ui.text`              |
-| `ui.file-tree.selected`           | The file tree's cursor row, bold unless set                                                    |
-| `ui.file-tree.active`             | The file tree's row of the focused buffer's file, falling back to `ui.bufferline.active`       |
+| `ui.menu.scroll`                  | `fg` sets thumb color, `bg` sets track color of scrollbar                                      |
+| `ui.file-tree`                    | The [file tree](./file-tree.md)                                                                |
+| `ui.file-tree.selected`           | The file tree's cursor row                                                                     |
+| `ui.file-tree.active`             | The file tree's row of the current file                                                        |
 | `ui.file-tree.pinned`             | Directories pinned at the top of the file tree while scrolling                                 |
-| `ui.file-tree.guide`              | The file tree's guides and directory marks, falling back to `ui.virtual.indent-guide`          |
-| `ui.file-tree.directory`          | Directory names in the file tree without `ls-colors`, falling back to `ui.text.directory`      |
-| `ui.file-tree.buffer`             | The `*` of files open in a buffer, falling back to `ui.file-tree.guide`                        |
-| `ui.file-tree.buffer.focused`     | The `*` of the focused buffer's file, falling back to `info`                                   |
-| `ui.file-tree.unsaved`            | The `+` of files with unsaved changes, falling back to `info`                                  |
-| `ui.file-tree.error`              | Unreadable directories and broken links in the file tree, falling back to `error`              |
-| `ui.file-tree.match`              | Characters matching the file tree's search, falling back to bold `special`                     |
+| `ui.file-tree.guide`              | The file tree's guides and directory marks                                                     |
+| `ui.file-tree.directory`          | Directory names in the file tree                                                               |
+| `ui.file-tree.buffer`             | The `*` of files open in a buffer                                                              |
+| `ui.file-tree.buffer.focused`     | The `*` of the current file                                                                    |
+| `ui.file-tree.unsaved`            | The `+` of files with unsaved changes                                                          |
+| `ui.file-tree.error`              | Unreadable directories and broken links in the file tree                                       |
+| `ui.file-tree.match`              | Characters matching the file tree's search                                                     |
 | `ui.undo-tree`                    | The [undo tree](./undo-tree.md), falling back to `ui.file-tree`                                |
 | `ui.undo-tree.selected`           | The undo tree's cursor row, falling back to `ui.file-tree.selected`                            |
 | `ui.undo-tree.guide`              | The undo tree's lanes, falling back to `ui.file-tree.guide`                                    |
@@ -423,6 +423,5 @@ These scopes are used for theming the editor interface:
 | `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text`; the foreground colors the [`filler-character`](./editor.md#editordiff-section), defaulting to `ui.virtual.indent-guide`'s |
 
 [editor-section]: ./configuration.md#editor-section
-[file-tree-section]: ./editor.md#editorfile-tree-section
 [dired-section]: ./editor.md#editordired-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

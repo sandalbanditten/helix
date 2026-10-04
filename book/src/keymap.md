@@ -300,8 +300,8 @@ This layer is a kludge of mappings, mostly pickers.
 | -----   | -----------                                                             | -------                                    |
 | `f`     | Open file picker at LSP workspace root                                  | `file_picker`                              |
 | `F`     | Open file picker at current working directory                           | `file_picker_in_current_directory`         |
-| `e`     | Focus/unfocus the [file tree](#file-tree), or the [diff tree](./diff-view.md#diffs-of-many-files) | `focus_file_tree`                          |
-| `E`     | Toggle the [file tree](#file-tree), or the [diff tree](./diff-view.md#diffs-of-many-files)        | `toggle_file_tree`                         |
+| `e`     | Focus/unfocus the [file tree](./file-tree.md), or the [diff tree](./diff-view.md#diffs-of-many-files) | `focus_file_tree`                          |
+| `E`     | Toggle the [file tree](./file-tree.md), or the [diff tree](./diff-view.md#diffs-of-many-files)        | `toggle_file_tree`                         |
 | `u`     | Focus/unfocus the [undo tree](./undo-tree.md)                           | `focus_undo_tree`                          |
 | `U`     | Toggle the [undo tree](./undo-tree.md)                                  | `toggle_undo_tree`                         |
 | `.`     | Open file explorer at current buffer's directory                        | `file_explorer_in_current_buffer_directory`|
@@ -500,14 +500,13 @@ See the documentation page on [pickers](./pickers.md) for more info.
 
 ## File tree
 
-Keys to use within the [file tree](./editor.md#editorfile-tree-section) while it is focused
-(`Space e`). Remapping currently not supported. Any other key returns focus to the editor and runs
-there.
+Keys to use within the [file tree](./file-tree.md) while it is focused. Remapping currently not
+supported. Any other key returns focus to the editor.
 
 | Key                  | Description |
 | -----                | ----------- |
-| `j`, `Down`          | Move down; from the last row to the first |
-| `k`, `Up`            | Move up; from the first row to the last |
+| `j`, `Down`          | Move down |
+| `k`, `Up`            | Move up |
 | `l`, `Right`         | Expand directory |
 | `h`, `Left`          | Collapse directory |
 | `Ctrl-d`, `Ctrl-u`   | Move half a page down, up |
@@ -517,36 +516,26 @@ there.
 | `zz`, `zc`           | Align the cursor row to the center |
 | `zt`, `zb`           | Align the cursor row to the top, bottom |
 | `Enter`              | Open file, or expand/collapse directory |
-| `Ctrl-s`, `Ctrl-v`   | Open file in a horizontal, vertical split |
-| `o`                  | Open in the default application |
-| `r`                  | Rename, in the row |
-| `R`                  | Move to a path in the workspace, in the command line |
-| `Ctrl-r`             | Move to a full path, in the command line |
-| `a`                  | New file, in a row of its directory (with a trailing `/` a directory) |
-| `A`                  | New directory, in a row of its directory |
-| `d`                  | Delete for good, after asking |
-| `y`                  | Copy, putting its path relative to the root in the clipboard |
-| `x`                  | Cut, putting its path relative to the root in the clipboard |
-| `p`                  | Paste, in a row of its directory |
-| `e`                  | Edit directory in [dired](./editor.md#editordired-section) |
-| `E`                  | Edit tree in [dired](./editor.md#editordired-section) |
+| `Ctrl-s`, `Ctrl-v`   | Open file horizontally, vertically |
+| `o`                  | Open with the default application |
+| `r`                  | Rename |
+| `R`                  | Move within the workspace |
+| `Ctrl-r`             | Move to any path |
+| `a`                  | New file, or directory with a trailing `/` |
+| `A`                  | New directory |
+| `d`                  | Delete |
+| `y`                  | Copy |
+| `x`                  | Cut |
+| `p`                  | Paste |
+| `e`                  | Edit directory in [dired](./dired.md) |
+| `E`                  | Edit tree in dired |
 | `/`                  | Search for a file |
 | `n`, `N`             | Go to the next, previous match |
-| `+`, `-`             | Widen, narrow the file tree |
+| `+`, `-`             | Widen, narrow the tree |
 | `=`                  | Fit the width to the widest row |
 | `\|`                 | Toggle the widest and narrowest width |
 | `?`                  | Show these keys |
 | `Escape`             | Return focus to the editor |
-
-The search, typed in the command line, moves the cursor to the first file after it, in the order
-of the tree, whose path matches like in the [file picker](./pickers.md) as you type, and highlights
-every matching file in view; `Enter` keeps the cursor there and `Escape` goes back. New files are created in the directory under the cursor, or in the one holding the file under
-it, and open in a buffer. Renaming and moving keep open buffers on their files.
-
-Pasting goes in the same directory as a new file. Its row holds a free name to edit: the entry's
-own, or one like `file-1.rs` when that is taken, and `Enter` pastes. A copied entry is copied like
-`cp -rp` does, directories with everything in them, in the background, and can be pasted again; a
-cut one is moved, once.
 
 ## Prompt
 

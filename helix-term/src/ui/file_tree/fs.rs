@@ -33,7 +33,6 @@ pub fn list_all(root: &Path, dirs: Vec<PathBuf>, options: ListOptions) -> Vec<(P
 }
 
 /// Lists the directory `dir` in tree order, probing each subdirectory for a single-child run.
-/// VCS directories are left out, links are not followed.
 pub fn list(dir: &Path, options: ListOptions) -> Listing {
     let kept = not_ignored(dir);
     let mut entries: Vec<_> = fs::read_dir(dir)
@@ -65,9 +64,7 @@ pub fn list(dir: &Path, options: ListOptions) -> Listing {
     Some(entries)
 }
 
-/// The names of the entries of `dir` that git does not ignore, by the rules the file picker
-/// follows (`.gitignore` files, `.git/info/exclude` and the global excludes). Outside of a
-/// repository that is every entry.
+/// The names of the entries of `dir` that git does not ignore.
 pub(crate) fn not_ignored(dir: &Path) -> HashSet<OsString> {
     ignore::WalkBuilder::new(dir)
         .max_depth(Some(1))

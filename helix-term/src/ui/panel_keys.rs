@@ -1,5 +1,4 @@
-//! The keys of the panels docked beside the editor. One table of a panel drives both the key
-//! handling and the `?` help, so the two cannot disagree.
+//! The keys of the panels docked beside the editor, for both key handling and the `?` help.
 
 use helix_view::{info::Info, input::KeyEvent};
 

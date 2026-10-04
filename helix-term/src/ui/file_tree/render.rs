@@ -1,7 +1,4 @@
-//! Drawing the panel: rows shaped like `eza --tree`, and the rail between panel and editor.
-//!
-//! A row reads `[git][cursor][ancestor lanes][branch][tip][ icon ][label]…[unsaved]`, with the
-//! unsaved mark in the last column so it stays visible when the label is cut short.
+//! Drawing the panel: its rows, and the rail between panel and editor.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -26,8 +23,7 @@ use super::{
 };
 use crate::ui::dock;
 
-/// The lines added and removed under an entry, as the diff tree shows them after its label:
-/// ` +12 -3`, leaving out a count of none.
+/// The lines added and removed under an entry, shown after its label like ` +12 -3`.
 pub fn stats_text(stats: Stats) -> (String, String) {
     let part = |sign, count| {
         if count == 0 {

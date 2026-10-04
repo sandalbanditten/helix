@@ -25,9 +25,7 @@ pub fn entry_cmp(sort: FileTreeSort, a: (&str, Group), b: (&str, Group)) -> Orde
     group.then_with(|| natural_cmp(a.0, b.0))
 }
 
-/// Orders two workspace-relative paths the way the tree lists them, where `a_is_dir` and
-/// `b_is_dir` tell whether the last component is a directory. An ancestor comes before its
-/// descendants.
+/// Orders two workspace-relative paths the way the tree lists them.
 pub fn path_cmp(
     sort: FileTreeSort,
     a: &Path,
@@ -67,9 +65,8 @@ fn component_name(component: Component<'_>) -> std::borrow::Cow<'_, str> {
     component.as_os_str().to_string_lossy()
 }
 
-/// Compares names like `eza` sorts them: ignoring case, with runs of digits compared by their
-/// value, so `file2` comes before `file10`. Equal values put the shorter run first (`2` before
-/// `02`), and names that still tie are ordered by their bytes.
+/// Compares names ignoring case, with runs of digits compared by their value, so `file2` comes
+/// before `file10`.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     natural_cmp_folded(a, b).then_with(|| a.cmp(b))
 }

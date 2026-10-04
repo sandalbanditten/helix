@@ -286,38 +286,18 @@ Note that the ignore files consulted by the file explorer when `ignore` is set t
 
 ### `[editor.file-tree]` Section
 
-The file tree lists the workspace, the current working directory, beside the editor, drawn like
-`eza --tree`. Each row can carry a git mark on the left, a `*` when the file is open in a buffer
-(in another color for the focused buffer) and a `+` on the right when the file, or a file in the
-directory, has unsaved changes. The tree runs from the top of the screen down to the statusline,
-which keeps the full width.
-
-`Space e` focuses the tree, putting its cursor on the current file, and gives the editor its focus
-back; `Space E` switches between always showing the tree and showing it only while it is focused.
-While the tree is focused it takes the keys listed in the [keymap](./keymap.md#file-tree); any other
-key gives the editor its focus back and runs there.
-
-The tree follows the working directory, changes made on disk and the git status. A directory's
-git mark is the one its changed files share, or modified where they differ; a conflict below
-always shows. The tree is fitted to its widest row when first shown; `=` fits it again and
-`+`/`-` widen and narrow it. With [`mouse`](#editor-section) on, clicking a file opens it,
-clicking a directory expands or collapses it, the wheel scrolls, and the rail between tree and
-editor scrolls, pages and, dragged sideways, resizes the tree. The search (`/`) goes through the
-files the file picker lists, following the [`[editor.file-picker]`](#editorfile-picker-section)
-settings.
+Options for the [file tree](./file-tree.md).
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `start` | When the tree is shown at startup: `"never"`, `"always"`, or `"multiple"` when two or more files are opened. `hx <dir>` always shows it | `"never"` |
-| `side` | The side of the editor the tree docks on: `"left"` or `"right"` | `"left"` |
-| `icons` | Whether entries show the icons `eza` shows, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
-| `guides` | Whether tree guides are drawn | `true` |
-| `expanders` | The marks of collapsed and expanded directories: `true` for `▸` and `▾`, `false` for none, or two characters like `["+", "-"]` | `true` |
-| `flatten-dirs` | Whether a run of single-child directories is shown as one row, like `src/main/java` | `true` |
-| `sort` | `"directories-first"`, or `"alphabetical"` for directories among files like `eza` | `"directories-first"` |
-| `ls-colors` | Where entry colors come from: `true` reads `LS_COLORS` and then `EZA_COLORS` (with the colors of GNU `ls` when neither is set), `false` uses the theme, and a string is an `LS_COLORS` specification | `true` |
-
-The tree is styled with the `ui.file-tree` [theme scopes](./themes.md#interface).
+| `start` | When to show the tree at startup: `"never"`, `"always"`, or `"multiple"` when several files are opened | `"never"` |
+| `side` | The side of the editor to show the tree on: `"left"` or `"right"` | `"left"` |
+| `icons` | Whether to show file icons, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
+| `guides` | Whether to draw tree guides | `true` |
+| `expanders` | The marks of collapsed and expanded directories: `true` for `▸` and `▾`, `false` for none, or two strings like `["+", "-"]` | `true` |
+| `flatten-dirs` | Whether to show a chain of single-child directories as one row | `true` |
+| `sort` | `"directories-first"`, or `"alphabetical"` to sort directories among files | `"directories-first"` |
+| `ls-colors` | Where entry colors come from: `true` for the `LS_COLORS` and `EZA_COLORS` environment variables, `false` for the theme, or an `LS_COLORS` string | `true` |
 
 Example:
 

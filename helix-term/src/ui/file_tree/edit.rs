@@ -1,5 +1,4 @@
-//! Typing a name or path for a file operation: inline in a row of the tree, or in the command
-//! line like `:move`.
+//! Typing a name or path for a file operation, in a row of the tree or in the command line.
 
 use std::path::PathBuf;
 
@@ -28,8 +27,7 @@ pub enum EditKind {
     Delete { path: PathBuf, directory: bool },
     /// Searching for a file, moving the cursor to the matches while the line is typed.
     Search,
-    /// Pasting `clip` into `dir` (at `dir_path`) under the name typed in an input row; the clip
-    /// is a `directory` or not.
+    /// Pasting `clip` into `dir` (at `dir_path`) under the name typed in an input row.
     Paste {
         clip: Clip,
         dir: NodeId,

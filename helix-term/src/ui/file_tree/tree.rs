@@ -1,9 +1,5 @@
-//! The entries the file tree knows about and which directories are expanded.
-//!
-//! Directories are listed in the background and merged in with [`Tree::apply_listing`]. A
-//! collapsed directory holds nothing but its single-child run (see [`Entry::only_child`]), so a
-//! run of single-child directories can be shown as one row before it is expanded. Merging keeps
-//! the [`NodeId`] of every entry that survives, so the cursor and expansion survive refreshes.
+//! The entries the file tree knows about and which directories are expanded. Directories are
+//! listed in the background and merged in with [`Tree::apply_listing`].
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -142,7 +138,7 @@ impl Tree {
     }
 
     /// A tree of the files at `paths`, relative to the root named `root_name`, with every
-    /// directory expanded: the tree of what a diff holds rather than of a directory on disk.
+    /// directory expanded.
     pub fn from_paths<'a>(
         root_name: OsString,
         paths: impl IntoIterator<Item = &'a Path>,
@@ -434,8 +430,7 @@ impl Tree {
         }
     }
 
-    /// Asks for a new listing of the expanded directory at `path`, e.g. because an entry was
-    /// created in it. Until it arrives, [`reveal`](Self::reveal) waits for it.
+    /// Asks for a new listing of the expanded directory at `path`.
     pub fn invalidate(&mut self, path: &Path) {
         let Some(id) = self.find(path) else {
             return;
@@ -457,8 +452,7 @@ impl Tree {
         }
     }
 
-    /// Collapses the directory `id` and everything below it, forgetting all entries below it but
-    /// its single-child run.
+    /// Collapses the directory `id` and everything below it.
     pub fn collapse(&mut self, id: NodeId) {
         if id == self.root {
             return;
@@ -484,8 +478,7 @@ impl Tree {
     }
 
     /// Expands the directories leading to `path` as far as they are listed. Returns the node at
-    /// `path`, or where the search stopped: [`Reveal::Unlisted`] means the listing of that
-    /// directory has to arrive first.
+    /// `path`, or where the search stopped.
     pub fn reveal(&mut self, path: &Path) -> Reveal {
         let mut current = self.root;
         for component in path.components() {

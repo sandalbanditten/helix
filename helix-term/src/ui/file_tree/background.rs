@@ -49,9 +49,7 @@ impl Lister {
     }
 }
 
-/// Starts listing directories in the background, one request after another so that the results
-/// arrive in the order they were asked for. Like [`in_background`], the listing has a thread of
-/// its own.
+/// Starts listing directories in the background, in the order they are asked for.
 pub(super) fn spawn_lister() -> std::sync::mpsc::Sender<ListRequest> {
     let (sender, requests) = std::sync::mpsc::channel::<ListRequest>();
     let (listed, mut results) = unbounded_channel();

@@ -1,7 +1,5 @@
-//! The icons `eza` draws, so a row and an `eza` listing name a file with the same glyph.
-//!
-//! Generated from the icon table of eza v0.23.5 (`src/output/icons.rs`,
-//! <https://github.com/eza-community/eza>). The glyphs need a Nerd Font.
+//! File icons, which need a Nerd Font. Generated from the icon table of eza v0.23.5
+//! (`src/output/icons.rs`, <https://github.com/eza-community/eza>).
 
 pub const ROOT: &str = "󰙅";
 pub const UNREADABLE_DIRECTORY: &str = "󰷌";
@@ -11,8 +9,7 @@ const EXPANDED_DIRECTORY: &str = "";
 const FILE: &str = "";
 const FILE_WITHOUT_EXTENSION: &str = "󰡯";
 
-/// The icon of a directory called `name`: an open folder while expanded, whatever its name,
-/// else the directory's own icon or a closed folder.
+/// The icon of a directory called `name`: an open folder while expanded.
 pub fn directory(name: &str, expanded: bool) -> &'static str {
     if expanded {
         EXPANDED_DIRECTORY

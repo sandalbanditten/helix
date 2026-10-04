@@ -1,6 +1,4 @@
-//! Browsing a tree in a panel: the rows it shows, the cursor and the scroll position, moved by
-//! keys and the mouse. The file tree browses the files of its workspace, the diff tree the files
-//! of a diff.
+//! Browsing a tree in a panel: the rows it shows, the cursor and the scroll position.
 
 use std::path::Path;
 
@@ -139,9 +137,8 @@ impl Browser {
         self.dirty = true;
     }
 
-    /// Rebuilds `rows` with the input row `input`, keeping the cursor and the first ordinary row
-    /// on the same entries, or on their closest shown directory when they disappear from view or
-    /// from the tree.
+    /// Rebuilds `rows` with the input row `input`, keeping the cursor and the scroll position on the
+    /// same entries.
     pub fn rebuild_rows(&mut self, input: Option<InputRow>) {
         let path_of = |node| {
             self.rows
@@ -187,8 +184,7 @@ impl Browser {
         self.start = viewport::reveal(&self.rows, self.start, height, index, scrolloff);
     }
 
-    /// Lays out the rows for drawing in `area`, scrolling to what was asked to be shown. Returns
-    /// the first ordinary row to draw, which glides while scrolling.
+    /// Lays out the rows for drawing in `area`. Returns the first ordinary row to draw.
     pub fn frame(&mut self, area: Rect, editor: &mut Editor) -> usize {
         let height = area.height as usize;
         self.height = height;

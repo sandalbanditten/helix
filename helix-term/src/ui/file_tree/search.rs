@@ -1,5 +1,4 @@
-//! Finding workspace files by fuzzy matching their paths, going through them in the order the
-//! tree lists them. Queries use the file picker's syntax.
+//! Finding workspace files by fuzzy matching their paths, in the order the tree lists them.
 
 use std::path::{Path, PathBuf};
 

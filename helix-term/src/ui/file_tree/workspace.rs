@@ -1,5 +1,4 @@
-//! The file tree of one workspace root: its entries and rows, the cursor and scroll position,
-//! edits, the search and what the git status and the watcher report.
+//! The file tree of one workspace root: its entries and rows, the cursor, edits and the search.
 
 use std::{
     cell::RefCell,
@@ -227,9 +226,7 @@ impl Workspace {
         }
     }
 
-    /// Ends the query being typed. Unless it is `kept`, the cursor and the scroll position go
-    /// back to where they were; directories the search expanded collapse again, but for the
-    /// ones leading to a kept cursor.
+    /// Ends the query being typed, putting the cursor back unless it is `kept`.
     pub(super) fn finish_search(&mut self, kept: bool) {
         let Some(origin) = self.search.origin.take() else {
             return;
@@ -302,9 +299,8 @@ impl Workspace {
         Some(&self.browser.rows[index].path)
     }
 
-    /// What dired lists for the cursor's entry, and the entry to put dired's cursor on
-    /// (relative to the listing's root): with `tree` every row the tree shows, else the
-    /// directory under the cursor or the one holding the entry under it.
+    /// What dired lists for the cursor's entry, every row shown if `tree`, and the entry to put
+    /// dired's cursor on.
     pub(super) fn dired_source(&self, tree: bool) -> Option<(Source, Option<PathBuf>)> {
         let index = self.browser.rows.index_of(self.browser.cursor)?;
         let row = &self.browser.rows[index];
@@ -438,8 +434,7 @@ impl Workspace {
         Focus::Keep
     }
 
-    /// The row of the directory a new entry goes in from row `index`, expanded: the directory
-    /// under the cursor, or the one holding the entry under it.
+    /// The row of the directory a new entry goes in from row `index`, expanded.
     fn input_dir_row(&mut self, index: usize) -> usize {
         let row = &self.browser.rows[index];
         let dir_row = if self.browser.tree.node(row.node).kind == Kind::Directory {
@@ -459,9 +454,7 @@ impl Workspace {
         dir_row
     }
 
-    /// Starts naming where `clip` is pasted, in an input row of the directory a new entry would
-    /// go in. The name is free there, counting the paths being `copying` to: the entry's own
-    /// name, or one like `file-1.rs`.
+    /// Starts naming where `clip` is pasted, in an input row with a free name.
     pub(super) fn start_paste(
         &mut self,
         clip: Clip,
@@ -716,8 +709,7 @@ impl Workspace {
         self.browser.rebuild_rows(input);
     }
 
-    /// Where the input row for a new entry goes: after the directories for a file (when they
-    /// come first), else first.
+    /// Where the input row for a new entry goes among the entries of its directory.
     pub(super) fn input_row(&self) -> Option<InputRow> {
         let (dir, directory) = self.edit.as_ref()?.kind.input()?;
         if !self.browser.tree.contains(dir) {

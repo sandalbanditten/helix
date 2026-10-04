@@ -1,8 +1,4 @@
-//! The file tree docked beside the editor.
-//!
-//! [`FileTree`] is owned by the [`EditorView`], which reserves its columns, draws it and hands it
-//! keys while it is focused. Directory listings and git status are read in the background; the
-//! results come back through the job queue, which finds the tree in the compositor.
+//! The file tree docked beside the editor, owned by the [`EditorView`].
 
 mod background;
 pub(crate) mod browser;
@@ -121,8 +117,7 @@ impl FileTree {
         }
     }
 
-    /// Focuses the tree, putting the cursor on the focused buffer's file, or gives focus back
-    /// to the editor.
+    /// Focuses the tree on the current file, or gives focus back to the editor.
     pub fn toggle_focus(&mut self, editor: &Editor) {
         if self.focused {
             self.focused = false;
@@ -205,8 +200,7 @@ impl FileTree {
         }
     }
 
-    /// Lists every expanded directory again and refreshes the git status, e.g. when the
-    /// terminal gets focus back after other programs ran.
+    /// Lists every expanded directory again and refreshes the git status.
     pub fn refresh(&mut self, editor: &Editor) {
         if !self.is_presented() {
             if let Some(workspace) = &mut self.workspace {
@@ -344,8 +338,7 @@ impl FileTree {
         dock::fitted_width(widest, self.max_width)
     }
 
-    /// Handles `key` while the tree is focused. A key it does not bind is ignored, for the
-    /// editor to handle.
+    /// Handles `key` while the tree is focused, ignoring keys it does not bind.
     pub fn handle_key(&mut self, key: KeyEvent, cx: &mut Context) -> EventResult {
         cx.editor.autoinfo = None;
         if self
@@ -415,8 +408,7 @@ impl FileTree {
         self.update(cx.editor);
     }
 
-    /// Keeps the cursor's entry for pasting, to move it if `cut`, and puts its path relative to
-    /// the root in the clipboard.
+    /// Keeps the cursor's entry for pasting, to move it if `cut`.
     fn clip(&mut self, cut: bool, editor: &mut Editor) {
         let Some(workspace) = &self.workspace else {
             return;
@@ -644,8 +636,7 @@ impl FileTree {
         }
     }
 
-    /// Looks for `query` in the background. An `incremental` search moves the cursor back where
-    /// it started when nothing matches; otherwise the search reports it like the editor's.
+    /// Looks for `query` in the background, as typed if `incremental`.
     fn find(
         &mut self,
         query: String,

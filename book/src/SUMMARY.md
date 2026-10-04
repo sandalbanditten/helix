@@ -11,6 +11,8 @@
   - [Textobjects](./textobjects.md)
   - [Syntax aware motions](./syntax-aware-motions.md)
   - [Pickers](./pickers.md)
+  - [File tree](./file-tree.md)
+  - [Dired](./dired.md)
   - [Jumplist](./jumplist.md)
   - [Keymap](./keymap.md)
   - [Command line](./command-line.md)

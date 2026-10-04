@@ -1,8 +1,4 @@
-//! Entry colors from an `LS_COLORS` specification, the format GNU `ls`, `eza` and `vivid`
-//! share.
-//!
-//! Only the foreground and the modifiers that compose with the tree's row backgrounds (bold,
-//! dim, italic, underline, crossed out) are kept, so a rule can never hide the cursor row.
+//! Entry colors from an `LS_COLORS` specification. Only foregrounds and modifiers are kept.
 
 use std::collections::HashMap;
 
@@ -53,8 +49,8 @@ pub struct LsColors {
 }
 
 impl LsColors {
-    /// Reads `LS_COLORS` and then `EZA_COLORS` (or `EXA_COLORS` when that is not set), whose
-    /// rules win, like `eza` does. `None` if none is set.
+    /// Reads `LS_COLORS` and then `EZA_COLORS` (or `EXA_COLORS`), whose rules win. `None` if none
+    /// is set.
     pub fn from_environment() -> Option<Self> {
         let specs: Vec<_> = [env("LS_COLORS"), eza_environment()]
             .into_iter()
@@ -63,13 +59,12 @@ impl LsColors {
         (!specs.is_empty()).then(|| Self::parse(&specs.join(":")))
     }
 
-    /// The colors GNU `ls` uses when `LS_COLORS` is not set.
+    /// The colors used when `LS_COLORS` is not set.
     pub fn gnu() -> Self {
         Self::parse("di=01;34:ln=01;36:pi=33:so=01;35:bd=01;33:cd=01;33:ex=01;32")
     }
 
-    /// Parses a specification such as `di=1;34:*.rs=38;5;208`. Unreadable rules are skipped:
-    /// real specifications collect entries from many tools.
+    /// Parses a specification such as `di=1;34:*.rs=38;5;208`, skipping unreadable rules.
     pub fn parse(spec: &str) -> Self {
         let mut colors = Self::default();
         for rule in spec.split(':') {
@@ -117,9 +112,7 @@ impl LsColors {
         self.types.contains_key(EntryType::Executable.key())
     }
 
-    /// The style of an entry called `name`. `target` is what a link points to, used when the
-    /// specification says `ln=target`. Only regular files are matched by name, and an
-    /// executable only if there is no `ex` rule.
+    /// The style of an entry called `name`. `target` is what a link points to, for `ln=target`.
     pub fn style(
         &self,
         name: &str,
@@ -172,7 +165,7 @@ fn env(name: &str) -> Option<String> {
         .filter(|spec| !spec.trim().is_empty())
 }
 
-/// `EZA_COLORS`, or `EXA_COLORS` like `eza` falls back to, if one is set.
+/// `EZA_COLORS`, else `EXA_COLORS`, if one is set.
 pub fn eza_environment() -> Option<String> {
     env("EZA_COLORS").or_else(|| env("EXA_COLORS"))
 }

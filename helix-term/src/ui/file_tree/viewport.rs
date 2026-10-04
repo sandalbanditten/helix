@@ -1,8 +1,4 @@
-//! Which rows fit into the panel.
-//!
-//! The panel shows the rows from `start` on. Above them it pins the rows that the row at `start`
-//! hangs from (its directories, up to the root row) so the current place in the hierarchy stays
-//! legible, unless they would not all fit.
+//! Which rows fit into the panel: the rows from `start` on, below the directories they are in.
 
 use std::ops::Range;
 

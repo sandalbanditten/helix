@@ -33,8 +33,8 @@ struct RenderInfo {
 pub struct Popup<T: Component> {
     contents: T,
     position: Option<Position>,
-    /// The top left corner of the editor area when `position` was last used, to move the position
-    /// along when showing or hiding the file tree or the bufferline moves the editor area
+    /// The top left corner of the editor area when `position` was last used, to move it along with
+    /// the editor area
     editor_origin: Option<Position>,
     area: Rect,
     position_bias: Open,
@@ -110,8 +110,7 @@ impl<T: Component> Popup<T> {
         self.scroll_half_pages = self.scroll_half_pages.saturating_sub(1);
     }
 
-    /// Returns the first row to show of contents `child_height` rows tall in `height` rows,
-    /// clamping the half pages scrolled to the bottom of the contents.
+    /// Returns the first row to show of contents `child_height` rows tall in `height` rows.
     fn clamp_scroll(&mut self, child_height: u16, height: u16) -> usize {
         let max_offset = child_height.saturating_sub(height) as usize;
         let half_page_size = (height / 2) as usize;

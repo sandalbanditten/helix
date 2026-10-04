@@ -182,8 +182,7 @@ impl Rows {
         ancestors
     }
 
-    /// For each ancestor lane of row `index`, outermost first: whether it continues below the
-    /// row, i.e. whether that ancestor has later siblings.
+    /// For each ancestor lane of row `index`, outermost first: whether it continues below the row.
     pub fn lanes(&self, index: usize) -> Vec<bool> {
         let mut lanes = Vec::with_capacity(self.rows[index].depth);
         let mut current = self.rows[index].parent;
@@ -204,8 +203,7 @@ impl std::ops::Index<usize> for Rows {
     }
 }
 
-/// A file name as the tree shows it: lossily decoded, with control characters replaced so they
-/// cannot corrupt the terminal.
+/// A file name as the tree shows it, with control characters replaced.
 fn display_name(name: &OsStr) -> String {
     name.to_string_lossy()
         .chars()

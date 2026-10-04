@@ -1,5 +1,4 @@
-//! What the panels docked beside the editor share: how wide they get, the rail between a panel
-//! and the editor, and the statuslines that reach below them.
+//! What the panels docked beside the editor share: their width and the rail beside them.
 
 use std::ops::Range;
 
@@ -41,8 +40,7 @@ pub fn clamp_width(width: u16, max_width: u16) -> u16 {
     width.min(max_width).max(MIN_WIDTH)
 }
 
-/// The width `|` switches a panel `width` wide to: the widest it may get, `max_width`, and from
-/// there the narrowest. A panel not laid out yet, with no `max_width`, may get the widest of all.
+/// The width `|` switches a panel `width` wide to: `max_width`, and from there the narrowest.
 pub fn toggled_width(width: u16, max_width: u16) -> u16 {
     let max_width = if max_width == 0 { MAX_WIDTH } else { max_width };
     if width < max_width {
@@ -67,9 +65,7 @@ pub fn split(area: Rect, side: Side) -> (Rect, u16) {
     }
 }
 
-/// Draws the rail of a panel docked on `side` in `area`, with a thumb over the rows `thumb`, on
-/// the panel's `base` style. What was drawn there before, like the text under a floating panel,
-/// leaves nothing behind.
+/// Draws the rail of a panel docked on `side` in `area`, with a thumb over the rows `thumb`.
 pub fn render_rail(
     surface: &mut Surface,
     area: Rect,
@@ -97,8 +93,7 @@ pub fn render_rail(
     }
 }
 
-/// The last row of a view's `area`. Panels end above the bottom statusline, so a statusline
-/// right below one takes its columns too, and those of a panel beside that one.
+/// The last row of a view's `area`, which panels end above.
 pub fn statusline_area(area: Rect, docks: &[Rect]) -> Rect {
     let mut row = area.clip_top(area.height.saturating_sub(1));
     loop {
