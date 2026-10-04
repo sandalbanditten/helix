@@ -100,6 +100,46 @@ fn deleted_file() {
     );
 }
 
+#[test]
+fn diff_bases_of_many_files() {
+    let temp_git = empty_git_repo();
+    let (committed, deleted, new) = (
+        temp_git.path().join("committed.txt"),
+        temp_git.path().join("sub/deleted.txt"),
+        temp_git.path().join("new.txt"),
+    );
+    std::fs::create_dir(temp_git.path().join("sub")).unwrap();
+    std::fs::write(&committed, "a").unwrap();
+    std::fs::write(&deleted, "b").unwrap();
+    create_commit(temp_git.path(), true);
+    std::fs::remove_file(&deleted).unwrap();
+    std::fs::write(&new, "c").unwrap();
+
+    let files = [committed, deleted, new];
+    let mut bases = Vec::new();
+    git::for_each_diff_base(temp_git.path(), &files, true, |file, base| {
+        bases.push((file.to_path_buf(), base.ok()));
+        true
+    })
+    .unwrap();
+    assert_eq!(
+        bases,
+        [
+            (files[0].clone(), Some(b"a".to_vec())),
+            (files[1].clone(), Some(b"b".to_vec())),
+            (files[2].clone(), None),
+        ]
+    );
+
+    let mut called = 0;
+    git::for_each_diff_base(temp_git.path(), &files, true, |_, _| {
+        called += 1;
+        false
+    })
+    .unwrap();
+    assert_eq!(called, 1, "stops when asked to");
+}
+
 /// Test that `get_file_head` does not return content for a directory.
 /// This is important to correctly cover cases where a directory is removed and replaced by a file.
 /// If the contents of the directory object were returned a diff between a path and the directory children would be produced.

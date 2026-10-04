@@ -43,7 +43,7 @@ use tui::buffer::Buffer as Surface;
 
 use self::{
     run::Outcome,
-    set::{DiffSet, FileDiff, Reader, Text},
+    set::{DiffSet, Reader, Text},
     tree::DiffTree,
 };
 use crate::{
@@ -509,7 +509,7 @@ impl DiffView {
         }
         editor.clear_status();
         self.end_many();
-        spawn_stats(set.files.clone(), reader.clone(), generation);
+        spawn_stats(&set, reader.clone(), generation);
         let tree = DiffTree::new(&set, &editor.config().file_tree);
         self.files = Some(Files {
             set,
@@ -769,25 +769,23 @@ async fn parse(request: &Request, loader: Arc<Loader>) -> Parsed {
     }
 }
 
-/// Counts the lines added and removed in `files` in the background, handing them to the diff
-/// tree of the diff of many `generation` now and then.
-fn spawn_stats(files: Vec<FileDiff>, reader: Reader, generation: u64) {
+/// Counts the lines added and removed in the files of `set` in the background, handing them to
+/// the diff tree of the diff of many `generation` now and then.
+fn spawn_stats(set: &DiffSet, reader: Reader, generation: u64) {
+    let (root, files) = (set.root.clone(), set.files.clone());
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
     std::thread::spawn(move || {
         let mut batch = Vec::new();
         let mut sent = Instant::now();
-        for file in files {
-            if let Some(stats) = reader.stats(&file) {
-                batch.push((file.path, stats));
+        reader.each_stats(&root, files, |path, stats| {
+            batch.push((path, stats));
+            if sent.elapsed() < STATS_INTERVAL {
+                return true;
             }
-            if sent.elapsed() >= STATS_INTERVAL {
-                // The editor quit when nothing receives them anymore.
-                if sender.blocking_send(std::mem::take(&mut batch)).is_err() {
-                    return;
-                }
-                sent = Instant::now();
-            }
-        }
+            sent = Instant::now();
+            // The editor quit when nothing receives them anymore.
+            sender.blocking_send(std::mem::take(&mut batch)).is_ok()
+        });
         let _ = sender.blocking_send(batch);
     });
     tokio::spawn(async move {

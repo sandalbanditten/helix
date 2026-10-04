@@ -43,6 +43,30 @@ impl DiffProviderRegistry {
             })
     }
 
+    /// Calls `f` with the diff base of each of `files`, all in the repository holding `dir`, or
+    /// `None` where there is none, until it returns `false`. The repository is opened once. Runs
+    /// on the calling thread.
+    pub fn for_each_diff_base(
+        &self,
+        dir: &Path,
+        files: &[PathBuf],
+        trust_full: bool,
+        mut f: impl FnMut(&Path, Option<Vec<u8>>) -> bool,
+    ) {
+        let opened = self.providers.iter().any(|provider| {
+            provider
+                .for_each_diff_base(dir, files, trust_full, |file, base| f(file, base.ok()))
+                .is_ok()
+        });
+        if !opened {
+            for file in files {
+                if !f(file, None) {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Get the current name of the current [HEAD](https://stackoverflow.com/questions/2304087/what-is-head-in-git).
     pub fn get_current_head_name(
         &self,
@@ -159,6 +183,20 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::get_diff_base(file, trust_full),
+            Self::None => bail!("No diff support compiled in"),
+        }
+    }
+
+    fn for_each_diff_base(
+        &self,
+        dir: &Path,
+        files: &[PathBuf],
+        trust_full: bool,
+        f: impl FnMut(&Path, Result<Vec<u8>>) -> bool,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "git")]
+            Self::Git => git::for_each_diff_base(dir, files, trust_full, f),
             Self::None => bail!("No diff support compiled in"),
         }
     }

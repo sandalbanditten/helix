@@ -137,18 +137,23 @@ impl DiffSet {
             let from = from.unwrap_or_else(|| to.clone());
             paths.entry(path.to_path_buf()).or_insert((from, to, 0)).2 += 1;
         }
-        let reader = Reader {
-            providers: providers.clone(),
-            trust,
-        };
+        let froms: Vec<PathBuf> = paths.values().map(|(from, ..)| from.clone()).collect();
+        // Whether each has a committed version, which only a path reported twice keeps, for
+        // comparing with its file.
+        let mut committed = Vec::with_capacity(froms.len());
+        let mut reported = paths.values().map(|(.., reports)| *reports);
+        providers.for_each_diff_base(dir, &froms, trust, |_, base| {
+            let twice = reported.next().is_some_and(|reports| reports >= 2);
+            committed.push(base.map(|base| twice.then_some(base)));
+            true
+        });
         let mut files = Vec::new();
-        for (path, (from, to, reports)) in paths {
+        for ((path, (from, to, _)), committed) in paths.into_iter().zip(committed) {
             // New files have no committed version, deleted ones no file.
-            let committed = reader.read(&Text::Head(from.clone())).ok();
             let exists = to.is_file();
             // A change staged and then undone in the working tree is none.
-            if let (Some(committed), true, 2..) = (&committed, exists, reports) {
-                if read(&to).ok().as_ref() == Some(committed) {
+            if let (Some(Some(committed)), true) = (&committed, exists) {
+                if read(&to).ok() == decode(committed).ok() {
                     continue;
                 }
             }
@@ -197,7 +202,7 @@ impl Reader {
                     .providers
                     .get_diff_base(path, self.trust)
                     .with_context(|| format!("{} has no committed version", path.display()))?;
-                Ok(from_reader(&mut base.as_slice(), None)?.0)
+                decode(&base)
             }
             Text::Missing => Ok(Rope::new()),
         }
@@ -208,6 +213,47 @@ impl Reader {
         let (old, new) = (self.read(&file.old).ok()?, self.read(&file.new).ok()?);
         Some(builtin::stats(old.slice(..), new.slice(..)))
     }
+
+    /// Calls `f` with the lines added and removed in each of `files` whose texts can be read,
+    /// until it returns `false`. The committed versions are read in one go, from the repository
+    /// holding `root`.
+    pub fn each_stats(
+        &self,
+        root: &Path,
+        files: Vec<FileDiff>,
+        mut f: impl FnMut(PathBuf, Stats) -> bool,
+    ) {
+        let mut committed = Vec::new();
+        for file in files {
+            if let Text::Head(from) = &file.old {
+                committed.push((from.clone(), file));
+            } else if let Some(stats) = self.stats(&file) {
+                if !f(file.path, stats) {
+                    return;
+                }
+            }
+        }
+        let froms: Vec<PathBuf> = committed.iter().map(|(from, _)| from.clone()).collect();
+        let mut files = committed.into_iter().map(|(_, file)| file);
+        self.providers
+            .for_each_diff_base(root, &froms, self.trust, |_, base| {
+                let Some(file) = files.next() else {
+                    return false;
+                };
+                let old = base.and_then(|base| decode(&base).ok());
+                match (old, self.read(&file.new).ok()) {
+                    (Some(old), Some(new)) => {
+                        f(file.path, builtin::stats(old.slice(..), new.slice(..)))
+                    }
+                    _ => true,
+                }
+            });
+    }
+}
+
+/// A committed version, decoded like a buffer's text.
+fn decode(bytes: &[u8]) -> anyhow::Result<Rope> {
+    Ok(from_reader(&mut &*bytes, None)?.0)
 }
 
 /// The text of the file `path`, decoded like a buffer's.

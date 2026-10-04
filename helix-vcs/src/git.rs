@@ -53,8 +53,35 @@ pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
     let repo = open_repo(repo_dir, trust_full)
         .context("failed to open git repo")?
         .to_thread_local();
+    committed_version(&repo, &file)
+}
+
+/// Calls `f` with the diff base of each of `files`, as [`get_diff_base`] reads it, opening their
+/// repository, the one holding `dir`, once. Stops once `f` returns `false`.
+pub fn for_each_diff_base(
+    dir: &Path,
+    files: &[PathBuf],
+    trust_full: bool,
+    mut f: impl FnMut(&Path, Result<Vec<u8>>) -> bool,
+) -> Result<()> {
+    let repo = open_repo(dir, trust_full)
+        .context("failed to open git repo")?
+        .to_thread_local();
+    for file in files {
+        debug_assert!(file.is_absolute());
+        let base = realpath(file).and_then(|real| committed_version(&repo, &real));
+        if !f(file, base) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// The version of `file`, a path in the working tree of `repo` without symlinks, committed at
+/// HEAD.
+fn committed_version(repo: &Repository, file: &Path) -> Result<Vec<u8>> {
     let head = repo.head_commit()?;
-    let file_oid = find_file_in_commit(&repo, &head, &file)?;
+    let file_oid = find_file_in_commit(repo, &head, file)?;
 
     let file_object = repo.find_object(file_oid)?;
     let data = file_object.detach().data;
