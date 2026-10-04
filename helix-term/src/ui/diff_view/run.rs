@@ -96,3 +96,60 @@ async fn difftastic(path: &str, old: &Rope, new: &Rope) -> Result<Vec<u8>, Strin
     }
     Ok(output.stdout)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Times `difft` and reading its output on changes to this repository's biggest files: one
+    /// it takes long on, one it panics on. Run it with
+    /// `cargo test --release -p helix-term --lib measure_difftastic -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_difftastic() {
+        use std::time::Instant;
+
+        let show = |revision: &str| {
+            let output = std::process::Command::new("git")
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["show", revision])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git show {revision}");
+            Rope::from(String::from_utf8(output.stdout).unwrap())
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for (path, old, new) in [
+            ("helix-term/src/ui/editor.rs", "54ad394~10", "54ad394"),
+            ("helix-term/src/commands.rs", "54ad394~60", "54ad394"),
+        ] {
+            let old = show(&format!("{old}:{path}"));
+            let new = show(&format!("{new}:{path}"));
+            let start = Instant::now();
+            let json = runtime.block_on(difftastic(path, &old, &new));
+            let ran = start.elapsed();
+            let json = match json {
+                Ok(json) => json,
+                Err(err) => {
+                    let start = Instant::now();
+                    let outcome = runtime.block_on(align(DiffTool::Builtin, path.into(), old, new));
+                    eprintln!(
+                        "{path}: {err} after {ran:?}; builtin diff {:?}, {} hunks",
+                        start.elapsed(),
+                        outcome.alignment.hunks().len()
+                    );
+                    continue;
+                }
+            };
+            let start = Instant::now();
+            let alignment = difftastic::parse(&json, old.slice(..), new.slice(..)).unwrap();
+            eprintln!(
+                "{path}: {} KB, difft {ran:?}, {} KB of JSON read in {:?}, {} hunks",
+                new.len_bytes() / 1000,
+                json.len() / 1000,
+                start.elapsed(),
+                alignment.hunks().len()
+            );
+        }
+    }
+}

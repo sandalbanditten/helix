@@ -368,4 +368,54 @@ mod tests {
         assert_eq!(rows(&created), [(None, Some(0)), (None, Some(1))]);
         assert_eq!(created.fillers(Side::Old).above, 2);
     }
+
+    /// Times lining up `commands.rs`, 250 KB, with edited copies of it. Run it with
+    /// `cargo test --release -p helix-view --lib measure_builtin -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_builtin() {
+        use std::time::Instant;
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../helix-term/src/commands.rs");
+        let old = std::fs::read_to_string(path).unwrap();
+        // Lines changed, removed and inserted here and there, and every other line changed.
+        let scattered: String = old
+            .lines()
+            .enumerate()
+            .filter(|(index, _)| index % 251 != 7)
+            .map(|(index, line)| match index {
+                _ if index % 97 == 3 => format!("{line} // edited\n"),
+                _ if index % 331 == 5 => format!("let inserted = {index};\n{line}\n"),
+                _ => format!("{line}\n"),
+            })
+            .collect();
+        let alternate: String = old
+            .lines()
+            .enumerate()
+            .map(|(index, line)| match index % 2 {
+                0 => format!("{} x\n", line.replace("self", "this")),
+                _ => format!("{line}\n"),
+            })
+            .collect();
+        let old = Rope::from(old);
+        for (name, new) in [
+            ("scattered edits", scattered),
+            ("every other line", alternate),
+        ] {
+            let new = Rope::from(new);
+            let start = Instant::now();
+            let alignment = align(old.slice(..), new.slice(..));
+            let aligned = start.elapsed();
+            let start = Instant::now();
+            let stats = stats(old.slice(..), new.slice(..));
+            eprintln!(
+                "{name}: {} KB, {} hunks, +{} -{}: align {aligned:?}, stats {:?}",
+                old.len_bytes() / 1000,
+                alignment.hunks().len(),
+                stats.added,
+                stats.removed,
+                start.elapsed()
+            );
+        }
+    }
 }

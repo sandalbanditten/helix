@@ -675,4 +675,34 @@ mod tests {
         );
         assert!(tree.fitted_width(false) > narrow);
     }
+
+    /// Times building the diff tree of 2000 files and taking their stats. Run it with
+    /// `cargo test --release -p helix-term --lib measure_diff_tree -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_diff_tree() {
+        use std::time::Instant;
+
+        let paths: Vec<String> = (0..2000)
+            .map(|index| format!("dir{}/file{index}.rs", index / 50))
+            .collect();
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let start = Instant::now();
+        let mut tree = tree(&paths);
+        let built = start.elapsed();
+        let stats = paths.iter().map(|path| {
+            let stats = Stats {
+                added: 1,
+                removed: 1,
+            };
+            (PathBuf::from(path), stats)
+        });
+        let start = Instant::now();
+        tree.set_stats(stats);
+        let fitted = tree.fitted_width(true);
+        eprintln!(
+            "2000 files: tree built in {built:?}, stats taken and fitted to {fitted} in {:?}",
+            start.elapsed()
+        );
+    }
 }

@@ -370,4 +370,88 @@ mod tests {
         };
         assert_eq!(set.names(&file), ["src/a.rs (left)", "src/a.rs (right)"]);
     }
+
+    /// Times finding the files of diffs of many and counting their lines: 2000 files changed
+    /// since HEAD, and two directories of 10000 identical files. Run it with
+    /// `cargo test --release -p helix-term --lib measure_diff_sets -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_diff_sets() {
+        use std::time::Instant;
+
+        let git = |repo: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(args)
+                .env_remove("GIT_DIR")
+                .env("GIT_CONFIG_COUNT", "3")
+                .env("GIT_CONFIG_KEY_0", "user.email")
+                .env("GIT_CONFIG_VALUE_0", "test@helix.org")
+                .env("GIT_CONFIG_KEY_1", "user.name")
+                .env("GIT_CONFIG_VALUE_1", "helix")
+                .env("GIT_CONFIG_KEY_2", "commit.gpgsign")
+                .env("GIT_CONFIG_VALUE_2", "false")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        };
+        let text =
+            |index: usize, line: &str| format!("{}{line}\n", "let a = 1;\n".repeat(index % 40));
+        let write = |path: PathBuf, text: String| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+
+        let repo = tempfile::tempdir().unwrap();
+        let repo = helix_stdx::path::canonicalize(repo.path());
+        let file = |index: usize| repo.join(format!("dir{}/file{index}.rs", index / 50));
+        for index in 0..2000 {
+            write(file(index), text(index, "old"));
+        }
+        git(&repo, &["init"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "files"]);
+        for index in 0..2000 {
+            write(file(index), text(index, "new"));
+        }
+        let providers = DiffProviderRegistry::default();
+        let start = Instant::now();
+        let set =
+            DiffSet::of_changes(&repo, &providers, true, FileTreeSort::DirectoriesFirst).unwrap();
+        let found = start.elapsed();
+        let reader = Reader {
+            providers,
+            trust: true,
+        };
+        let start = Instant::now();
+        let mut counted = 0;
+        reader.each_stats(&set.root, set.files.clone(), |_, _| {
+            counted += 1;
+            true
+        });
+        eprintln!(
+            "{} files changed since HEAD: found in {found:?}, {counted} counted in {:?}",
+            set.files.len(),
+            start.elapsed()
+        );
+
+        let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        for dir in [old.path(), new.path()] {
+            for index in 0..10_000 {
+                write(
+                    dir.join(format!("dir{}/file{index}.rs", index / 100)),
+                    text(index, "same"),
+                );
+            }
+        }
+        let start = Instant::now();
+        let set = DiffSet::of_directories(old.path(), new.path(), FileTreeSort::DirectoriesFirst)
+            .unwrap();
+        eprintln!(
+            "10000 identical files in two directories: {} differ, found in {:?}",
+            set.files.len(),
+            start.elapsed()
+        );
+    }
 }

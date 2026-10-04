@@ -3,6 +3,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use helix_core::{diff::compare_ropes, Rope};
@@ -548,5 +549,192 @@ async fn changes_since_head_are_diffed_together() -> anyhow::Result<()> {
     let app = &session.app;
     assert_eq!(app.editor.tree.focus, origin, "the layout comes back");
     assert!(!shows(app, "new.rs +1"));
+    session.quit().await
+}
+
+/// Runs the event loop until `done` holds, in steps of a millisecond. Returns how long it took,
+/// and the longest step: how long the editor was busy at most, not taking keys.
+async fn time_until(
+    session: &mut Session,
+    what: &str,
+    done: impl Fn(&Application) -> bool,
+) -> (Duration, Duration) {
+    let (start, mut longest) = (Instant::now(), Duration::ZERO);
+    while !done(&session.app) {
+        assert!(
+            start.elapsed() < Duration::from_secs(120),
+            "timed out waiting for {what}"
+        );
+        let step = Instant::now();
+        session.run_for(Duration::from_millis(1)).await;
+        longest = longest.max(step.elapsed());
+    }
+    (start.elapsed(), longest)
+}
+
+/// `lines` lines of Rust: this crate's sources one after the other, over again if need be.
+fn rust_source(lines: usize) -> String {
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let texts: Vec<String> = files
+        .iter()
+        .map(|file| fs::read_to_string(file).unwrap())
+        .collect();
+    texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .cycle()
+        .take(lines)
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// `text` with lines changed, removed and inserted here and there.
+fn edited(text: &str) -> String {
+    text.lines()
+        .enumerate()
+        .filter(|(index, _)| index % 251 != 7)
+        .map(|(index, line)| match index {
+            _ if index % 97 == 3 => format!("{line} // edited\n"),
+            _ if index % 331 == 5 => format!("let inserted = {index};\n{line}\n"),
+            _ => format!("{line}\n"),
+        })
+        .collect()
+}
+
+/// Times opening `:diff` on big buffers, the cost a frame of the diff adds, and a diff of many
+/// files, all in one editor. Run it with `cargo test --release --features integration --test
+/// integration measure_diff_view -- --ignored --nocapture`, then `cargo build --release` for a
+/// real `hx`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement, not a check"]
+async fn measure_diff_view() -> anyhow::Result<()> {
+    use helix_core::Syntax;
+    use helix_view::diff_view::builtin;
+
+    const SIZES: [usize; 2] = [10_000, 50_000];
+    const FRAMES: u32 = 1000;
+    const FILES: usize = 2000;
+
+    // The big files, committed, and many small files, committed and changed.
+    let dir = tempfile::tempdir()?;
+    let big = |lines: usize| dir.path().join(format!("big{lines}.rs"));
+    let small = |index: usize| {
+        dir.path()
+            .join(format!("many/dir{}/file{index}.rs", index / 50))
+    };
+    let text = |index: usize, changed: bool| -> String {
+        (0..20)
+            .map(|line| {
+                if line == 10 && changed {
+                    format!("let changed = {index};\n")
+                } else {
+                    format!("let line{line} = {index};\n")
+                }
+            })
+            .collect()
+    };
+    for lines in SIZES {
+        fs::write(big(lines), rust_source(lines))?;
+    }
+    for index in 0..FILES {
+        fs::create_dir_all(small(index).parent().unwrap())?;
+        fs::write(small(index), text(index, false))?;
+    }
+    git(dir.path(), &["init"]);
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "files"]);
+    for index in 0..FILES {
+        fs::write(small(index), text(index, true))?;
+    }
+
+    let mut session = session(&big(SIZES[0]), DiffTool::Builtin)?;
+    for lines in SIZES {
+        let path = helix_stdx::path::canonicalize(big(lines));
+        session
+            .keys(&format!(":open {}<ret>", path.display()))
+            .await?;
+        let committed = fs::read_to_string(&path)?;
+        let buffer = edited(&committed);
+        set_text(&mut session.app, &buffer);
+
+        let (old, new) = (Rope::from(committed), Rope::from(buffer));
+        let start = Instant::now();
+        let alignment = builtin::align(old.slice(..), new.slice(..));
+        let align = start.elapsed();
+        let loader = session.app.editor.syn_loader.load();
+        let rust = loader.language_for_name("rust".to_owned()).unwrap();
+        let start = Instant::now();
+        let parsed = Syntax::new(old.slice(..), rust, &loader).is_ok();
+        let parse = start.elapsed();
+        drop(loader);
+
+        // Typed beforehand: each key draws the big buffer anew.
+        session.keys(":diff").await?;
+        session.send("<ret>")?;
+        let (open, busy) = time_until(&mut session, "the panes", |app| panes(app).is_some()).await;
+        let [(_, old_doc), _] = panes(&session.app).unwrap();
+        assert_eq!(
+            doc!(session.app.editor, &old_doc).syntax().is_some(),
+            parsed,
+            "parsed like the buffer"
+        );
+        eprintln!(
+            "{lines} lines, {} hunks: builtin diff {align:?}, a parse {parse:?}{}; \
+             :diff shown after {open:?}, the editor busy {busy:?} at most",
+            alignment.hunks().len(),
+            if parsed { "" } else { " (timed out)" },
+        );
+
+        // Scrolling a line a frame, the diff against the buffer beside itself.
+        let scroll = "<C-e>".repeat(FRAMES as usize);
+        let start = Instant::now();
+        session.keys(&scroll).await?;
+        let diff = start.elapsed();
+        session.keys(":q<ret>:vsplit<ret>").await?;
+        let start = Instant::now();
+        session.keys(&scroll).await?;
+        let plain = start.elapsed();
+        eprintln!(
+            "{lines} lines: a frame scrolling the diff {:?}, a split {:?}",
+            diff / FRAMES,
+            plain / FRAMES,
+        );
+        session.keys("<C-w>o").await?;
+    }
+
+    let many = helix_stdx::path::canonicalize(dir.path().join("many"));
+    session
+        .keys(&format!(":diff-changes {}", many.display()))
+        .await?;
+    session.send("<ret>")?;
+    let (shown, busy) =
+        time_until(&mut session, "the first file", |app| panes(app).is_some()).await;
+    let (counted, counting) = time_until(&mut session, "the stats", |app| {
+        shows(app, &format!("+{FILES} -{FILES}"))
+    })
+    .await;
+    eprintln!(
+        "{FILES} changed files: the first shown after {shown:?}, busy {busy:?} at most; \
+         all counted {counted:?} later, busy {counting:?} at most"
+    );
     session.quit().await
 }
