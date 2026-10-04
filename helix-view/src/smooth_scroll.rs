@@ -1,8 +1,5 @@
-//! Smooth scrolling.
-//!
-//! Views, popups and lists keep their real scroll position; what is drawn glides towards it over
-//! a fixed duration, fast at first and slowing down as it arrives. Only the drawing is animated,
-//! so commands always act on the real state.
+//! Smooth scrolling. Views, popups and lists keep their real scroll position; only what is drawn
+//! glides towards it.
 
 use std::time::Duration;
 
@@ -21,8 +18,7 @@ use crate::{
 /// Minimum time between two frames of an animation, about 120 frames per second.
 const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 
-/// The timing shared by all smooth scrolling: a movement that takes `duration` whatever its
-/// distance, and slows down towards its end.
+/// The timing of a movement, which takes `duration` and slows down towards its end.
 #[derive(Debug, Clone, Copy)]
 struct Transition {
     start: Instant,
@@ -142,7 +138,7 @@ impl SmoothOffset {
         offset
     }
 
-    /// Draws the next frame at the real offset right away, e.g. because the content was replaced.
+    /// Draws the next frame at the real offset right away.
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -288,9 +284,8 @@ struct Animation {
 enum Path {
     /// Walk this many visual rows, upwards if negative.
     Rows(isize),
-    /// Too far to lay out every row: cover `lines` document lines from the row `start_row`
-    /// (upwards if negative), counting the lines of a folded row as one, then walk `rows` visual
-    /// rows from `approach` to the target.
+    /// Cover `lines` document lines from the row `start_row`, then walk `rows` visual rows from
+    /// `approach` to the target.
     Far {
         start_row: usize,
         lines: isize,
@@ -303,8 +298,7 @@ struct SelectionAnimation {
     motion: SelectionMotion,
     /// The selection drawn when the animation started.
     from: Selection,
-    /// The real selection the animation ends with. Once the real selection changes, it is drawn
-    /// instead.
+    /// The real selection the animation ends with.
     target: Selection,
     /// The selection of the last frame and the synced rows it moved.
     stepped: Selection,
@@ -387,8 +381,7 @@ impl SmoothScroll {
         next_frame
     }
 
-    /// Takes the frame drawn last over to the text that `changes` made of it: what it showed
-    /// moves with the text, so that a scroll right after glides from there.
+    /// Maps the frame drawn last through `changes`, so that a scroll right after glides from it.
     pub(crate) fn follow_changes(&mut self, view: &View, doc: &Document, changes: &ChangeSet) {
         let Some(last) = self.last.as_ref().filter(|last| last.key.doc == doc.id()) else {
             return;

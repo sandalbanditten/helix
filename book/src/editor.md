@@ -648,22 +648,16 @@ wrap-indicator = ""  # set wrap-indicator to "" to hide it
 
 ### `[editor.smooth-scroll]` Section
 
-Animates view movements instead of redrawing the view at its new position at once: scrolling,
-`zz`/`zt`/`zb`, jumps and searches, the mouse wheel, as well as scrolling popups, menus and
-pickers. Every movement takes the same time regardless of its distance, starting fast and
-slowing down as it arrives. Moves of a single line or column, and view changes caused by edits,
-are not animated.
-
-`smooth-scroll = true` in the `[editor]` section is a shorthand for `enable = true`.
+Options for animating scrolling, jumps and searches instead of moving the view at once. Popups,
+menus and pickers scroll smoothly too.
 
 | Key | Description | Default |
 | --- | --- | --- |
 | `enable` | Whether view movements are animated | `false` |
-| `duration` | Time in milliseconds a movement takes. `0` disables the animation | `150` |
-| `hide-cursor` | Hide the cursor, selections, cursorline and cursorcolumn while a view moves | `false` |
+| `duration` | How long a movement takes, in milliseconds | `150` |
+| `hide-cursor` | Whether to hide the cursor and selections while the view moves | `false` |
 
-The animation is drawn without tearing only by terminals that support
-[synchronized output](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036).
+`smooth-scroll = true` in the `[editor]` section is shorthand for `enable = true`.
 
 Example:
 
@@ -671,7 +665,6 @@ Example:
 [editor.smooth-scroll]
 enable = true
 duration = 200
-hide-cursor = true
 ```
 
 ### `[editor.folding]` Section

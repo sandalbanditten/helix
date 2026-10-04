@@ -1405,21 +1405,19 @@ where
     }
 }
 
-/// Animates view movements: the view glides to its new position instead of being redrawn there
-/// at once.
+/// Smooth scrolling of views.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SmoothScrollConfig {
     /// Whether view movements are animated. Defaults to `false`.
     pub enable: bool,
-    /// Time in milliseconds a movement takes, regardless of its distance. `0` disables the
-    /// animation. Defaults to 150ms.
+    /// Time in milliseconds a movement takes. Defaults to 150ms.
     #[serde(
         serialize_with = "serialize_duration_millis",
         deserialize_with = "deserialize_duration_millis"
     )]
     pub duration: Duration,
-    /// Whether the cursor and its decorations are hidden while a view moves. Defaults to `false`.
+    /// Whether the cursor is hidden while a view moves. Defaults to `false`.
     pub hide_cursor: bool,
 }
 
