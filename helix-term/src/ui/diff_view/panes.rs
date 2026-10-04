@@ -346,6 +346,7 @@ mod tests {
             partner: DocumentId::default(),
             file: None,
             origin: None,
+            wrap: None,
         }
     }
 

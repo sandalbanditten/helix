@@ -174,7 +174,7 @@ impl<'a> GraphemeWithSource<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextFormat {
     pub soft_wrap: bool,
     pub tab_width: u16,

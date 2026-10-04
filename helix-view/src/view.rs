@@ -738,7 +738,7 @@ impl View {
 
         // Added last so that it lines up the rows of the diff view's panes.
         if let Some(pane) = &doc.diff_view {
-            text_annotations.add_line_annotation(Box::new(pane.filler_lines()));
+            text_annotations.add_line_annotation(Box::new(pane.filler_lines(doc.text().slice(..))));
             return text_annotations;
         }
 

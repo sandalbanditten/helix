@@ -917,5 +917,6 @@ fn pane(request: &Request, side: Side, alignment: Arc<Alignment>, partner: Docum
         partner,
         file: request.file.clone(),
         origin: request.origin,
+        wrap: None,
     }
 }
