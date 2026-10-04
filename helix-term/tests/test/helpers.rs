@@ -426,9 +426,9 @@ impl AppBuilder {
         path: P,
         pos: Option<helix_core::Position>,
     ) -> Self {
-        self.args
-            .files
-            .insert(path.into(), vec![pos.unwrap_or_default()]);
+        let path = path.into();
+        self.args.paths.push(path.clone());
+        self.args.files.insert(path, vec![pos.unwrap_or_default()]);
 
         self
     }

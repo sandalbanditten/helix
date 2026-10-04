@@ -145,9 +145,8 @@ impl Application {
         let mut show_file_tree = file_tree_start == FileTreeStart::Always;
 
         if args.diff {
-            let paths: Vec<_> = args.files.into_keys().collect();
             let editor_view = compositor.find::<ui::EditorView>().expect("just pushed");
-            ui::diff_view::open_paths(&paths, &mut editor, &mut editor_view.diff_view)?;
+            ui::diff_view::open_paths(&args.paths, &mut editor, &mut editor_view.diff_view)?;
         } else if args.load_tutor {
             let path = helix_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;

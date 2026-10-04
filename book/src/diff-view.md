@@ -23,6 +23,7 @@ filler rows are not part of the text: line numbers, relative ones included, coun
 | `hx -d <dir>` | Likewise, in `dir` |
 | `hx -d <file>` | The file against its committed version |
 | `hx -d <old> <new>` | Two files. `/dev/null` for either shows the other as created or deleted |
+| `hx -d <old> <new> <path>` | Two files as versions of the file at `path`: named after it, in its language, and `gf` opens it. An empty `path` names nothing |
 | `hx -d <old-dir> <new-dir>` | The files of two directories, paired by their paths within them. Identical files are left out, and so are the ones git ignores |
 
 The diff follows a buffer diffed with `:diff`: when the buffer or its committed version changes,
@@ -87,7 +88,8 @@ on a file shows its diff again.
 
 ## Git
 
-To make Helix git's diff tool, add this to `~/.gitconfig`:
+To make Helix git's diff tool, add this to git's config, `~/.config/git/config` or
+`~/.gitconfig`:
 
 ```ini
 [diff]
@@ -95,12 +97,17 @@ To make Helix git's diff tool, add this to `~/.gitconfig`:
 [difftool]
     prompt = false
 [difftool "hx"]
-    cmd = hx --diff "$LOCAL" "$REMOTE"
+    cmd = hx --diff \"$LOCAL\" \"$REMOTE\" \"$MERGED\"
 ```
 
-`git difftool` then shows each changed file in a Helix of its own, one after the other, and
-`git difftool -d` (`--dir-diff`) all of them in one, with the diff tree. Both take what
-`git diff` takes, like `git difftool -d HEAD~3` or `git difftool -d main...`.
+Git's config drops quotes that aren't escaped, so keep the `\"`;
+`git config --global difftool.hx.cmd 'hx --diff "$LOCAL" "$REMOTE" "$MERGED"'` writes them.
+
+`git difftool` then shows each changed file in a Helix of its own, one after the other. Git hands
+over temporary copies, and `$MERGED` names the file: the panes are named like `src/main.rs (old)`
+and `src/main.rs (new)`, and `gf` opens `src/main.rs` in the working tree. `git difftool -d`
+(`--dir-diff`) shows all of them in one Helix, with the diff tree; its `$MERGED` is empty. Both
+take what `git diff` takes, like `git difftool -d HEAD~3` or `git difftool -d main...`.
 
 ## Colors
 

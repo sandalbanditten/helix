@@ -21,6 +21,8 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
     pub config_file: Option<PathBuf>,
     pub files: IndexMap<PathBuf, Vec<Position>>,
+    /// The paths given, in order, repeated and empty ones too: what `--diff` compares.
+    pub paths: Vec<PathBuf>,
     pub working_directory: Option<PathBuf>,
 }
 
@@ -36,6 +38,12 @@ impl Args {
 
             // Before setting the working directory, resolve all the paths in args.files
             let filename = helix_stdx::path::canonicalize(filename);
+            // Like git's `$MERGED` of a directory diff, an empty path names nothing.
+            args.paths.push(if file_with_position.is_empty() {
+                PathBuf::new()
+            } else {
+                filename.clone()
+            });
 
             args.files
                 .entry(filename)

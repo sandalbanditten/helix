@@ -113,18 +113,41 @@ impl Request {
     }
 
     /// The diff of the file `old` and the file `new`, either of which may be `/dev/null`, as
-    /// when git runs a diff tool for a file added or deleted.
-    pub fn files(old: &Path, new: &Path, placeholder: Option<DocumentId>) -> anyhow::Result<Self> {
+    /// when git runs a diff tool for a file added or deleted. They are versions of the file at
+    /// `path` if given, as git's temporary files are of `$MERGED`: named after it, and `gf`
+    /// opens it.
+    pub fn files(
+        old: &Path,
+        new: &Path,
+        path: Option<&Path>,
+        placeholder: Option<DocumentId>,
+    ) -> anyhow::Result<Self> {
         let null = Path::new("/dev/null");
-        let named = if new == null { old } else { new };
-        let name = |path: &Path| get_relative_path(path).display().to_string();
+        let shown = |path: &Path| get_relative_path(path).display().to_string();
+        let new_file = (new != null).then(|| new.to_path_buf());
+        let (path, names, file) = match path {
+            Some(path) => {
+                let name = shown(path);
+                let file = Some(path.to_path_buf()).filter(|path| path.is_file());
+                (
+                    path,
+                    [format!("{name} (old)"), format!("{name} (new)")],
+                    file.or(new_file),
+                )
+            }
+            None => (
+                if new == null { old } else { new },
+                [shown(old), shown(new)],
+                new_file,
+            ),
+        };
         Ok(Self {
-            path: get_relative_path(named).into_owned(),
+            path: get_relative_path(path).into_owned(),
             old: set::read(old)?,
             new: set::read(new)?,
-            names: [name(old), name(new)],
+            names,
             buffer: None,
-            file: (new != null).then(|| new.to_path_buf()),
+            file,
             origin: None,
             placeholder,
             of_many: None,
@@ -210,12 +233,17 @@ pub enum Many {
 
 /// Opens the diff the command line asks for with `paths`: of a file against its committed
 /// version, of two files or two directories, or of the changes since HEAD below a directory, the
-/// working directory without paths.
+/// working directory without paths. A third path names what two files are versions of, as git's
+/// `$MERGED` does; an empty one, as of a directory diff, names nothing.
 pub fn open_paths(
     paths: &[PathBuf],
     editor: &mut Editor,
     view: &mut DiffView,
 ) -> anyhow::Result<()> {
+    let paths = match paths {
+        [rest @ .., last] if last.as_os_str().is_empty() => rest,
+        _ => paths,
+    };
     let many = match paths {
         [] => Many::Changes(helix_stdx::env::current_working_dir()),
         [dir] if dir.is_dir() => Many::Changes(dir.clone()),
@@ -226,14 +254,15 @@ pub fn open_paths(
             return Ok(());
         }
         [old, new] if old.is_dir() && new.is_dir() => Many::Directories(old.clone(), new.clone()),
-        [old, new] if !old.is_dir() && !new.is_dir() => {
+        [old, new] | [old, new, _] if !old.is_dir() && !new.is_dir() => {
             // The editor quits without a view, so one waits for the panes.
             let placeholder = editor.new_file(Action::VerticalSplit);
-            let request = Request::files(old, new, Some(placeholder))?;
+            let path = paths.get(2).map(PathBuf::as_path);
+            let request = Request::files(old, new, path, Some(placeholder))?;
             view.open(request, editor);
             return Ok(());
         }
-        _ => bail!("--diff takes one or two files, or directories"),
+        _ => bail!("--diff takes one or two files (and a path naming two), or directories"),
     };
     let placeholder = editor.new_file(Action::VerticalSplit);
     view.open_many(many, None, Some(placeholder), editor);

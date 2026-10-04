@@ -362,6 +362,45 @@ async fn two_files_are_diffed_from_the_command_line() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_third_path_names_the_files() -> anyhow::Result<()> {
+    // As git's difftool gives them: temporary copies, and `$MERGED`.
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("blob1"), dir.path().join("blob2"));
+    let path = dir.path().join("lib.rs");
+    fs::write(&old, "fn a() {}\n")?;
+    fs::write(&new, "fn b() {}\n")?;
+    fs::write(&path, "fn c() {}\n")?;
+    let mut session = diff_session(&[&old, &new, &path])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let app = &session.app;
+    let [(_, old_doc), (_, new_doc)] = panes(app).unwrap();
+    let (old_doc, new_doc) = (doc!(app.editor, &old_doc), doc!(app.editor, &new_doc));
+    assert!(old_doc.display_name().ends_with("lib.rs (old)"));
+    assert!(new_doc.display_name().ends_with("lib.rs (new)"));
+    assert_eq!(new_doc.language_name(), Some("rust"), "named by the path");
+    let pane = new_doc.diff_view.as_ref().unwrap();
+    assert_eq!(pane.file.as_deref(), Some(path.as_path()), "gf opens it");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_third_path_names_nothing() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old.rs"), dir.path().join("new.rs"));
+    fs::write(&old, "a\n")?;
+    fs::write(&new, "b\n")?;
+    let mut session = diff_session(&[&old, &new, Path::new("")])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let [_, (_, new_doc)] = panes(&session.app).unwrap();
+    assert!(doc!(session.app.editor, &new_doc)
+        .display_name()
+        .ends_with("new.rs"));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn added_files_are_diffed_against_nothing() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let new = dir.path().join("new.rs");
@@ -406,8 +445,9 @@ async fn diffs_take_one_path_or_two_alike() -> anyhow::Result<()> {
     fs::write(&a, "a\n")?;
     fs::write(&b, "b\n")?;
     let error = |paths: &[&Path]| diff_session(paths).err().map(|err| err.to_string());
-    let expected = Some("--diff takes one or two files, or directories".to_owned());
-    assert_eq!(error(&[&a, &b, Path::new("/dev/null")]), expected);
+    let expected =
+        Some("--diff takes one or two files (and a path naming two), or directories".to_owned());
+    assert_eq!(error(&[&a, &b, &a, &b]), expected, "four files");
     assert_eq!(error(&[&a, dir.path()]), expected, "a file and a directory");
     Ok(())
 }
