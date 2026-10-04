@@ -411,9 +411,7 @@ impl DiffView {
         }
     }
 
-    /// Keeps the panes in step: the one without the focus scrolls along with the focused one,
-    /// and its cursor goes to the same row. Also notices the panes closing, and works the diff
-    /// out anew once its buffer changed.
+    /// Notices the panes closing, and works the diff out anew once its buffer changed.
     pub fn follow(&mut self, editor: &mut Editor) {
         let Some(pair) = &self.pair else {
             return;
@@ -437,6 +435,20 @@ impl DiffView {
             }
             return;
         }
+        if self.task.is_none() {
+            if let Some(request) = pair.request.refreshed(editor) {
+                self.start(request, true, REDIFF_DELAY, editor);
+            }
+        }
+    }
+
+    /// Keeps the panes in step once the editor is laid out for a frame: they wrap their lines
+    /// as their views are wide now, the one without the focus scrolls along with the focused one,
+    /// and its cursor goes to the same row.
+    pub fn follow_size(&mut self, editor: &mut Editor) {
+        let Some(pair) = &self.pair else {
+            return;
+        };
         wrap(pair, editor);
         if let Some(index) = pair
             .views
@@ -448,11 +460,6 @@ impl DiffView {
                 [pair.views[index], pair.views[1 - index]],
                 [pair.panes[index], pair.panes[1 - index]],
             );
-        }
-        if self.task.is_none() {
-            if let Some(request) = pair.request.refreshed(editor) {
-                self.start(request, true, REDIFF_DELAY, editor);
-            }
         }
     }
 

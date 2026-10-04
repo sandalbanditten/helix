@@ -444,9 +444,42 @@ async fn wrapped_lines_line_up() -> anyhow::Result<()> {
         }
     }
     assert!(padded_tops > 0);
-    // So does a narrower editor, which wraps the line to more rows.
-    session.app.editor.resize(Rect::new(0, 0, 90, 60));
-    session.keys("gg").await?;
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrapped_panes_line_up_as_the_diff_tree_comes_and_goes() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old"), dir.path().join("new"));
+    let long = "the quick brown fox jumps over the lazy dog ".repeat(4);
+    for (root, line) in [(&old, long.trim_end()), (&new, "short")] {
+        fs::create_dir_all(root)?;
+        fs::write(root.join("file.rs"), numbered(400, 5, line))?;
+    }
+    let mut config = test_config();
+    config.editor.diff.tool = DiffTool::Builtin;
+    config.editor.soft_wrap.enable = Some(true);
+    let app = AppBuilder::new()
+        .with_config(config)
+        .with_diff()
+        .with_file(&old, None)
+        .with_file(&new, None)
+        .build()?;
+    let mut session = Session::new(app);
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    assert_lined_up(&session.app);
+    let [_, (new_view, _)] = panes(&session.app).unwrap();
+    let width = |app: &Application| app.editor.tree.get(new_view).area.width;
+
+    // Hiding the tree widens the panes, and showing it narrows them again: their lines wrap
+    // anew, lined up from the first frame on.
+    let narrow = width(&session.app);
+    session.keys("<space>E").await?;
+    assert!(width(&session.app) > narrow);
+    assert_lined_up(&session.app);
+    session.keys("<space>E").await?;
+    assert_eq!(width(&session.app), narrow);
     assert_lined_up(&session.app);
     session.quit().await
 }
