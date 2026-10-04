@@ -1,4 +1,4 @@
-//! The colors of dired listings: the ones `eza` paints its columns with, or the theme's.
+//! The colors of dired listings: those `LS_COLORS` and `EZA_COLORS` configure, or the theme's.
 
 use std::{collections::HashMap, ops::Range};
 
@@ -26,8 +26,7 @@ fn bold(color: Color) -> Style {
     fg(color).add_modifier(Modifier::BOLD)
 }
 
-/// The `EZA_COLORS` codes of the columns dired shows, with the styles of `eza`'s default theme
-/// (`src/theme/default_theme.rs`, sizes in its default gradient).
+/// The `EZA_COLORS` codes of the columns dired shows, with their default styles.
 fn eza_defaults() -> [(&'static str, Style); 43] {
     [
         ("oc", fg(PURPLE)),
@@ -76,7 +75,7 @@ fn eza_defaults() -> [(&'static str, Style); 43] {
     ]
 }
 
-/// `eza`'s colors as the environment configures them.
+/// The colors the environment configures.
 #[derive(Debug)]
 pub struct EzaColors {
     codes: HashMap<&'static str, Style>,
@@ -86,8 +85,8 @@ pub struct EzaColors {
 }
 
 impl EzaColors {
-    /// `eza`'s defaults with the codes of `EZA_COLORS` (or `EXA_COLORS`), and the name rules of
-    /// those and `LS_COLORS`. `None` when none of them is set.
+    /// The defaults with the codes of `EZA_COLORS` (or `EXA_COLORS`), and the name rules of those and
+    /// `LS_COLORS`. `None` when none of them is set.
     pub fn from_environment() -> Option<Self> {
         let names = LsColors::from_environment()?;
         Some(Self::new(names, eza_environment().as_deref()))
@@ -128,7 +127,7 @@ pub struct You {
     pub groups: Vec<String>,
 }
 
-/// The styles of one frame: `eza`'s or the theme's.
+/// The styles of one frame: the environment's or the theme's.
 pub struct Palette<'a> {
     codes: HashMap<&'static str, Style>,
     icon: Option<Style>,
@@ -245,8 +244,8 @@ impl<'a> Palette<'a> {
         }
     }
 
-    /// The styled byte ranges of `line`, in order. `broken` tells whether the line's entry is a
-    /// link whose target is missing, which the text does not show.
+    /// The styled byte ranges of `line`, in order. `broken` tells whether the line's entry is a broken
+    /// link.
     pub fn spans(
         &self,
         text: &str,

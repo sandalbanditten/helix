@@ -378,19 +378,19 @@ These scopes are used for theming the editor interface:
 | `ui.undo-tree.revision`           | Revision numbers and ages in the undo tree, falling back to `comment`                          |
 | `ui.undo-tree.saved`              | The `S` and `s` of written revisions, falling back to `diff.plus`                              |
 | `ui.undo-tree.match`              | Changes matching the undo tree's search, falling back to `ui.file-tree.match`                  |
-| `ui.dired.octal`                  | Octal permissions in [dired][dired-section] without `eza`'s colors, falling back to `constant.numeric` |
-| `ui.dired.permission.read`        | `r` of dired permissions, falling back to `warning`                                            |
-| `ui.dired.permission.write`       | `w` of dired permissions, falling back to `error`                                              |
-| `ui.dired.permission.execute`     | `x` of dired permissions, falling back to `diff.plus`                                          |
-| `ui.dired.permission.special`     | `s` and `t` of dired permissions, falling back to `constant`                                   |
-| `ui.dired.permission.none`        | `-` of dired permissions, falling back to `comment`                                            |
-| `ui.dired.punctuation`            | Dired's tree guides and empty columns, falling back to `comment`                               |
-| `ui.dired.size`                   | Sizes in dired, falling back to `constant.numeric`                                             |
-| `ui.dired.user`                   | The editor's user in dired, falling back to `variable`                                         |
-| `ui.dired.group`                  | The editor's groups in dired, falling back to `variable`                                       |
-| `ui.dired.date`                   | Dates in dired, falling back to `info`                                                         |
-| `ui.dired.link`                   | Link targets in dired, falling back to `ui.text`                                               |
-| `ui.dired.git.new`                | `N` of dired's git column, falling back to `diff.plus`; also `.modified` (`M`, `diff.delta`), `.deleted` (`D`, `diff.minus`), `.renamed` (`R`, `diff.delta.moved`), `.typechange` (`T`, `diff.delta`), `.ignored` (`I`, `comment`) and `.conflict` (`U`, `diff.delta.conflict`) |
+| `ui.dired.octal`                  | Octal permissions in [dired](./dired.md)                                                       |
+| `ui.dired.permission.read`        | `r` of dired permissions                                                                       |
+| `ui.dired.permission.write`       | `w` of dired permissions                                                                       |
+| `ui.dired.permission.execute`     | `x` of dired permissions                                                                       |
+| `ui.dired.permission.special`     | `s` and `t` of dired permissions                                                               |
+| `ui.dired.permission.none`        | `-` of dired permissions                                                                       |
+| `ui.dired.punctuation`            | Dired's tree guides and empty columns                                                          |
+| `ui.dired.size`                   | Sizes in dired                                                                                 |
+| `ui.dired.user`                   | The editor's user in dired                                                                     |
+| `ui.dired.group`                  | The editor's groups in dired                                                                   |
+| `ui.dired.date`                   | Dates in dired                                                                                 |
+| `ui.dired.link`                   | Link targets in dired                                                                          |
+| `ui.dired.git.new`                | `N` of dired's git column; also `.modified`, `.deleted`, `.renamed`, `.typechange`, `.ignored` and `.conflict` |
 | `ui.selection`                    | For selections in the editing area                                                             |
 | `ui.selection.primary`            |                                                                                                |
 | `ui.highlight`                    | Highlighted lines in the picker preview                                                        |
@@ -423,5 +423,4 @@ These scopes are used for theming the editor interface:
 | `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text`; the foreground colors the [`filler-character`](./editor.md#editordiff-section), defaulting to `ui.virtual.indent-guide`'s |
 
 [editor-section]: ./configuration.md#editor-section
-[dired-section]: ./editor.md#editordired-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

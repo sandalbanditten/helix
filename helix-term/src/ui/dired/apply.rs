@@ -1,9 +1,4 @@
-//! Carrying out the plan of a dired write.
-//!
-//! Every path of a plan is as it was listed. Moves are done one at a time, each once its target
-//! is free, and the paths of what is still to do follow every directory that moved; entries that
-//! swap places go through a temporary name. Copies are made after the moves, and can be made off
-//! the main thread between [`before_copies`] and [`after_copies`].
+//! Carrying out the plan of a dired write: the moves, then the copies, then the rest.
 
 use std::{
     collections::BTreeMap,
@@ -35,8 +30,7 @@ impl Applied {
         self.follow(path, true)
     }
 
-    /// Where a new entry planned at `path` goes now: into the directories that moved, but not
-    /// after an entry that moved away from there.
+    /// Where a new entry planned at `path` goes now that directories moved.
     fn target(&self, path: &Path) -> PathBuf {
         self.follow(path, false)
     }
@@ -72,8 +66,7 @@ pub fn before_copies(editor: &mut Editor, plan: &Plan, applied: &mut Applied) ->
     moves(editor, plan.moves.clone(), applied)
 }
 
-/// The copies of `plan` to make once `applied` is done, each from and to where its paths are
-/// then, in order: a copy into another copy waits for it.
+/// The copies of `plan` to make once `applied` is done, in order.
 pub fn copies(plan: &Plan, applied: &Applied) -> Vec<(PathBuf, PathBuf)> {
     let mut copies: Vec<_> = plan.copies.iter().collect();
     copies.sort_by(|a, b| a.to.cmp(&b.to));
@@ -88,8 +81,7 @@ pub fn copy_failed(from: &Path, to: &Path, err: io::Error) -> anyhow::Error {
     anyhow::Error::new(err).context(format!("Cannot copy {} to {}", shown(from), shown(to)))
 }
 
-/// Carries out the steps of `plan` that come after its copies: the deletions, which may be of
-/// what was copied, the changes, which may be to the copies, and the git edits.
+/// Carries out the steps of `plan` that come after its copies: deletions, changes and git edits.
 pub fn after_copies(editor: &mut Editor, plan: &Plan, applied: &mut Applied) -> Result<()> {
     deletions(editor, &plan.deletions, applied)
         .and_then(|()| changes(&plan.changes, applied))
@@ -161,8 +153,7 @@ fn moves(editor: &mut Editor, mut pending: Vec<Move>, applied: &mut Applied) -> 
     Ok(())
 }
 
-/// Makes the moves still to do follow `from` to `to`: their entries and, for a directory that
-/// moved, their targets inside it.
+/// Makes the moves still to do follow `from` to `to`.
 fn remap(pending: &mut [Move], from: &Path, to: &Path) {
     for step in pending {
         if let Some(path) = remapped(&step.from, from, to, true) {
@@ -174,8 +165,7 @@ fn remap(pending: &mut [Move], from: &Path, to: &Path) {
     }
 }
 
-/// Where `path` is once `from` moved to `to`, if it moved with it: when it is `from` itself (with
-/// `itself`) or lies inside it.
+/// Where `path` is once `from` moved to `to`, if it moved with it.
 fn remapped(path: &Path, from: &Path, to: &Path, itself: bool) -> Option<PathBuf> {
     // Most paths share no prefix with `from`, which comparing bytes tells fast: this runs for
     // every move still to do after each move.

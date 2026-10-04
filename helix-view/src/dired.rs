@@ -1,7 +1,4 @@
-//! The directory listing a dired buffer shows.
-//!
-//! A dired buffer is a document whose lines list files the way `eza --git -aolg` does. Writing
-//! it applies the edits of its lines to the files, so the listing keeps what each line showed.
+//! The directory listing a dired buffer shows, which a write compares the edited lines with.
 
 use helix_core::Rope;
 use std::{
@@ -15,8 +12,8 @@ use std::{
 pub enum Source {
     /// The entries of a directory.
     Directory(PathBuf),
-    /// A directory and, nested below them, the entries of the directories in `expanded`
-    /// (relative to `root`), the way the file tree shows them.
+    /// A directory and, nested below them, the entries of the directories in `expanded` (relative to
+    /// `root`).
     Tree {
         root: PathBuf,
         expanded: BTreeSet<PathBuf>,
@@ -138,8 +135,7 @@ pub struct Link {
     pub target_kind: Option<Kind>,
 }
 
-/// The git status of an entry like `eza --git` shows it: the letters of its staged and of its
-/// unstaged change (`-` for none, or `M`, `N`, `D`, `R`, `T`, `I` and `U`).
+/// The git status of an entry: the letters of its staged and of its unstaged change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GitStatus {
     pub index: char,

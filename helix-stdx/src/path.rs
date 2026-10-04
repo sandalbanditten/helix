@@ -303,9 +303,8 @@ pub struct PathPosition {
     pub column: Option<usize>,
 }
 
-/// Returns an iterator of the paths in `src` that a position follows: `path:7`, `path:7:5`,
-/// `path(7)`, `path(7,5)`, Maven's `path:[7,5]` or GHC's `path:(7,5)-(9,1)`. Paths need not exist,
-/// so `12:30:45` reads as line 30 of `12`.
+/// Returns an iterator of the paths in `src` that a position follows, like `path:7:5`,
+/// `path(7,5)`, `path:[7,5]` or `path:(7,5)-(9,1)`.
 pub fn find_path_positions(src: RopeSlice<'_>) -> impl Iterator<Item = PathPosition> + '_ {
     const FILE_URL: &str = "file://";
     // The end of the last position found, as the numbers in it read like file names too.

@@ -1,10 +1,5 @@
-//! Working out what the edits of a dired buffer ask for, and whether it can be done.
-//!
-//! Which entry an edited line belongs to follows from the edits themselves, the changes since
-//! the buffer was listed: a line is the entry whose text it kept, wherever it was moved to. An
-//! entry whose text is all gone was deleted, unless new lines took its place between the same
-//! neighbors, as changing whole lines (`xc`) does: those then edit the entries they replaced, in
-//! order. Pasted lines copy the entries they were yanked from, or move them when cut.
+//! Working out what the edits of a dired buffer ask for, and whether it can be done. Which entry
+//! an edited line belongs to follows from the changes since the buffer was listed.
 
 use std::{
     borrow::Cow,
@@ -93,8 +88,7 @@ pub struct Problem {
 }
 
 /// The plan for the edits of `text` since it was `listing.text`, which `changes` turned it into,
-/// and the problems found. The plan is only to be carried out without problems, or with only
-/// forced ones under `:w!`. Only a `trusted` workspace runs git.
+/// and the problems found.
 pub fn plan(
     listing: &Listing,
     text: RopeSlice,
@@ -343,9 +337,7 @@ impl Planner<'_> {
         self.plan_line(Subject::Listed(index), line);
     }
 
-    /// The entry `paste` copies: the one it could be, or among entries whose lines read alike,
-    /// the one this write deletes, so that cutting and pasting a line moves its entry, the one
-    /// yanked last, or any of them when they are files holding the same.
+    /// The entry `paste` copies, among the entries whose lines read alike.
     fn origin<'a>(&self, paste: &'a Paste) -> Option<&'a Origin> {
         let origins = &paste.origins[..];
         if let [origin] = origins {
@@ -369,9 +361,8 @@ impl Planner<'_> {
         same_files(origins.iter().map(|origin| (&origin.path, &origin.entry))).then_some(first)
     }
 
-    /// The directory a line pasted at `line` copies into: that of the entry on the line above,
-    /// or the entry itself when it is a directory listed with its contents. `owners` are the
-    /// lines of entries with their entries, in order.
+    /// The directory a line pasted at `line` copies into, from the entry on the line above.
+    /// `owners` are the lines of entries with their entries, in order.
     fn destination(&self, line: usize, owners: &[(usize, usize)]) -> PathBuf {
         let above = owners.partition_point(|&(owned, _)| owned < line);
         let Some(&(_, index)) = above.checked_sub(1).and_then(|above| owners.get(above)) else {
@@ -831,8 +822,7 @@ fn shown(path: &Path) -> String {
     format::quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
 }
 
-/// Where the entry at `path` goes when renamed to `name`: relative to its directory, absolute,
-/// or below the home directory with `~`.
+/// Where the entry at `path` goes when renamed to `name`.
 fn target(path: &Path, name: &str) -> PathBuf {
     within(path.parent().unwrap_or(path), name)
 }

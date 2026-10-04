@@ -311,68 +311,12 @@ ls-colors = "di=1;34:*.rs=38;5;208"
 
 ### `[editor.dired]` Section
 
-A dired buffer lists a directory like `eza --git -aolg` does, and writing it changes the files to
-match its edited lines. In the [file tree](#editorfile-tree-section), `e` lists the directory under
-the cursor (or the one holding the file under it) and `E` every entry the tree shows, nested with
-the guides of `eza --tree`; `:dired [dir]` lists any directory, by default the current buffer's.
-The buffer opens over the whole editor, hiding the tree and the other splits until it is closed or
-another split gets the focus. `Space e` closes an unedited dired buffer and focuses the tree on the
-entry under the cursor.
-
-```
-0644 .rw-r--r--  4 notroot notroot  1 Oct 10:59 -M ├──  tracked.txt
-```
-
-Every column but the size can be edited, with any editing command:
-
-| Column | Editing it |
-| --- | --- |
-| octal or other permissions | changes the mode, like `chmod`; when both are edited they must agree |
-| user, group | changes the owner or group, like `chown`, by name or id |
-| date | changes the modified time, like `touch -m`; also typed as `2026-10-01 10:59` |
-| git | stages, unstages, discards and (un)ignores, see below |
-| name | renames, or moves with a path like `../file.md`, `new-dir/file.md` or `~/file.md`, relative to the entry's directory; deleting the name deletes the entry |
-| link target | points the link elsewhere |
-
-`:w` applies all edits, or none when one of them has a problem, which then shows as a diagnostic
-on its line. Edits that delete entries, create missing directories or discard changes are only
-applied by `:w!`. Deleting a whole line deletes its entry too. After a write the buffer is listed
-anew, and undo does not go back past it. `:reload` lists it anew too, dropping its edits, and an
-unedited dired buffer follows changes made to its files.
-
-Pasting a line yanked from a dired buffer copies its entry like `cp -rp` does, directories with
-everything in them, keeping the mode and modified time; edit the pasted line to name the copy or
-change its other columns. The copy goes into the directory of the entry on the line above, or into
-that entry when it is a directory listed with its contents, whatever the guides say. A line cut and
-pasted once in the same write moves its entry instead. Other new lines cannot be added and lines
-cannot be joined. When the lines of several entries read exactly like a pasted line, it copies the
-one cut in the same write or yanked last, or any of them when they are files holding the same.
-`:w` makes the copies in the background: the buffer keeps its text until they are done and the
-rest of the write is applied, then it is listed anew, unless it was edited meanwhile (`:reload`
-lists it anew then). Writes that close the buffer or quit, like `:wq`, `:x` and `:wbc`, make the
-copies first, so that a failed copy keeps the editor open.
-
-The git column holds the staged and the unstaged letter of an entry, like `git status --short`;
-for a directory those of everything in it. Each letter is edited on its own, and the next listing
-shows what git made of it:
-
-| Edit | Does | Edit | Does |
-| --- | --- | --- | --- |
-| `-M` to `M-` | `git add` | `M-` to `--` | unstages (shows `-M`) |
-| `MM` to `-M` | unstages | `MM` to `M-` | discards the unstaged change (`:w!`) |
-| `-M` to `--` | discards the change (`:w!`) | `MM` to `--` | discards both (`:w!`) |
-| `-N` to `N-` | `git add` | `N-` to `-N` | unstages |
-| `-N` to `-I` | ignores, in the nearest `.gitignore` | `-I` to `--` | un-ignores |
-
-Un-ignoring removes the pattern that ignores the entry if it names just that entry, and appends a
-negation like `!/build.log` after it otherwise. Staging, unstaging and discarding run `git`, so
-they need a [trusted workspace](#editorworkspace-trust-section). Unlike `eza`, dates are shown in
-the time zone offset they had, and a file that became a link shows `T` like `git status` does.
+Options for [dired](./dired.md).
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `colors` | Whether listings take the colors of `eza`, from `LS_COLORS`, `EZA_COLORS` and `EXA_COLORS`, rather than the `ui.dired` [theme scopes](./themes.md#interface). The theme is used when none of these is set | `true` |
-| `icons` | Whether names show the icons `eza` shows, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
+| `colors` | Whether listings are colored by the `LS_COLORS` and `EZA_COLORS` environment variables rather than the `ui.dired` [theme scopes](./themes.md#interface) | `true` |
+| `icons` | Whether to show file icons, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
 
 ### `[editor.compilation]` Section
 

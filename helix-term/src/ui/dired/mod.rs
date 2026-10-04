@@ -1,9 +1,5 @@
-//! Dired buffers: directory listings like `eza --git -aolg`, opened over the whole editor, whose
-//! lines are edited to change the files.
-//!
-//! A dired buffer is a pathless [`Document`] carrying the [`Listing`] it shows. Listings are read
-//! off the main thread; the text is drawn in `eza`'s colors (or the theme's) by styling the
-//! visible lines as they are, edited or not.
+//! Dired buffers: directory listings whose lines are edited to change the files. A dired buffer is
+//! a pathless [`Document`] carrying the [`Listing`] it shows.
 
 mod apply;
 mod colors;
@@ -45,8 +41,7 @@ use crate::{
     watch::Watcher,
 };
 
-/// What dired keeps beside its buffers: the colors of the environment and who the editor runs
-/// as, both looked up once, and what watches the listed directories.
+/// What dired keeps beside its buffers: the colors, the user and the watched directories.
 #[derive(Default)]
 pub struct Dired {
     eza: OnceCell<Option<EzaColors>>,
@@ -89,8 +84,7 @@ impl Dired {
         }
     }
 
-    /// Lists the unedited dired buffers anew that list something of `paths`. A buffer edited
-    /// meanwhile keeps its text; `:reload` lists it anew.
+    /// Lists the unedited dired buffers anew that list something of `paths`.
     fn changed(&mut self, paths: &HashSet<PathBuf>, editor: &mut Editor) {
         let affected: Vec<_> = editor
             .documents()
@@ -193,8 +187,7 @@ fn you() -> You {
     You::default()
 }
 
-/// The directories whose changes can change `listing`: the listed ones and the repository's
-/// `.git`, which changes with the git status.
+/// The directories whose changes can change `listing`.
 fn watched_dirs(listing: &Listing) -> impl Iterator<Item = PathBuf> + '_ {
     let root = listing.source.root();
     let expanded = match &listing.source {
@@ -237,8 +230,7 @@ fn read(source: &Source, options: &listing::Options) -> Listing {
     listing
 }
 
-/// Shows a listing in a zoomed split: in the buffer already showing the same source (listed
-/// anew unless edited), or in a new one.
+/// Shows a listing in a zoomed split, in the buffer already showing the same source or a new one.
 fn show(editor: &mut Editor, listing: Listing, select: Option<PathBuf>) {
     let shown = editor
         .documents()
@@ -288,8 +280,7 @@ fn show(editor: &mut Editor, listing: Listing, select: Option<PathBuf>) {
     }
 }
 
-/// Replaces the text of a dired buffer with a new listing, keeping the cursors where they were
-/// as far as the text allows, and starts its history afresh so undo cannot go back across it.
+/// Replaces the text of a dired buffer with a new listing, starting its history afresh.
 fn relist(editor: &mut Editor, doc_id: DocumentId, view_id: ViewId, mut listing: Listing) {
     let view = view_mut!(editor, view_id);
     let doc = doc_mut!(editor, &doc_id);
@@ -315,8 +306,7 @@ pub enum Copying {
 }
 
 /// Applies the edits of the dired buffer `doc_id` to the files: all of them, or none if they
-/// have problems, which become diagnostics. Only `force` (`:w!`) applies what deletes or creates.
-/// The buffer is listed anew after, unless it was edited while the write was still `copying`.
+/// have problems, which become diagnostics. Only `force` applies what deletes or creates.
 pub fn write(
     editor: &mut Editor,
     jobs: &Jobs,
@@ -409,8 +399,7 @@ pub fn write(
     Ok(())
 }
 
-/// Ends a write of the dired buffer `doc_id` that got `applied` done: lists the buffer anew,
-/// unless it was edited since the write began at `version`, and tells what was applied.
+/// Ends a write of the dired buffer `doc_id` that got `applied` done.
 fn finish(
     editor: &mut Editor,
     doc_id: DocumentId,
@@ -449,8 +438,7 @@ fn finish(
     Ok(())
 }
 
-/// Notes which entries of the dired buffer `doc_id` a command there yanked, when it wrote a
-/// register holding their lines, so that their pasted lines copy them and not others alike.
+/// Notes which entries of the dired buffer `doc_id` a command there yanked.
 pub fn yanked(editor: &mut Editor, doc_id: DocumentId) {
     let (write, Some(register)) = editor.registers.written() else {
         return;
@@ -488,8 +476,7 @@ pub fn yanked(editor: &mut Editor, doc_id: DocumentId) {
     }
 }
 
-/// What `source` lists once the moves of a write are done: the same, with a tree's expanded
-/// directories where they moved to.
+/// What `source` lists once the moves of a write are done.
 fn moved_source(source: &Source, applied: &apply::Applied) -> Source {
     match source {
         Source::Directory(_) => source.clone(),

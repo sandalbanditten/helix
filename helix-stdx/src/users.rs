@@ -1,6 +1,4 @@
-//! The names of users and groups, which the standard library does not look up.
-//!
-//! Lookups go through the C library, so users and groups from LDAP and the like are found too.
+//! The names of users and groups, looked up through the C library.
 
 use std::{
     ffi::{CStr, CString},
@@ -66,8 +64,8 @@ pub fn current_groups() -> Vec<u32> {
     groups
 }
 
-/// Runs one of the reentrant `get*_r` lookups with a growing buffer. Returns the entry and the
-/// buffer its strings point into, or `None` if there is no such entry.
+/// Runs one of the reentrant `get*_r` lookups. Returns the entry and the buffer its strings point
+/// into, or `None` if there is no such entry.
 fn lookup<T>(
     mut call: impl FnMut(*mut T, *mut libc::c_char, libc::size_t, *mut *mut T) -> libc::c_int,
 ) -> Option<(T, Vec<libc::c_char>)> {

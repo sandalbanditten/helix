@@ -1,5 +1,4 @@
-//! Reading what a dired buffer lists. Everything here blocks, so a listing is read off the main
-//! thread when a buffer opens.
+//! Reading what a dired buffer lists, which blocks.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -115,9 +114,8 @@ pub fn read(source: &Source, options: &Options) -> Listing {
     }
 }
 
-/// Appends the entries of the directory `dir` (relative to `root`) and, below each expanded
-/// directory, its own entries, with the tree guides of `eza --tree`. `lanes` are the guides of
-/// the directories `dir` hangs from.
+/// Appends the entries of the directory `dir` (relative to `root`), and those of its expanded
+/// directories below them. `lanes` are the guides of the directories `dir` hangs from.
 #[allow(clippy::too_many_arguments)]
 fn walk(
     root: &Path,
@@ -333,8 +331,7 @@ fn group_name(_gid: u32) -> Option<String> {
     None
 }
 
-/// The indices of the entries the ignore files match, including everything in a directory they
-/// match, by the rules the file tree follows. Whether git tracks them is not known yet.
+/// The indices of the entries the ignore files match.
 fn ignored_entries(root: &Path, source: &Source, entries: &[Entry]) -> Vec<usize> {
     let root_ignored = within_ignored(root);
     let mut ignored_dirs: HashSet<PathBuf> = HashSet::new();
@@ -381,8 +378,7 @@ fn within_ignored(dir: &Path) -> bool {
     false
 }
 
-/// The changes below the root of a listing, by relative path: their own and, for directories,
-/// all of those below them.
+/// The changes below the root of a listing, by relative path.
 struct Marks {
     exact: HashMap<PathBuf, (u8, u8)>,
     below: HashMap<PathBuf, (u8, u8)>,
@@ -423,7 +419,7 @@ impl Marks {
         marks
     }
 
-    /// The status `eza --git` shows for the entry at `path`.
+    /// The git status of the entry at `path`.
     fn status(&self, path: &Path, kind: Kind, ignored: bool) -> GitStatus {
         let (mut index, mut worktree) = self.exact.get(path).copied().unwrap_or_default();
         if kind == Kind::Directory {

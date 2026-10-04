@@ -1,5 +1,5 @@
-//! Dired buffers list directories of the working directory, which the whole process shares, so
-//! their tests run in a binary of their own and one after another, each in a workspace of its own.
+//! Dired buffers list directories of the working directory, which the process shares, so their
+//! tests run in a binary of their own, one after another.
 
 #[cfg(feature = "integration")]
 mod test {
@@ -595,8 +595,7 @@ mod test {
         .await
     }
 
-    /// Times writing many renames at once, from the end of one step to the end of the next, of
-    /// which an empty step shows what waiting for the editor to be idle costs. Run it with
+    /// Times writing many renames at once. Run it with
     /// `cargo integration-test -- dired::test::measure_writes --ignored --nocapture`.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "a measurement, not a check"]

@@ -30,11 +30,7 @@ pub fn set_modified(path: &Path, time: std::time::SystemTime) -> io::Result<()> 
     Ok(())
 }
 
-/// Moves `from` to `to` like [`fs::rename`]. When the two paths are on different filesystems,
-/// `from` is copied (contents, permissions and symlinks) and then removed instead.
-///
-/// The fallback refuses to overwrite: it fails with [`io::ErrorKind::AlreadyExists`] if `to`
-/// exists. When copying fails, the partial copy is removed and `from` is left untouched.
+/// Moves `from` to `to` like [`fs::rename`], copying and removing it across filesystems.
 pub fn move_path(from: &Path, to: &Path) -> io::Result<()> {
     match fs::rename(from, to) {
         Err(err) if err.kind() == io::ErrorKind::CrossesDevices => copy_and_remove(from, to),
@@ -47,11 +43,8 @@ fn copy_and_remove(from: &Path, to: &Path) -> io::Result<()> {
     remove(from)
 }
 
-/// Copies `from` to `to` like `cp -rp`: directories with everything in them, symlinks as
-/// symlinks, keeping permissions and modified times.
-///
-/// Refuses to overwrite: it fails with [`io::ErrorKind::AlreadyExists`] if `to` exists. When
-/// copying fails, the partial copy is removed.
+/// Copies `from` to `to`, directories with everything in them, keeping permissions and modified
+/// times. Fails with [`io::ErrorKind::AlreadyExists`] if `to` exists.
 pub fn copy_path(from: &Path, to: &Path) -> io::Result<()> {
     if fs::symlink_metadata(to).is_ok() {
         return Err(io::Error::new(

@@ -1,9 +1,4 @@
 //! Lines pasted into a dired buffer, which copy the entries whose lines they were.
-//!
-//! A pasted line is found from the edits themselves: an insertion of whole lines, replacing
-//! nothing, that read like a line some open dired buffer lists, tree guides and column padding
-//! aside. Edited afterwards, it is still the same line, so a copy can be renamed or given another
-//! mode before it is written.
 
 use std::{borrow::Cow, cell::OnceCell, collections::HashMap, ops::Range, path::PathBuf};
 
@@ -27,8 +22,7 @@ pub struct Origin {
     pub yank: Option<u64>,
 }
 
-/// The entries open dired buffers list, looked up by their lines. The lines are only gathered
-/// when a line is pasted, and only without guides and padding when one is not found as it is.
+/// The entries open dired buffers list, looked up by their lines.
 pub struct Origins<'a> {
     listings: Vec<&'a Listing>,
     /// The columns of the listings, each once.
@@ -73,8 +67,7 @@ impl<'a> Origins<'a> {
         index
     }
 
-    /// The entries `line` could have been yanked from: those listed exactly so, else those
-    /// whose lines only differ in guides or padding.
+    /// The entries `line` could have been yanked from.
     fn of(&self, line: &str) -> Vec<Origin> {
         let exact = self
             .exact
@@ -137,16 +130,14 @@ fn key(line: &str, columns: Columns) -> Option<String> {
     Some(fields.collect::<Vec<_>>().join(" "))
 }
 
-/// A pasted line: where it is now and the entries it could have been yanked from, more than one
-/// only when their lines read alike.
+/// A pasted line: where it is now and the entries it could have been yanked from.
 #[derive(Debug)]
 pub struct Paste {
     pub line: usize,
     pub origins: Vec<Origin>,
 }
 
-/// The lines of the text that `transactions` made of `listed` which were pasted: inserted whole
-/// as a line of `origins`. In order.
+/// The lines of the text that `transactions` made of `listed` which were pasted, in order.
 pub fn pasted(listed: &Rope, transactions: &[Transaction], origins: &Origins) -> Vec<Paste> {
     let inserts_lines = transactions.iter().any(|transaction| {
         let operations = transaction.changes().changes();

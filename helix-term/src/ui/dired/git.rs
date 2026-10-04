@@ -1,9 +1,5 @@
 //! The git column of dired listings: what an edit of it asks for, staging, unstaging and
-//! discarding through the `git` command line, and editing the ignore files.
-//!
-//! The column is edited one letter at a time: making the staged letter `-` unstages, making the
-//! unstaged letter `-` discards the change (or un-ignores), `-X` to `X-` stages, and `-N` to `-I`
-//! ignores. The next listing shows what git makes of it.
+//! discarding with `git`, and editing the ignore files.
 
 use std::{
     fs, io,
@@ -143,8 +139,7 @@ pub enum IgnoreChange {
     Append(String),
 }
 
-/// How to ignore the entry at `path`: an anchored pattern in the nearest `.gitignore` from its
-/// directory up to the root of `repo`, or the root's own.
+/// How to ignore the entry at `path`: a pattern in the nearest `.gitignore`.
 pub fn ignore(repo: &Path, path: &Path, is_dir: bool) -> IgnoreEdit {
     let dir = path.parent().unwrap_or(repo);
     let file = dir
@@ -160,9 +155,7 @@ pub fn ignore(repo: &Path, path: &Path, is_dir: bool) -> IgnoreEdit {
     }
 }
 
-/// How to stop ignoring the entry at `path`: removing the pattern that ignores it when that names
-/// just this entry, else adding a negation after it. A pattern in the global excludes file is
-/// negated in `.git/info/exclude`, so that other repositories are not affected.
+/// How to stop ignoring the entry at `path`: removing the pattern that ignores it, or negating it.
 pub fn unignore(repo: &Path, path: &Path, is_dir: bool) -> Result<IgnoreEdit, String> {
     let shown = |path: &Path| {
         super::format::quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
@@ -209,9 +202,8 @@ pub fn unignore(repo: &Path, path: &Path, is_dir: bool) -> Result<IgnoreEdit, St
     })
 }
 
-/// The pattern that decides that `path` is ignored, where it is from, and whether that is the
-/// global excludes file: the deepest `.gitignore` with a say first, then `.git/info/exclude`,
-/// then the global excludes file. `None` if no pattern ignores it.
+/// The pattern that ignores `path`, where it is from, and whether that is the global excludes
+/// file.
 fn matching(repo: &Path, path: &Path, is_dir: bool) -> Option<(PathBuf, String, bool)> {
     let decide = |matcher: &Gitignore, global| match matcher.matched(path, is_dir) {
         Match::Ignore(glob) => Some(Some((

@@ -1,5 +1,4 @@
-//! The text of dired listings, the columns of `eza --git -aolg`, and reading those columns back
-//! from edited lines.
+//! The text of dired listings, and reading their columns back from edited lines.
 
 use std::{fmt::Write as _, ops::Range, time::SystemTime};
 
@@ -110,7 +109,7 @@ fn pad(text: &mut String, column: &str, width: usize, right: bool) {
     }
 }
 
-/// The letter `eza` starts permissions with for `kind`.
+/// The letter permissions start with for `kind`.
 pub fn kind_letter(kind: Kind) -> char {
     match kind {
         Kind::Directory => 'd',
@@ -123,8 +122,7 @@ pub fn kind_letter(kind: Kind) -> char {
     }
 }
 
-/// The read, write and execute bits of user, group and others, with the special bit that shares
-/// the execute position of each.
+/// The read, write, execute and special bits of user, group and others.
 const TRIPLES: [(u32, u32, u32, u32, char); 3] = [
     (0o400, 0o200, 0o100, 0o4000, 's'),
     (0o040, 0o020, 0o010, 0o2000, 's'),
@@ -188,8 +186,7 @@ pub fn parse_octal(text: &str) -> Option<u32> {
     u32::from_str_radix(text, 8).ok()
 }
 
-/// A size like `eza` shows it: bytes below 1000, else with a decimal prefix and one decimal
-/// below 10, like `1.9k`, `87k` or `1.2M`.
+/// A size like `1.9k`, `87k` or `1.2M`.
 pub fn size(size: Size) -> String {
     match size {
         Size::None => "-".to_owned(),
@@ -212,8 +209,7 @@ pub fn size(size: Size) -> String {
     }
 }
 
-/// A date like `eza` shows it, ` 1 Oct 10:59` this year and ` 4 Mar  2023` otherwise, in the
-/// local time of that date.
+/// A date like ` 1 Oct 10:59` this year and ` 4 Mar  2023` otherwise.
 pub fn date(time: SystemTime, clock: &Clock) -> String {
     let Some(zoned) = clock.zoned(time) else {
         return "-".to_owned();
@@ -231,8 +227,7 @@ pub fn date(time: SystemTime, clock: &Clock) -> String {
     }
 }
 
-/// The time an edited date stands for: one of the forms dates are shown in, or
-/// `YYYY-MM-DD[ HH:MM[:SS]]`. Whatever the form leaves out is taken from `original`.
+/// The time an edited date stands for, completed from `original`.
 pub fn parse_date(text: &str, original: SystemTime, clock: &Clock) -> Option<SystemTime> {
     let original = clock.zoned(original)?.datetime();
     let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -275,9 +270,8 @@ fn parse_time(text: &str, original: civil::Time) -> Option<civil::Time> {
     civil::Time::new(hour, minute, second, subsec).ok()
 }
 
-/// A name like `eza` shows it: quoted with `'` when it holds a space, with `"` when it holds a
-/// `'`, and with control characters escaped. Unlike `eza`, backslashes are escaped too, so that
-/// [`unquote`] gives back the name.
+/// A name quoted when it holds a space or a quote, with control characters and backslashes
+/// escaped, which [`unquote`] reverses.
 pub fn quote(name: &str) -> String {
     let mut escaped = String::with_capacity(name.len());
     for c in name.chars() {
@@ -346,8 +340,7 @@ pub fn unquote(text: &str) -> String {
     name
 }
 
-/// Where the columns of a listing line are, as byte ranges of it. Without the unix columns
-/// their ranges are empty.
+/// Where the columns of a listing line are, as byte ranges of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Line {
     pub octal: Range<usize>,
@@ -462,8 +455,7 @@ pub fn parse(
     Ok(parsed)
 }
 
-/// Where the ` -> ` of a link's line starts in `rest`, the name and target: after the name's
-/// closing quote if it is quoted.
+/// Where the ` -> ` of a link's line starts in `rest`, the name and target.
 fn arrow(rest: &str) -> Option<usize> {
     let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'));
     let from = match quote {
