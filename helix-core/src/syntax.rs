@@ -923,9 +923,8 @@ impl Syntax {
             .collect()
     }
 
-    /// Iterates the regions that `folds.scm` queries capture with `@fold` in `range`, including
-    /// those of injected languages, as the first and the last node of each match. A quantified
-    /// capture such as `(use_declaration)+ @fold` forms one region.
+    /// Iterates the regions that `folds.scm` queries capture in `range`, as the first and the last
+    /// node of each match.
     pub fn fold_regions<'a>(
         &'a self,
         source: RopeSlice<'a>,

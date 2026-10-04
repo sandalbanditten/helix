@@ -667,24 +667,13 @@ duration = 200
 
 ### `[editor.folding]` Section
 
-Code folding hides functions, types, blocks and other regions behind their first line, which then
-ends in a placeholder: `fn new() -> Self {…}`. A closing bracket that starts the region's last
-line is pulled onto that line, so `if a {…} else {…}` stays on one line. The regions come from
-the language's `folds.scm` query (see [Adding fold queries](./guides/folding.md)); `hx --health`
-lists the languages that have one.
-
-Folds belong to a view: two splits of a document fold independently, and a new split starts with
-the folds of the view it was split from. See the [view mode](./keymap.md#view-mode) for the
-commands. A selection that lands inside a fold, such as a search match, opens it; moving the
-cursor up, down, left or right steps over folds, and line-wise commands such as `x`, `o` or `>`
-treat a folded line as one line.
+Options for code folding, which hides functions, types and blocks behind their first line:
+`fn new() -> Self {…}`. See [view mode](./keymap.md#view-mode) for the commands.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `start-folded` | Fold everything when a document is first shown in a view | `false` |
-| `placeholder` | The text that folded text is drawn as | `" … "` |
-
-The placeholder is styled with the `ui.virtual.fold` theme scope.
+| `start-folded` | Whether to fold everything when a document is first shown | `false` |
+| `placeholder` | The text shown in place of folded text, highlighted with `ui.virtual.fold` | `" … "` |
 
 Example:
 

@@ -11,10 +11,8 @@
 //! }
 //! ```
 //!
-//! A closing bracket that starts the last line and closes a bracket of the header line is pulled
-//! up onto the row, as is the closing delimiter of a comment or string: `/**…*/`. Otherwise the
-//! fold hides the rest of the region, up to the end of its last line's content. The hidden lines after the header form the fold's *interior*. Folds chain, so
-//! one visual row can span several document lines: `if a {…} else {…}`.
+//! The hidden lines after the header form the fold's *interior*. Folds chain, so one visual row
+//! can span several document lines: `if a {…} else {…}`.
 
 use std::cell::OnceCell;
 use std::cmp::Reverse;
@@ -35,17 +33,13 @@ pub struct Fold {
     pub start: usize,
     /// The char index where the header's visual row continues after the hidden text.
     pub end: usize,
-    /// Whether `end` is a closing bracket or delimiter pulled up from the start of the last hidden
-    /// line. Edits keep such an end on the first non-whitespace char of its line.
+    /// Whether `end` is a closing bracket or delimiter pulled up from the last hidden line.
     pub pulled_up: bool,
 }
 
 impl Fold {
-    /// Returns the fold hiding the region `region` (char indices) behind its first line, or
-    /// `None` if the region has no content after its first line.
-    ///
-    /// `closer` is the char index of a closing bracket or delimiter on the region's last line,
-    /// which is pulled up onto the header's row.
+    /// Returns the fold hiding `region` (char indices) behind its first line, showing `closer`
+    /// after it, or `None` if the region has no content after its first line.
     pub fn from_region(
         text: RopeSlice,
         region: ops::Range<usize>,
@@ -95,8 +89,7 @@ impl Fold {
         intersects && !covers
     }
 
-    /// Returns the fold after an edit moved its positions, or `None` if it no longer hides a
-    /// header line's line break and some text after it.
+    /// Returns the fold after an edit moved its positions, or `None` if it no longer hides text.
     fn revalidate(mut self, text: RopeSlice) -> Option<Fold> {
         if self.start >= self.end || self.end > text.len_chars() {
             return None;
@@ -140,8 +133,7 @@ fn last_non_whitespace(text: RopeSlice, range: ops::Range<usize>) -> Option<usiz
         .map(|i| start + i)
 }
 
-/// Sorts `folds` outermost first and drops duplicates and folds that cross another fold (overlap
-/// without nesting). Of two crossing folds the preferred one is kept, or else the earlier one.
+/// Sorts `folds` outermost first and drops duplicates and folds that cross another fold.
 fn nest(mut folds: Vec<(Fold, bool)>) -> Vec<Fold> {
     folds.sort_by_key(|&(fold, preferred)| (fold.key(), !preferred));
     folds.dedup_by_key(|(fold, _)| fold.key());
@@ -171,10 +163,7 @@ fn nest(mut folds: Vec<(Fold, bool)>) -> Vec<Fold> {
     nested.into_iter().flatten().map(|(fold, _)| fold).collect()
 }
 
-/// The folds of a document in one view.
-///
-/// Closed folds are nested or disjoint. A fold inside another closed fold stays closed when the
-/// outer one is opened.
+/// The folds of a document in one view, nested or disjoint.
 #[derive(Debug, Clone, Default)]
 pub struct Folds {
     /// All closed folds, outermost first.
@@ -264,8 +253,7 @@ impl Folds {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Maps the folds through `changes`, which turned the text into `text`. Folds touched by a
-    /// change that no longer hide text behind a header line are dropped.
+    /// Maps the folds through `changes`, which turned the text into `text`.
     pub fn map(&mut self, text: RopeSlice, changes: &ChangeSet) {
         if self.closed.is_empty() || changes.is_empty() {
             return;
@@ -318,9 +306,8 @@ impl Folds {
         self.changed();
     }
 
-    /// Opens the folds that `selection` would otherwise partly hide: a range may not cover only a
-    /// part of a fold's interior, and its cursor may not lie inside an interior. Returns whether
-    /// any fold was opened.
+    /// Opens the folds that `selection` would otherwise partly hide. Returns whether any fold was
+    /// opened.
     pub fn reveal(&mut self, text: RopeSlice, selection: &Selection) -> bool {
         let mut revealed = false;
         loop {
@@ -347,8 +334,7 @@ impl Folds {
         }
     }
 
-    /// Moves the parts of `selection` that lie inside a fold's interior out of it: cursors go to
-    /// the fold cell and anchors grow the range over the whole fold.
+    /// Moves the parts of `selection` that lie inside a fold's interior out of it.
     pub fn snap(&self, text: RopeSlice, selection: Selection) -> Selection {
         selection.transform(|range| {
             let hidden_in = |pos: usize| {
@@ -392,14 +378,9 @@ impl Folds {
         fold_at(&self.outermost, char_idx)
     }
 
-    /// What toggling a fold at `range` does, given the foldable regions around its lines:
-    ///
-    /// 1. Open the closed fold whose header is the cursor's line.
-    /// 2. Else, for a range on a single line, close the innermost region starting on it.
-    /// 3. Else open the closed fold whose row continues on the cursor's line.
-    /// 4. Else close the innermost region containing the lines of the range.
-    ///
-    /// So on `} else {` of `if a {…} else {`, toggling folds the `else` block.
+    /// What toggling a fold at `range` does, given the foldable regions around its lines: open the
+    /// closed fold on the cursor's line, else close the innermost region starting on it or
+    /// containing the range.
     pub fn toggle_target(
         &self,
         text: RopeSlice,
@@ -443,9 +424,8 @@ impl Folds {
         .map(Toggle::Close)
     }
 
-    /// Toggles a fold at every range of `selection`, see [`Folds::toggle_target`]. `recursive`
-    /// also opens the closed folds inside an opened fold, or closes the regions inside a closed
-    /// one. Returns `selection` moved out of the new folds.
+    /// Toggles a fold at every range of `selection`, along with the folds inside it if
+    /// `recursive`. Returns `selection` moved out of the new folds.
     pub fn toggle(
         &mut self,
         text: RopeSlice,
@@ -499,8 +479,7 @@ impl Folds {
         self.snap(text, selection)
     }
 
-    /// The index of the row that `line` is on, where the lines a closed fold joins into one
-    /// row count as one line.
+    /// The index of the row that `line` is on, counting the lines of a folded row as one.
     pub fn row(&self, text: RopeSlice, line: usize) -> usize {
         let rows = self.rows(text);
         let i = rows.partition_point(|fold| fold.last <= line);
@@ -565,9 +544,7 @@ pub fn regions(
 }
 
 /// The end of `node` without the comments that trail it, except those indented deeper than its
-/// first line. Tree-sitter puts comments in the innermost node that is open before them, so a
-/// block of an indentation-based language ends with the comments that precede the next, less
-/// indented line.
+/// first line.
 fn content_end(text: RopeSlice, node: &Node) -> u32 {
     if node.is_extra() {
         return node.end_byte();
@@ -597,7 +574,7 @@ fn content_end(text: RopeSlice, node: &Node) -> u32 {
 }
 
 /// The closing bracket that starts the last line of `region` and closes a bracket opened on its
-/// first line, according to the tree of `last`, the region's last node.
+/// first line.
 fn pulled_up_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> Option<usize> {
     let last_char = last_non_whitespace(text, region.clone())?;
     let line = text.char_to_line(last_char);
@@ -611,8 +588,7 @@ fn pulled_up_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> 
     (opener_line == text.char_to_line(region.start)).then_some(closer)
 }
 
-/// The closing delimiter of a comment or string that ends `region` and starts on its first line,
-/// according to the tree of `last`, the region's last node.
+/// The closing delimiter of a comment or string that ends `region` and starts on its first line.
 fn delimiter_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> Option<usize> {
     let last_char = last_non_whitespace(text, region.clone())?;
     let byte = text.char_to_byte(last_char) as u32;
@@ -638,8 +614,7 @@ fn delimiter_closer(text: RopeSlice, last: &Node, region: ops::Range<usize>) -> 
         .flatten()
 }
 
-/// The closing delimiter of `region`, a comment or string: the punctuation at its end made of the
-/// chars of its opening delimiter, like `*/` of `/**`, `--]]` of `--[[` or `"""` of `f"""`.
+/// The closing delimiter of `region`, a comment or string, like `*/` of `/**`.
 fn closing_delimiter(text: RopeSlice, region: ops::Range<usize>) -> Option<usize> {
     let is_delimiter = |ch: char| !ch.is_alphanumeric() && !ch.is_whitespace();
     let mirrored = |ch| match ch {
@@ -673,8 +648,7 @@ fn closing_delimiter(text: RopeSlice, region: ops::Range<usize>) -> Option<usize
     (closer < end).then_some(closer)
 }
 
-/// The bracket that `closer`, a closing bracket token, closes among its siblings. Some grammars
-/// wrap bracket tokens in named nodes like `block_end`, so brackets are recognized by their text.
+/// The bracket that `closer`, a closing bracket token, closes among its siblings.
 fn matching_opener<'tree>(text: RopeSlice, closer: &Node<'tree>) -> Option<Node<'tree>> {
     let bracket =
         |node: &Node| (node.byte_range().len() == 1).then(|| text.byte(node.start_byte() as usize));
@@ -1004,7 +978,6 @@ fn f() {
     }
 
     /// The fully folded rendering of a sample for every language whose `folds.scm` was reviewed.
-    /// Haskell is left out: its grammar corrupts the heap for some inputs.
     #[test]
     fn fold_queries() {
         for (language, source, folded) in [

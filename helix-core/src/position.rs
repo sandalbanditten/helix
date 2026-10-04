@@ -168,9 +168,8 @@ pub fn visual_offset_from_block(
     (last_pos, block_start)
 }
 
-/// The row of the block holding `anchor` that a view anchored at `anchor` starts at: the anchor's
-/// own row, except that a view anchored at the start of the text starts at the top of the first
-/// block, showing the virtual lines above the first line.
+/// The row of the block holding `anchor` that a view anchored at `anchor` starts at, which is
+/// above the first line's virtual lines at the start of the text.
 pub fn anchor_row(
     text: RopeSlice,
     anchor: usize,
@@ -390,9 +389,6 @@ pub fn char_idx_at_visual_offset(
 
 /// Where a view goes to show, at its top, the visual line `row_offset` rows below the top of a
 /// view anchored at `anchor`: its anchor and its vertical offset from there.
-///
-/// This is [`char_idx_at_visual_offset`] at column 0, except that a view anchored at the start
-/// of the text counts its rows from the top, above the first line (see [`anchor_row`]).
 pub fn anchor_at_visual_offset(
     text: RopeSlice,
     anchor: usize,

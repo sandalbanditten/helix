@@ -80,10 +80,7 @@ impl Overlay {
     }
 }
 
-/// Document text shown as another grapheme, like `α` for `alpha` in Typst math.
-///
-/// The concealed text lies within one line and `replacement` is a single visible grapheme, so the
-/// document formatter treats a conceal like a grapheme of the document.
+/// Document text within one line shown as another grapheme, like `α` for `alpha`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Conceal {
     /// The char index of the first concealed char.
@@ -104,10 +101,7 @@ impl Conceal {
     }
 }
 
-/// Provides [`Conceal`]s as the document formatter reaches the text they conceal, so that only
-/// the text that is shown or measured has to be looked at.
-///
-/// Like a [`LineAnnotation`], a source may compute its conceals on the fly.
+/// Provides [`Conceal`]s as the document formatter reaches the text they conceal.
 pub trait ConcealSource {
     /// Appends the conceals starting at or after `char_idx` and before the returned char index to
     /// `conceals`, sorted and disjoint. The returned index must be greater than `char_idx`; the
@@ -196,10 +190,7 @@ pub trait LineAnnotation {
         usize::MAX
     }
 
-    /// The number of virtual lines to reserve above the first line of the text, like the filler
-    /// rows a side-by-side diff shows above a file whose first lines the other side added.
-    ///
-    /// A view anchored at the start of the text shows them; scrolling down passes them first.
+    /// The number of virtual lines to reserve above the first line of the text.
     fn virtual_lines_above(&mut self) -> usize {
         0
     }
