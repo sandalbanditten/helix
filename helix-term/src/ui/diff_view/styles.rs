@@ -3,7 +3,8 @@
 //!
 //! A theme without them gets backgrounds blended from its own colors, as difftastic.nvim does:
 //! `diff.plus` or `diff.minus` over `ui.background`, lightly for a changed line and more strongly
-//! for the text that changed in it, and `ui.text` very lightly for the gray of the fillers.
+//! for the text that changed in it, and `ui.text` very lightly for the gray of the fillers. The
+//! character the fillers may be drawn with takes the color of the indent guides.
 
 use helix_view::{
     diff_view::Side,
@@ -24,6 +25,8 @@ pub struct Styles {
     minus_line: Style,
     minus_text: Style,
     pub filler: Style,
+    /// The character drawn over the fillers' background.
+    pub filler_character: Style,
 }
 
 impl Styles {
@@ -50,12 +53,23 @@ impl Styles {
                 .try_get_exact(scope)
                 .unwrap_or_else(|| Style::default().bg(blend(color, background, amount)))
         };
+        let indent_guide = theme
+            .try_get("ui.virtual.indent-guide")
+            .unwrap_or_else(|| theme.get("ui.virtual.whitespace"));
+        let filler_character = theme
+            .try_get_exact("diff.filler")
+            .and_then(|style| style.fg)
+            .or(indent_guide.fg);
         Self {
             plus_line: scope("diff.plus.line", plus, LINE_BLEND),
             plus_text: scope("diff.plus.text", plus, TEXT_BLEND),
             minus_line: scope("diff.minus.line", minus, LINE_BLEND),
             minus_text: scope("diff.minus.text", minus, TEXT_BLEND),
             filler: scope("diff.filler", text, FILLER_BLEND),
+            filler_character: Style {
+                fg: filler_character,
+                ..Style::default()
+            },
         }
     }
 

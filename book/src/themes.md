@@ -420,7 +420,7 @@ These scopes are used for theming the editor interface:
 | `diff.plus.text`                  | The text that changed within added lines, defaulting to a background of 38% `diff.plus`         |
 | `diff.minus.line`                 | Removed lines in the diff view, defaulting to a background of 19% `diff.minus`                  |
 | `diff.minus.text`                 | The text that changed within removed lines, defaulting to a background of 38% `diff.minus`      |
-| `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text` |
+| `diff.filler`                     | The diff view's filler rows, facing lines of the other side, defaulting to a background of 10% `ui.text`; the foreground colors the [`filler-character`](./editor.md#editordiff-section), defaulting to `ui.virtual.indent-guide`'s |
 
 [editor-section]: ./configuration.md#editor-section
 [file-tree-section]: ./editor.md#editorfile-tree-section

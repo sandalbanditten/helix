@@ -503,6 +503,31 @@ impl<'a> TextRenderer<'a> {
             .set_stringn(x, y + self.viewport.y, string, width, style);
     }
 
+    /// Fills `width` columns of the visual line `y` from `x` with `grapheme`, which takes
+    /// `grapheme_width` columns, as far as they are in the viewport.
+    pub fn fill_row(
+        &mut self,
+        x: u16,
+        y: u16,
+        width: u16,
+        grapheme: &str,
+        grapheme_width: u16,
+        style: Style,
+    ) {
+        let Some(y) = (y as usize).checked_sub(self.offset.row) else {
+            return;
+        };
+        if y >= self.viewport.height as usize || grapheme_width == 0 {
+            return;
+        }
+        let y = self.viewport.y + y as u16;
+        let end = x.saturating_add(width).min(self.viewport.right());
+        for x in (x..end.saturating_sub(grapheme_width - 1)).step_by(grapheme_width.into()) {
+            self.surface
+                .set_grapheme(x, y, grapheme, grapheme_width.into(), style);
+        }
+    }
+
     /// Sets the style of an area **within the text viewport* this accounts
     /// both for the renderers vertical offset and its viewport
     /// Sets the style of `area`, whose rows are visual lines, as far as it is in the viewport.

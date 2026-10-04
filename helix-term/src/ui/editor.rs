@@ -162,6 +162,7 @@ impl EditorView {
                 pane,
                 doc.text().slice(..),
                 theme,
+                config.diff.filler_character,
                 inner,
             ));
         }

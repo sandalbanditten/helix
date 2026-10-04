@@ -124,3 +124,10 @@ The colors come from the theme's `diff.plus.line`, `diff.plus.text`, `diff.minus
 `diff.minus.text` and `diff.filler` [scopes](./themes.md#interface). A theme without them gets
 backgrounds blended from its `diff.plus`, `diff.minus` and `ui.text` over its background, as
 difftastic.nvim does.
+
+To draw the filler rows with slashes like difftastic.nvim, in the color of the indent guides:
+
+```toml
+[editor.diff]
+filler-character = "╱"
+```

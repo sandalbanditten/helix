@@ -431,6 +431,7 @@ Options for the [diff view](./diff-view.md).
 | Key | Description | Default |
 | --- | --- | --- |
 | `tool` | What lines the two versions up: `"difftastic"` for [`difft`](https://difftastic.wilfred.me.uk/), falling back to the builtin diff where it isn't installed or fails, or `"builtin"` for a line diff of Helix's own, which highlights the words that changed | `"difftastic"` |
+| `filler-character` | The character filler rows are drawn with, like `"╱"` as difftastic.nvim draws them, in the color of the indent guides. Unset, they are only gray | unset |
 
 ### `[editor.buffer-picker]` Section
 

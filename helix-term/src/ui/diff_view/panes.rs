@@ -9,6 +9,7 @@ use helix_core::{
     line_ending::line_end_char_index,
     movement::Direction,
     text_annotations::TextAnnotations,
+    unicode::width::UnicodeWidthChar,
     visual_offset_from_anchor, Position, Range, RopeSlice, Selection,
 };
 use helix_view::{
@@ -342,6 +343,8 @@ pub struct Rows<'a> {
     pane: &'a Pane,
     text: RopeSlice<'a>,
     styles: Styles,
+    /// The character the fillers are drawn with and the columns it takes, if any.
+    filler: Option<(String, u16)>,
     /// The text area of the pane.
     area: Rect,
     /// The first visual row not painted yet.
@@ -353,11 +356,18 @@ pub struct Rows<'a> {
 }
 
 impl<'a> Rows<'a> {
-    pub fn new(pane: &'a Pane, text: RopeSlice<'a>, theme: &Theme, area: Rect) -> Self {
+    pub fn new(
+        pane: &'a Pane,
+        text: RopeSlice<'a>,
+        theme: &Theme,
+        filler: Option<char>,
+        area: Rect,
+    ) -> Self {
         Self {
             pane,
             text,
             styles: Styles::new(theme),
+            filler: filler.map(|filler| (filler.to_string(), filler.width().unwrap_or(0) as u16)),
             area,
             next_row: 0,
             line_ends: false,
@@ -377,6 +387,21 @@ impl<'a> Rows<'a> {
         );
         renderer.set_style(area, style);
         self.next_row = self.next_row.max(rows.end);
+    }
+
+    /// Paints `rows` as fillers: gray, and drawn with the filler character.
+    fn paint_fillers(&mut self, renderer: &mut TextRenderer, rows: ops::Range<u16>) {
+        self.paint(renderer, rows.clone(), self.styles.filler);
+        let Some((filler, width)) = &self.filler else {
+            return;
+        };
+        // Only the rows shown: those after a line can be thousands.
+        let top = renderer.offset.row as u16;
+        let shown = top..top + renderer.viewport.height;
+        let (area, style) = (self.area, self.styles.filler_character);
+        for row in rows.start.max(shown.start)..rows.end.min(shown.end) {
+            renderer.fill_row(area.x, row, area.width, filler, *width, style);
+        }
     }
 
     /// Paints `rows` as rows of `line`: in the color of a changed line.
@@ -410,7 +435,7 @@ impl<'a> Rows<'a> {
         if let Some(line) = line {
             self.paint_line(renderer, rows.start..fillers_start, line);
         }
-        self.paint(renderer, fillers_start..rows.end, self.styles.filler);
+        self.paint_fillers(renderer, fillers_start..rows.end);
     }
 
     /// Asks for the grapheme where `line` ends, at its line break or at the end of the text,
@@ -464,11 +489,7 @@ impl Decoration for Rows<'_> {
         let start = pos.visual_line + virt_off.row as u16;
         let fillers_start = start + padding as u16;
         self.paint_line(renderer, start..fillers_start, pos.doc_line);
-        self.paint(
-            renderer,
-            fillers_start..fillers_start + fillers as u16,
-            self.styles.filler,
-        );
+        self.paint_fillers(renderer, fillers_start..fillers_start + fillers as u16);
         Position::new(padding + fillers, 0)
     }
 }

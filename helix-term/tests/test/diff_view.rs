@@ -448,6 +448,54 @@ async fn wrapped_lines_line_up() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fillers_are_drawn_with_the_filler_character() -> anyhow::Result<()> {
+    let (_dir, path) = repository("a\nb\nc\n")?;
+    let mut config = test_config();
+    config.editor.diff.tool = DiffTool::Builtin;
+    config.editor.diff.filler_character = Some('╱');
+    let app = AppBuilder::new()
+        .with_file(&path, None)
+        .with_config(config)
+        .build()?;
+    let mut session = Session::new(app);
+    set_text(&mut session.app, "a\nb\nnew\n\nc\n");
+    session.keys(":diff<ret>").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let app = &session.app;
+    let shown = rows(app);
+    assert_eq!(shown[2].1, "3 new");
+    assert_eq!(shown[3].1, "4", "a blank line added");
+    for (old, _) in &shown[2..4] {
+        assert!(
+            old.chars().all(|c| c == '╱') && old.len() > 10,
+            "{shown:#?}"
+        );
+    }
+    assert_eq!(shown[4], ("3 c".to_owned(), "5 c".to_owned()));
+
+    // In the indent guides' color, over the fillers' gray.
+    let [(old_view, _), (new_view, _)] = panes(app).unwrap();
+    let view = app.editor.tree.get(old_view);
+    let area = view.inner_area(doc!(app.editor, &view.doc));
+    let screen = app.screen();
+    let cell =
+        &screen.content[(area.y as usize + 2) * screen.area.width as usize + area.x as usize];
+    assert_eq!(cell.symbol.as_str(), "╱");
+    assert_eq!(
+        Some(cell.fg),
+        app.editor.theme.get("ui.virtual.indent-guide").fg
+    );
+    assert_ne!(
+        cell.bg,
+        background(app, old_view, 4),
+        "unlike an unchanged line"
+    );
+    // The blank line added has the color of the line added before it.
+    assert_eq!(background(app, new_view, 3), background(app, new_view, 2));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn wrapped_panes_line_up_as_the_diff_tree_comes_and_goes() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let (old, new) = (dir.path().join("old"), dir.path().join("new"));
@@ -837,10 +885,10 @@ fn edited(text: &str) -> String {
         .collect()
 }
 
-/// Times opening `:diff` on big buffers, the cost a frame of the diff adds, and a diff of many
-/// files, all in one editor. Run it with `cargo test --release --features integration --test
-/// integration measure_diff_view -- --ignored --nocapture`, then `cargo build --release` for a
-/// real `hx`.
+/// Times opening `:diff` on big buffers, the cost a frame of the diff adds, also with a pane of
+/// fillers drawn with a character, and a diff of many files, all in one editor. Run it with
+/// `cargo test --release --features integration --test integration measure_diff_view --
+/// --ignored --nocapture`, then `cargo build --release` for a real `hx`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "a measurement, not a check"]
 async fn measure_diff_view() -> anyhow::Result<()> {
@@ -872,6 +920,9 @@ async fn measure_diff_view() -> anyhow::Result<()> {
     for lines in SIZES {
         fs::write(big(lines), rust_source(lines))?;
     }
+    let fillers = helix_stdx::path::canonicalize(dir.path()).join("fillers.rs");
+    let committed = rust_source(200);
+    fs::write(&fillers, &committed)?;
     for index in 0..FILES {
         fs::create_dir_all(small(index).parent().unwrap())?;
         fs::write(small(index), text(index, false))?;
@@ -943,6 +994,37 @@ async fn measure_diff_view() -> anyhow::Result<()> {
             );
             session.keys("<C-w>o").await?;
         }
+    }
+
+    // A pane of fillers facing lines added, scrolled through drawn gray and with a character.
+    session
+        .keys(&format!(":open {}<ret>", fillers.display()))
+        .await?;
+    let (top, bottom) = committed.split_at(committed.match_indices('\n').nth(99).unwrap().0 + 1);
+    let added: String = (0..4000)
+        .map(|i| format!("let added{i} = {i};\n"))
+        .collect();
+    set_text(&mut session.app, &format!("{top}{added}{bottom}"));
+    for filler in ["null", "\"╱\""] {
+        session
+            .keys(&format!(
+                ":set diff.filler-character {filler}<ret>:diff<ret>"
+            ))
+            .await?;
+        session.until("the panes", |app| panes(app).is_some()).await;
+        session.keys(&"zj".repeat(100)).await?;
+        let start = Instant::now();
+        session.keys(&"zj".repeat(FRAMES as usize)).await?;
+        let elapsed = start.elapsed();
+        assert!(rows(&session.app)
+            .iter()
+            .all(|(old, _)| !old.contains(" let ")));
+        let character = session.app.editor.config().diff.filler_character;
+        eprintln!(
+            "A pane of fillers, drawn with {character:?}: a frame scrolling {:?}",
+            elapsed / FRAMES
+        );
+        session.keys(":q<ret>").await?;
     }
 
     let many = helix_stdx::path::canonicalize(dir.path().join("many"));

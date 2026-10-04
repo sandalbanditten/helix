@@ -324,6 +324,8 @@ impl Default for CompilationConfig {
 pub struct DiffConfig {
     /// What lines up the texts. Defaults to `difftastic`.
     pub tool: DiffTool,
+    /// The character filler rows are drawn with, if any. Defaults to none.
+    pub filler_character: Option<char>,
 }
 
 /// What lines up the texts of the diff view.
