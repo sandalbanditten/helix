@@ -362,6 +362,40 @@ async fn two_files_are_diffed_from_the_command_line() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn closing_a_pane_buffer_closes_the_diff() -> anyhow::Result<()> {
+    let (_dir, path) = repository("a\n")?;
+    let mut session = session(&path, DiffTool::Builtin)?;
+    set_text(&mut session.app, "b\n");
+    let (buffer, origin) = (doc!(session.app.editor).id(), session.app.editor.tree.focus);
+    session.keys(":diff<ret>").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    session.keys(":buffer-close<ret>").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(app.editor.documents().count(), 1, "both panes closed");
+    assert_eq!(app.editor.tree.focus, origin);
+    assert_eq!(doc!(app.editor).id(), buffer);
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_pane_buffer_of_the_command_line_diff_leaves_a_scratch() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old.rs"), dir.path().join("new.rs"));
+    fs::write(&old, "a\n")?;
+    fs::write(&new, "b\n")?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    session.keys(":buffer-close<ret>").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(app.editor.tree.views().count(), 1);
+    assert_eq!(doc!(app.editor).display_name(), "[scratch]");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_third_path_names_the_files() -> anyhow::Result<()> {
     // As git's difftool gives them: temporary copies, and `$MERGED`.
     let dir = tempfile::tempdir()?;

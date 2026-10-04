@@ -2845,8 +2845,9 @@ impl Editor {
             }
         }
 
-        let mut doc = self.documents.remove(&doc_id).unwrap();
-        if let Some(listing) = doc.dired.take() {
+        // Closing a pane of the diff view's view closed it already, with its partner.
+        let mut closed = self.documents.remove(&doc_id);
+        if let Some(listing) = closed.as_mut().and_then(|doc| doc.dired.take()) {
             const CLOSED_LISTINGS: usize = 4;
             self.closed_listings.insert(0, listing);
             self.closed_listings.truncate(CLOSED_LISTINGS);
@@ -2876,7 +2877,9 @@ impl Editor {
 
         self._refresh();
 
-        helix_event::dispatch(DocumentDidClose { editor: self, doc });
+        if let Some(doc) = closed {
+            helix_event::dispatch(DocumentDidClose { editor: self, doc });
+        }
 
         Ok(())
     }
