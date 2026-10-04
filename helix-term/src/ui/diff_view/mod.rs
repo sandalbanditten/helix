@@ -21,7 +21,11 @@ use std::{
 };
 
 use anyhow::{anyhow, bail};
-use helix_core::{movement::Direction, Position, Rope, Selection};
+use helix_core::{
+    movement::Direction,
+    syntax::{config::LanguageConfiguration, Loader},
+    Position, Rope, Selection, Syntax,
+};
 use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::path::get_relative_path;
 use helix_view::{
@@ -168,6 +172,33 @@ impl Request {
     }
 }
 
+/// A diff worked out: its texts, how they line up, and their syntax.
+#[derive(Clone)]
+struct Diff {
+    request: Request,
+    outcome: Outcome,
+    parsed: Parsed,
+}
+
+/// The syntax of the texts of a diff, parsed in the background.
+#[derive(Clone, Default)]
+struct Parsed {
+    language: Option<Arc<LanguageConfiguration>>,
+    /// The syntax trees of the old and the new text.
+    syntaxes: [Option<Syntax>; 2],
+}
+
+impl Parsed {
+    /// The syntax of the texts the panes `docs` show.
+    fn of_panes(docs: [DocumentId; 2], editor: &Editor) -> Self {
+        let docs = docs.map(|doc| editor.document(doc));
+        Self {
+            language: docs[0].and_then(|doc| doc.language.clone()),
+            syntaxes: docs.map(|doc| doc.and_then(|doc| doc.syntax.clone())),
+        }
+    }
+}
+
 /// The files a diff of many compares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Many {
@@ -238,16 +269,16 @@ struct Files {
     prefetch: Option<(usize, JoinHandle<()>)>,
     /// The diffs of the files next to the one shown, by their index: worked out ahead, or shown
     /// last, so that `]g` and `[g` get there fast.
-    cache: Vec<(usize, Request, Outcome)>,
+    cache: Vec<(usize, Diff)>,
 }
 
 impl Files {
     /// Keeps the diff of the `index`th file, forgetting the ones no longer next to `current`.
-    fn cache(&mut self, index: usize, request: Request, outcome: Outcome, current: usize) {
-        self.cache.retain(|(cached, ..)| *cached != index);
-        self.cache.push((index, request, outcome));
+    fn cache(&mut self, index: usize, diff: Diff, current: usize) {
+        self.cache.retain(|(cached, _)| *cached != index);
+        self.cache.push((index, diff));
         self.cache
-            .retain(|(cached, ..)| cached.abs_diff(current) <= 1);
+            .retain(|(cached, _)| cached.abs_diff(current) <= 1);
     }
 }
 
@@ -284,26 +315,31 @@ impl DiffView {
         self.generation += 1;
         self.refreshing = refresh;
         let generation = self.generation;
-        let tool = editor.config().diff.tool;
+        let (tool, loader) = (editor.config().diff.tool, editor.syn_loader.load_full());
         self.task = Some(tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            let outcome = align(tool, &request).await;
+            // Refreshed panes keep their syntax trees up to date themselves.
+            let diff = work_out(tool, request, (!refresh).then_some(loader)).await;
             job::dispatch(move |editor, compositor| {
                 if let Some(view) = compositor.find::<EditorView>() {
-                    view.diff_view.ready(generation, request, outcome, editor);
+                    view.diff_view.ready(generation, diff, editor);
                 }
             })
             .await;
         }));
     }
 
-    /// Shows `outcome`, the diff of `request` asked for as the `generation`th, unless another
-    /// one was asked for since.
-    fn ready(&mut self, generation: u64, request: Request, outcome: Outcome, editor: &mut Editor) {
+    /// Shows `diff`, asked for as the `generation`th, unless another one was asked for since.
+    fn ready(&mut self, generation: u64, diff: Diff, editor: &mut Editor) {
         if generation != self.generation {
             return;
         }
         self.task = None;
+        let Diff {
+            request,
+            outcome,
+            parsed,
+        } = diff;
         match &outcome.fallback {
             Some(reason) => editor.set_status(format!("{reason}: showing Helix's own diff")),
             None if !self.refreshing => editor.clear_status(),
@@ -317,15 +353,20 @@ impl DiffView {
         }
         let of_many = request.of_many;
         if let Some(pair) = self.pair.take() {
-            editor.close_diff_panes(pair.panes, None);
             // The file left stays at hand for going back.
             if let (Some(files), Some(left), Some(index)) =
                 (&mut self.files, pair.request.of_many, of_many)
             {
-                files.cache(left, pair.request, pair.outcome, index);
+                let left_diff = Diff {
+                    parsed: Parsed::of_panes(pair.panes, editor),
+                    request: pair.request,
+                    outcome: pair.outcome,
+                };
+                files.cache(left, left_diff, index);
             }
+            editor.close_diff_panes(pair.panes, None);
         }
-        self.pair = Some(show(request, outcome, editor));
+        self.pair = Some(show(request, outcome, parsed, editor));
         match (&mut self.files, of_many) {
             (Some(files), Some(index)) => {
                 files.current = Some(index);
@@ -491,10 +532,10 @@ impl DiffView {
             return;
         };
         // Worked out ahead: shown at once.
-        if let Some(cached) = files.cache.iter().position(|(cached, ..)| *cached == index) {
-            let (_, request, outcome) = files.cache.swap_remove(cached);
+        if let Some(cached) = files.cache.iter().position(|(cached, _)| *cached == index) {
+            let (_, diff) = files.cache.swap_remove(cached);
             self.generation += 1;
-            self.ready(self.generation, request, outcome, editor);
+            self.ready(self.generation, diff, editor);
             return;
         }
         match Request::of_many(files, index) {
@@ -510,7 +551,7 @@ impl DiffView {
         };
         if index >= files.set.files.len()
             || files.prefetch.as_ref().is_some_and(|(i, _)| *i == index)
-            || files.cache.iter().any(|(cached, ..)| *cached == index)
+            || files.cache.iter().any(|(cached, _)| *cached == index)
         {
             return;
         }
@@ -521,10 +562,11 @@ impl DiffView {
             task.abort();
         }
         let (generation, tool) = (self.many_generation, editor.config().diff.tool);
+        let loader = editor.syn_loader.load_full();
         files.prefetch = Some((
             index,
             tokio::spawn(async move {
-                let outcome = align(tool, &request).await;
+                let diff = work_out(tool, request, Some(loader)).await;
                 job::dispatch(move |_, compositor| {
                     let Some(view) = compositor.find::<EditorView>() else {
                         return;
@@ -537,7 +579,7 @@ impl DiffView {
                     {
                         files.prefetch = None;
                         if let Some(current) = files.current {
-                            files.cache(index, request, outcome, current);
+                            files.cache(index, diff, current);
                         }
                     }
                 })
@@ -692,10 +734,39 @@ impl DiffView {
     }
 }
 
-/// Lines up the texts of `request` with `tool`.
-async fn align(tool: DiffTool, request: &Request) -> Outcome {
+/// Works out the diff of `request` with `tool`, parsing its texts meanwhile with `loader`.
+async fn work_out(tool: DiffTool, request: Request, loader: Option<Arc<Loader>>) -> Diff {
     let path = request.path.to_string_lossy().into_owned();
-    run::align(tool, path, request.old.clone(), request.new.clone()).await
+    let aligned = run::align(tool, path, request.old.clone(), request.new.clone());
+    let parsed = async {
+        match loader {
+            Some(loader) => parse(&request, loader).await,
+            None => Parsed::default(),
+        }
+    };
+    let (outcome, parsed) = tokio::join!(aligned, parsed);
+    Diff {
+        request,
+        outcome,
+        parsed,
+    }
+}
+
+/// Parses the texts of `request` in the language its path names, side by side.
+async fn parse(request: &Request, loader: Arc<Loader>) -> Parsed {
+    let Some(language) = loader.language_for_filename(&request.path) else {
+        return Parsed::default();
+    };
+    let config = loader.language(language).config().clone();
+    let [old, new] = [&request.old, &request.new].map(|text| {
+        let (text, loader) = (text.clone(), loader.clone());
+        tokio::task::spawn_blocking(move || Syntax::new(text.slice(..), language, &loader).ok())
+    });
+    let (old, new) = tokio::join!(old, new);
+    Parsed {
+        language: Some(config),
+        syntaxes: [old.ok().flatten(), new.ok().flatten()],
+    }
 }
 
 /// Counts the lines added and removed in `files` in the background, handing them to the diff
@@ -732,25 +803,24 @@ fn spawn_stats(files: Vec<FileDiff>, reader: Reader, generation: u64) {
 }
 
 /// Opens the panes of the diff of `request`, zoomed, with the cursor on the first hunk.
-fn show(request: Request, outcome: Outcome, editor: &mut Editor) -> Pair {
+fn show(request: Request, outcome: Outcome, parsed: Parsed, editor: &mut Editor) -> Pair {
     let alignment = outcome.alignment.clone();
-    let loader = editor.syn_loader.load();
-    let language = loader
-        .language_for_filename(&request.path)
-        .map(|language| loader.language(language).config().clone());
-    let mut panes = [Side::Old, Side::New].map(|side| {
-        let text = match side {
-            Side::Old => request.old.clone(),
-            Side::New => request.new.clone(),
-        };
+    let Parsed {
+        language,
+        syntaxes: [old_syntax, new_syntax],
+    } = parsed;
+    let texts = [
+        (request.old.clone(), old_syntax),
+        (request.new.clone(), new_syntax),
+    ];
+    let mut panes = texts.map(|(text, syntax)| {
         let mut doc = Document::from(text, None, editor.config.clone(), editor.syn_loader.clone());
-        doc.set_language(language.clone(), &loader);
+        doc.set_parsed_language(language.clone(), syntax);
         doc.detect_indent_and_line_ending();
         doc.set_spelling_language_override(Some(Vec::new()));
         doc.detect_spelling();
         Some(doc)
     });
-    drop(loader);
 
     let mut ids = [DocumentId::default(); 2];
     let mut views = [ViewId::default(); 2];

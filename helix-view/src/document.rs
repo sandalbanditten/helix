@@ -1546,6 +1546,18 @@ impl Document {
         });
     }
 
+    /// Sets the language along with `syntax`, the syntax tree of the text parsed already, as in
+    /// the background.
+    pub fn set_parsed_language(
+        &mut self,
+        language_config: Option<Arc<syntax::config::LanguageConfiguration>>,
+        syntax: Option<Syntax>,
+    ) {
+        self.language = language_config;
+        self.conceal_cache.get_mut().clear();
+        self.syntax = syntax;
+    }
+
     /// Set the programming language for the file if you know the language but don't have the
     /// [`syntax::config::LanguageConfiguration`] for it.
     pub fn set_language_by_language_id(

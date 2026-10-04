@@ -490,7 +490,9 @@ async fn the_diff_tree_lists_the_files_with_their_lines() -> anyhow::Result<()> 
     let mut session = diff_session(&[&old, &new])?;
     session.keys("").await?;
     session
-        .until("the stats", |app| shows(app, "a.rs +1 -1"))
+        .until("the stats and the first diff", |app| {
+            shows(app, "a.rs +1 -1") && panes(app).is_some()
+        })
         .await;
     let app = &session.app;
     assert!(shows(app, "new +3 -2"), "the root sums the files up");
