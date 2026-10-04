@@ -995,9 +995,7 @@ impl Syntax {
         })
     }
 
-    /// Returns the byte ranges within `byte_range` that should be spell-checked, according to the
-    /// `spellcheck.scm` query of every layer overlapping the range. `@nospell` wins over `@spell`
-    /// across layers, so a code block's `@nospell` also excludes the comments injected into it.
+    /// Returns the byte ranges within `byte_range` that the `spellcheck.scm` queries select.
     pub fn spell_regions(
         &self,
         source: RopeSlice,
@@ -1081,8 +1079,7 @@ pub(crate) fn merge_regions(regions: &mut Vec<ops::Range<usize>>) {
     *regions = merged;
 }
 
-/// Subtracts the `holes` from `regions` (both sorted, disjoint), clamps the result to `bounds`, and
-/// drops anything empty. Returns the surviving ranges in order.
+/// Subtracts the `holes` from `regions` (both sorted, disjoint), clamped to `bounds`.
 fn subtract_regions(
     regions: Vec<ops::Range<usize>>,
     mut holes: &[ops::Range<usize>],

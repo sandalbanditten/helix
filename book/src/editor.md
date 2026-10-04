@@ -765,21 +765,17 @@ trigger-length = 4
 
 ### `[editor.spelling]` Section
 
-Options for spell checking. See the [spell checking](./spell-checking.md) chapter for the full
-feature.
+Options for [spell checking](./spell-checking.md). The `spelling` settings of a language in
+`languages.toml` take precedence, except that its `words` and `ignore-regexes` are added to these.
 
 | Key               | Description                                                                          | Default |
 | ---               | ---                                                                                  | ---     |
-| `languages`       | The dictionaries to check documents against, e.g. `["en_US"]`. Empty disables spell checking | `[]`    |
-| `words`           | Extra accepted words, matched case-insensitively                                     | `[]`    |
-| `ignore-regexes`  | Tokens matching any of these regexes are not checked, e.g. `"^[A-Z0-9_]+$"`          | `[]`    |
-| `min-word-length` | Tokens shorter than this are not checked                                             | `1`     |
-| `messages`        | Whether misspellings are shown like hint diagnostics rather than only underlined     | `false` |
-| `detect`          | Whether each document is checked with the one of `languages` it is written in        | `false` |
-
-A language's `spelling` settings in `languages.toml` layer over these: `languages`,
-`min-word-length`, `messages` and `detect` replace the global value, while `words` and
-`ignore-regexes` are added to the global lists.
+| `languages`       | The languages to check documents against, like `["en_US"]`                           | `[]`    |
+| `words`           | Words to accept                                                                      | `[]`    |
+| `ignore-regexes`  | Words matching any of these regexes are not checked, like `"^[A-Z0-9_]+$"`           | `[]`    |
+| `min-word-length` | Words shorter than this are not checked                                              | `1`     |
+| `messages`        | Whether misspellings are shown like other diagnostics rather than only underlined    | `false` |
+| `detect`          | Whether each document is checked against only the language it is written in          | `false` |
 
 Example:
 

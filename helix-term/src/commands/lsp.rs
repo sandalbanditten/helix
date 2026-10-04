@@ -107,9 +107,7 @@ struct DiagnosticStyles {
 
 /// Where a picker diagnostic lives, so it can be previewed and jumped to regardless of source.
 enum DiagnosticLocation {
-    /// A diagnostic on an open document, in the document's char offsets. Every provider's
-    /// diagnostics take this form once they are on the document (LSP included), and it covers
-    /// scratch buffers, which have no path.
+    /// A diagnostic on an open document, in the document's char offsets.
     Document {
         doc_id: DocumentId,
         /// The document's path, for the picker's path column. `None` for scratch buffers.
@@ -230,8 +228,7 @@ enum DiagnosticsFormat {
 
 type DiagnosticsPicker = Picker<PickerDiagnostic, DiagnosticStyles>;
 
-/// Builds picker items from an open document's diagnostics. These are in the document's own char
-/// offsets, edit-mapped, and include every provider (LSP and internal alike).
+/// Builds picker items from an open document's diagnostics, of every provider.
 fn open_document_diagnostics(doc: &Document) -> impl Iterator<Item = PickerDiagnostic> + '_ {
     let doc_id = doc.id();
     let path: Option<Arc<Path>> = doc.path().map(Arc::from);
@@ -251,8 +248,7 @@ fn open_document_diagnostics(doc: &Document) -> impl Iterator<Item = PickerDiagn
         })
 }
 
-/// Builds a picker item from an LSP diagnostic held in the editor's store. This is used for files
-/// which are not currently open; open files are sourced from the document instead.
+/// Builds a picker item from an LSP diagnostic of a file that is not open.
 fn store_diagnostic(
     editor: &Editor,
     uri: &Uri,
@@ -750,8 +746,7 @@ pub fn code_action(cx: &mut Context) {
     });
 }
 
-/// Shows the code actions for the misspelling under the cursor, without asking the language
-/// servers.
+/// Shows the code actions for the misspelling under the cursor.
 pub fn fix_spelling(cx: &mut Context) {
     let actions = cx.editor.spelling_actions();
     cx.jobs.callback(async move {

@@ -414,7 +414,7 @@ These scopes are used for theming the editor interface:
 | `diagnostic.error`                | Diagnostics error (editing area)                                                               |
 | `diagnostic.unnecessary`          | Diagnostics with unnecessary tag (editing area)                                                |
 | `diagnostic.deprecated`           | Diagnostics with deprecated tag (editing area)                                                 |
-| `diagnostic.spelling`             | Misspellings (editing area), defaults to `diagnostic.error`                                    |
+| `diagnostic.spelling`             | Misspellings (editing area)                                                                    |
 | `tabstop`                         | Snippet placeholder                                                                            |
 | `diff.plus.line`                  | Added lines in the [diff view](./diff-view.md), defaulting to a background of 19% `diff.plus` over `ui.background` |
 | `diff.plus.text`                  | The text that changed within added lines, defaulting to a background of 38% `diff.plus`         |

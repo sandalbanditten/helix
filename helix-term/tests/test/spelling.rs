@@ -9,8 +9,7 @@ use super::*;
 const TEXT: &str = "#[#|]# A heding\n\nSome `inlin` code, and a wrld.\n";
 
 /// An app editing a Markdown document of `TEXT`, checked against `en_US`, once the document's
-/// first spell check finished. A test can only build one: the second app of a test would send its
-/// jobs, like the spell check, to the first one.
+/// first spell check finished.
 async fn app(messages: bool) -> anyhow::Result<Application> {
     let config = Config {
         editor: helix_view::editor::Config {

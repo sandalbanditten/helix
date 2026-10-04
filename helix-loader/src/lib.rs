@@ -140,8 +140,7 @@ pub fn data_dir() -> PathBuf {
     path
 }
 
-/// The directory for state that persists between sessions, like personal dictionaries. Platforms
-/// without a state directory (Windows) use the data directory.
+/// The directory for state that persists between sessions, like personal dictionaries.
 pub fn state_dir() -> PathBuf {
     let strategy = choose_base_strategy().expect("Unable to find the state directory!");
     let mut path = strategy.state_dir().unwrap_or_else(|| strategy.data_dir());
@@ -173,9 +172,7 @@ pub fn default_log_file() -> PathBuf {
     cache_dir().join("helix.log")
 }
 
-/// The personal dictionary for a spelling `language` (e.g. `"en_US"`): the words the user has added
-/// via "Add to dictionary", one per line. Namespaced per language so a word added for one language
-/// isn't accepted in another.
+/// The personal dictionary for a spelling `language`, like `"en_US"`.
 pub fn personal_dictionary_file(language: &str) -> PathBuf {
     state_dir()
         .join("dictionaries")

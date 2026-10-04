@@ -42,8 +42,7 @@ pub struct Diagnostic {
     pub code: Option<NumberOrString>,
     pub provider: DiagnosticProvider,
     pub tags: Vec<DiagnosticTag>,
-    /// The source of the diagnostic. For internal providers this is typically a `&'static str`
-    /// (for example `"spelling"`). For LSP it's an owned string from the server.
+    /// The source of the diagnostic, like `"spelling"` or the name a language server gives.
     pub source: Option<Cow<'static, str>>,
     pub data: Option<serde_json::Value>,
 }

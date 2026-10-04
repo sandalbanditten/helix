@@ -8,11 +8,8 @@ use whatlang::{Detector, Lang};
 
 use crate::syntax::{Loader, Syntax};
 
-/// A spelling dictionary identifier, such as `en_US`.
-///
-/// This names the dictionary files (`dictionaries/<id>/<id>.{aff,dic}`) under the runtime
-/// directories; it is not otherwise interpreted, so it can be any identifier a dictionary is
-/// distributed under (`en_US`, `de_DE_frami`, `ca`, ...).
+/// A spelling dictionary identifier, such as `en_US`, naming the dictionary files
+/// `dictionaries/<id>/<id>.{aff,dic}` in the runtime directories.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpellingLanguage(SmartString<LazyCompact>);
 
@@ -21,8 +18,7 @@ impl SpellingLanguage {
         &self.0
     }
 
-    /// The language of the dictionary, from the ISO 639 code its name starts with (`en` in
-    /// `en_US`), if language detection knows it.
+    /// The language of the dictionary, from the ISO 639 code its name starts with.
     fn lang(&self) -> Option<Lang> {
         let code = self.0.split(['_', '-']).next()?;
         if code.len() == 2 {
@@ -95,10 +91,8 @@ const DETECTION_SCAN_CHARS: usize = 16 * 1024;
 /// The bytes of spell checked text sampled to detect a document's language.
 const DETECTION_SAMPLE_BYTES: usize = 4096;
 
-/// Detects which of the `candidates` a document's prose is written in, from the text that is spell
-/// checked at its start. Returns the candidates of the detected language, which several can share
-/// (`en_US` and `en_GB`), and those of languages detection doesn't know. Returns all candidates
-/// when the language can't be told reliably, like in a short document.
+/// Detects which of the `candidates` a document's prose is written in, from its start. Returns
+/// all candidates when the language can't be told.
 pub fn detect_language(
     candidates: &[SpellingLanguage],
     text: RopeSlice,

@@ -1,11 +1,5 @@
-//! Spell checking as a non-LSP diagnostic source.
-//!
-//! Checking a word is cheap, so the work is split by where it is cheapest to run. A small edit is
-//! re-checked incrementally and synchronously on the main loop: only the regions around the change
-//! (`ChangeSet::changed_ranges`) are re-tokenized and spliced in with `splice_diagnostics`. A
-//! full check (document open or save, dictionary load, or a large or fragmented edit) runs off the
-//! main thread and replaces the misspellings wholesale, starting over if the document changed
-//! while it ran.
+//! Spell checking as a non-LSP diagnostic source. Small edits are re-checked around the change on
+//! the main loop; full checks run in the background.
 
 use std::{
     borrow::Cow,
@@ -49,17 +43,13 @@ const PROVIDER: DiagnosticProvider = DiagnosticProvider::Spelling;
 
 /// How long to wait after the last change before re-checking.
 const DEBOUNCE: Duration = Duration::from_secs(1);
-/// Char padding around each edit when re-checking incrementally, so the words next to an edit are
-/// re-checked too.
+/// Char padding around each edit when re-checking incrementally.
 const WINDOW_PADDING: usize = 50;
-/// The most chars re-checked incrementally on the main loop. A larger or more fragmented edit
-/// (e.g. a multi-cursor one) is checked in full off the main loop instead.
+/// The most chars re-checked incrementally on the main loop.
 const MAX_INCREMENTAL_CHARS: usize = 4096;
-/// Regions are checked in chunks of about this many chars. Between chunks a full check can be
-/// canceled, and "Add to dictionary" can take a dictionary's write lock.
+/// Regions are checked in chunks of about this many chars.
 const CHUNK_CHARS: usize = 16 * 1024;
-/// A full check stops at this many misspellings, which bounds their memory and rendering cost for
-/// large documents that aren't prose, like logs.
+/// A full check stops at this many misspellings.
 const MAX_MISSPELLINGS: usize = 10_000;
 /// The most lines of a `.dic` file that are dropped because spellbook rejects them.
 const MAX_REJECTED_LINES: usize = 64;
@@ -70,9 +60,7 @@ struct Change {
     text: Rope,
     changes: ChangeSet,
     version: i32,
-    /// Whether `changes` is stale (the result of coalescing several observed changes) and must be
-    /// recomputed from `old_text`/`text` at [`SpellingHook::finish_debounce`]. See the word index
-    /// for why coalesced changesets cannot be chained directly.
+    /// Whether `changes` coalesces several changes and must be recomputed from `old_text` and `text`.
     dirty: bool,
 }
 
@@ -151,9 +139,7 @@ impl AsyncHook for SpellingHook {
     }
 }
 
-/// Re-checks a document incrementally around `changes`. It is checked in full instead when it has
-/// moved on since the snapshot (`version`), a full check is in flight (its result is dropped once
-/// the document changed), or the change is too large or fragmented.
+/// Re-checks a document around `changes`, or in full when that is not possible.
 fn recheck_document(editor: &mut Editor, doc_id: DocumentId, changes: ChangeSet, version: i32) {
     let Some(doc) = editor.documents.get(&doc_id) else {
         return;
@@ -195,9 +181,8 @@ fn recheck_document(editor: &mut Editor, doc_id: DocumentId, changes: ChangeSet,
     });
 }
 
-/// The char ranges of `text` to re-check around `changes`: padded, widened to whole tokens, and
-/// merged so no word is checked twice. `None` when they would cover more than
-/// [`MAX_INCREMENTAL_CHARS`].
+/// The char ranges of `text` to re-check around `changes`, or `None` when they would cover more
+/// than [`MAX_INCREMENTAL_CHARS`].
 fn incremental_windows(text: RopeSlice, changes: &ChangeSet) -> Option<Vec<Range<usize>>> {
     let mut windows: Vec<Range<usize>> = Vec::new();
     let mut len = 0;
@@ -215,8 +200,7 @@ fn incremental_windows(text: RopeSlice, changes: &ChangeSet) -> Option<Vec<Range
     Some(windows)
 }
 
-/// Widens a window of `text` to whitespace, so it covers whole words and URLs rather than cutting
-/// them into fragments that look misspelled. `None` when it would span more than
+/// Widens a window of `text` to whitespace, or `None` when it would span more than
 /// [`MAX_INCREMENTAL_CHARS`].
 fn widen_to_tokens(text: RopeSlice, window: Range<usize>) -> Option<Range<usize>> {
     let token_len = |chars: &mut dyn Iterator<Item = char>| {
@@ -309,9 +293,7 @@ fn check_text(
     scan.misspellings
 }
 
-/// Returns the dictionaries for `languages`, or `None` if any are not loaded yet (after kicking off
-/// the missing loads). Checking waits until all are present so a not-yet-loaded dictionary can't
-/// cause false positives; the load completion re-checks via [`SpellingEvent::DictionaryLoaded`].
+/// Returns the dictionaries for `languages`, or `None` while any are still loading.
 fn lookup_dictionaries(
     editor: &mut Editor,
     languages: &[SpellingLanguage],
@@ -437,8 +419,7 @@ fn decode<'a>(encoding: &'static Encoding, bytes: &'a [u8]) -> Cow<'a, str> {
     text
 }
 
-/// Parses a dictionary, dropping the lines of the `.dic` file which spellbook rejects, like the
-/// `"A/S"` entry of LibreOffice's Danish dictionary.
+/// Parses a dictionary, dropping the lines of the `.dic` file it cannot read.
 fn parse_dictionary(aff: &str, mut dic: String) -> anyhow::Result<Dictionary> {
     for _ in 0..MAX_REJECTED_LINES {
         match Dictionary::new(aff, &dic) {
@@ -469,9 +450,8 @@ fn remove_line(text: &mut String, number: usize) -> String {
     text.drain(start..end).collect()
 }
 
-/// The char ranges within `region` to spell-check. With a syntax tree, checking is restricted to
-/// the natural-language regions selected by each layer's `spellcheck.scm` query (comments, prose,
-/// ...); without a tree (plain text), the whole `region` is checked.
+/// The char ranges within `region` that the `spellcheck.scm` queries select, or all of it
+/// without a syntax tree.
 //
 // `Syntax::spell_regions` works in byte offsets (tree-sitter's native unit) while the spelling
 // diagnostics, like all diagnostics, are in char offsets, so we convert at this boundary. The
@@ -493,26 +473,19 @@ fn spell_check_regions(
         .collect()
 }
 
-/// Words: a run of letters, marks and digits, split before an uppercase letter which follows a
-/// lowercase one (camelCase), and joined across an apostrophe or hyphen between lowercase runs
-/// (`don't`, `e-mail`).
+/// Words: runs of letters, marks and digits, split at camelCase humps.
 static WORDS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"[\p{Lu}\p{Lt}\p{Nd}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:['’-][\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*|[\p{Lu}\p{Lt}\p{Nd}]+",
     )
     .unwrap()
 });
-/// URLs and email addresses tokenize into word-like fragments (host and path segments) that aren't
-/// real words, so words overlapping one are skipped. These match the source text rather than
-/// individual tokens, which is why they can't be expressed as ordinary `ignore-regexes`.
+/// URLs and email addresses, whose words are skipped.
 static IGNORED_SPANS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+|[\w.+-]+@[A-Za-z0-9-]+\.[\w.-]+").unwrap()
 });
 
-/// Checks the words in regions of a text against a document's dictionaries. A word is misspelled
-/// when every dictionary rejects it.
-///
-/// Regions are checked in chunks, each of which holds the dictionaries' read locks.
+/// Checks the words in regions of a text against a document's dictionaries.
 struct Scan<'a> {
     dictionaries: &'a [Arc<RwLock<Dictionary>>],
     guards: Vec<RwLockReadGuard<'a, Dictionary>>,
@@ -536,8 +509,7 @@ impl<'a> Scan<'a> {
         }
     }
 
-    /// Checks the words in the char `region` of `text`. Breaks when the scan is canceled or found
-    /// [`MAX_MISSPELLINGS`].
+    /// Checks the words in the char `region` of `text`, until canceled or [`MAX_MISSPELLINGS`].
     fn check_region(&mut self, text: RopeSlice, region: Range<usize>) -> ControlFlow<()> {
         let mut start = region.start;
         while start < region.end {

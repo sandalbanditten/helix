@@ -620,37 +620,27 @@ pub struct WordCompletion {
     pub trigger_length: Option<NonZeroU8>,
 }
 
-/// Spell-checking configuration. The same shape is used globally (`[editor.spelling]`) and
-/// per-language in `languages.toml`; a language's settings layer over the global ones (see
-/// [`SpellingConfig::merged`]).
+/// Spell checking configuration, globally (`[editor.spelling]`) and per language.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SpellingConfig {
-    /// The dictionaries to check a document against; unset inherits (and the global default is
-    /// none, i.e. spell checking off). A word is flagged only when every dictionary rejects it.
+    /// The dictionaries to check a document against.
     pub languages: Option<Vec<crate::SpellingLanguage>>,
-    /// Extra accepted words, checked case-insensitively. A language's `words` are *added* to the
-    /// global ones rather than replacing them.
+    /// Extra accepted words, checked case-insensitively.
     pub words: Vec<String>,
-    /// Tokens matching any of these regexes are not checked (e.g. `"^[A-Z0-9_]+$"` to skip
-    /// SCREAMING_CASE). A language's regexes are *added* to the global ones.
+    /// Tokens matching any of these regexes are not checked.
     pub ignore_regexes: Vec<String>,
-    /// Tokens shorter than this are not checked. Unset inherits; the global default is 1 (check
-    /// everything).
+    /// Tokens shorter than this are not checked. Defaults to 1.
     pub min_word_length: Option<usize>,
-    /// Whether misspellings are shown like other diagnostics (messages, gutter, statusline,
-    /// pickers) rather than only underlined. Unset inherits; the global default is `false`.
+    /// Whether misspellings are shown like other diagnostics. Defaults to `false`.
     pub messages: Option<bool>,
-    /// Whether each document is checked against the one of `languages` its prose is detected to
-    /// be written in, rather than against all of them. Unset inherits; the global default is
+    /// Whether each document is checked against the one of `languages` it is written in. Defaults to
     /// `false`.
     pub detect: Option<bool>,
 }
 
 impl SpellingConfig {
-    /// Layers a language's `spelling` settings over these (global) ones: `languages`,
-    /// `min-word-length`, `messages` and `detect` replace, while `words` and `ignore-regexes` are
-    /// unioned.
+    /// Layers a language's `spelling` settings over these global ones.
     pub fn merged(&self, language: Option<&SpellingConfig>) -> SpellingConfig {
         let Some(language) = language else {
             return self.clone();
@@ -694,8 +684,7 @@ impl SpellingConfig {
     }
 }
 
-/// The compiled form of a [`SpellingConfig`]'s token filters: words to accept and regexes to skip,
-/// resolved once so the checker can apply them per word.
+/// The compiled form of a [`SpellingConfig`]'s token filters.
 #[derive(Debug)]
 pub struct SpellingFilter {
     min_word_length: usize,
