@@ -863,9 +863,7 @@ impl Syntax {
         }
     }
 
-    /// Returns the breadcrumbs of the syntax nodes that `breadcrumbs.scm` queries match around
-    /// the byte `pos`, from the outermost to the innermost, including those of injected
-    /// languages.
+    /// Returns the breadcrumbs of the syntax nodes enclosing the byte `pos`, outermost first.
     pub fn breadcrumbs<'a>(
         &self,
         source: RopeSlice,
@@ -1732,22 +1730,11 @@ pub struct BreadcrumbSegment<'a> {
     pub text: String,
 }
 
-/// The number of bytes after which the text of a breadcrumb segment is cut off. Breadcrumbs are
-/// computed on every render, and a capture can be arbitrarily long, such as a C function's
-/// return type that is a struct definition.
+/// The number of bytes after which the text of a breadcrumb segment is cut off.
 const MAX_BREADCRUMB_SEGMENT_LEN: usize = 512;
 
-/// Flattens the text of a breadcrumb segment, which may span several lines, into one line the
-/// way it would be written if it fit, e.g. `Cache<\n    K,\n    V,\n>` into `Cache<K, V>`:
-///
-/// - Every run of whitespace becomes a single space.
-/// - Whitespace just inside parentheses and square brackets is dropped. Next to angle brackets,
-///   which may also be comparison operators, only a line break is.
-/// - A line break before a comma is dropped, as in `( Text\n, Int\n)`.
-/// - A comma that a line break separates from a closing bracket is dropped. Formatters add these,
-///   though this also turns a one-element tuple split over lines, `(\n    A,\n)`, into `(A)`.
-///
-/// Text longer than [`MAX_BREADCRUMB_SEGMENT_LEN`] is cut off with an ellipsis.
+/// Flattens the text of a breadcrumb segment into one line, e.g. `Cache<\n    K,\n    V,\n>` into
+/// `Cache<K, V>`, cut off after [`MAX_BREADCRUMB_SEGMENT_LEN`] bytes.
 fn flatten_breadcrumb_text(text: RopeSlice) -> String {
     let mut flat = String::new();
     let mut chars = text.chars().peekable();

@@ -22,8 +22,7 @@ pub struct RenderContext<'a> {
     pub parts: RenderBuffer<'a>,
     /// Set by elements that could be rendered narrower, like the breadcrumbs.
     pub shrinkable: bool,
-    /// How many columns the left and right side of the status line overlap by. Shrinkable elements
-    /// make up for it when the status line is rendered again.
+    /// How many columns the left and right side of the status line overlap by.
     pub overflow: usize,
 }
 
@@ -542,9 +541,8 @@ where
     }
 }
 
-/// Lays out `breadcrumbs`, outermost first, each after a separator and followed by a space. If
-/// `truncate` is enabled, the outermost breadcrumbs are replaced with an ellipsis until the trail
-/// is `overflow` columns narrower, keeping at least the innermost one.
+/// Lays out `breadcrumbs`, outermost first, dropping outer ones for an ellipsis until the trail is
+/// `overflow` columns narrower if `truncate` is enabled.
 fn breadcrumb_trail<'a>(
     breadcrumbs: &[Spans<'a>],
     config: &BreadcrumbsConfig,

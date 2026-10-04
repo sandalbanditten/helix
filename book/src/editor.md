@@ -149,7 +149,7 @@ The following statusline elements can be configured:
 | `mode` | The current editor mode (`mode.normal`/`mode.insert`/`mode.select`) |
 | `spinner` | A progress spinner indicating LSP activity |
 | `file-name` | The path/name of the opened file |
-| `breadcrumbs` | The functions, types, sections, etc. enclosing the cursor, for languages with [breadcrumb queries](./guides/breadcrumbs.md) |
+| `breadcrumbs` | The functions, types and sections enclosing the cursor |
 | `file-absolute-path` | The absolute path/name of the opened file |
 | `file-base-name` | The basename of the opened file |
 | `current-working-directory` | The current working directory  |
@@ -174,16 +174,14 @@ The following statusline elements can be configured:
 
 #### `[editor.statusline.breadcrumbs]` Section
 
-Options for the `breadcrumbs` element, which shows the functions, types, sections, etc.
-enclosing the cursor, such as `> mod editor > impl Editor > pub fn render`. They are styled by
-the [breadcrumb query](./guides/breadcrumbs.md) of the language, and the separators by
-`ui.statusline.separator`.
+Options for the `breadcrumbs` statusline element, which shows the functions, types and sections
+enclosing the cursor, like `> mod editor > impl Editor > pub fn render`.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `separator` | The string shown between two breadcrumbs | `">"` |
+| `separator` | The string shown between breadcrumbs | `">"` |
 | `leading-separator` | Whether the separator is also shown before the first breadcrumb | `true` |
-| `truncate` | Whether the outermost breadcrumbs are replaced with `…` when the statusline is too narrow for all of them | `true` |
+| `truncate` | Whether to replace the outermost breadcrumbs with `…` when the statusline is too narrow | `true` |
 
 Example:
 
