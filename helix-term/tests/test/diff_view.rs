@@ -361,6 +361,96 @@ async fn two_files_are_diffed_from_the_command_line() -> anyhow::Result<()> {
     session.quit().await
 }
 
+/// `lines` lines like `line 3`, the one at `changed` being `with`.
+fn numbered(lines: usize, changed: usize, with: &str) -> String {
+    (0..lines)
+        .map(|line| {
+            if line == changed {
+                format!("{with}\n")
+            } else {
+                format!("line {line}\n")
+            }
+        })
+        .collect()
+}
+
+/// Asserts that the rows both panes show an unchanged line on show the same one.
+fn assert_lined_up(app: &Application) {
+    let rows = rows(app);
+    let shared = rows
+        .iter()
+        .filter(|(old, new)| old.contains(" line ") && new.contains(" line "))
+        .inspect(|(old, new)| assert_eq!(old, new, "{rows:#?}"))
+        .count();
+    assert!(shared > 10, "{rows:#?}");
+}
+
+/// The background of the last column of row `y` of the text of `view`.
+fn background(app: &Application, view: ViewId, y: usize) -> helix_view::graphics::Color {
+    let view = app.editor.tree.get(view);
+    let area = view.inner_area(doc!(app.editor, &view.doc));
+    let screen = app.screen();
+    let x = area.right() as usize - 1;
+    screen.content[(area.y as usize + y) * screen.area.width as usize + x].bg
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrapped_lines_line_up() -> anyhow::Result<()> {
+    let long = "the quick brown fox jumps over the lazy dog ".repeat(4);
+    let (_dir, path) = repository(&numbered(400, 5, long.trim_end()))?;
+    let mut session = session(&path, DiffTool::Builtin)?;
+    set_text(&mut session.app, &numbered(400, 5, "short"));
+    session
+        .keys(":set soft-wrap.enable true<ret>:diff<ret>")
+        .await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    assert_lined_up(&session.app);
+
+    // The long line wraps; the short one is padded with rows in its color.
+    let shown = rows(&session.app);
+    let short = shown.iter().position(|(_, new)| new == "6 short").unwrap();
+    assert!(shown[short].0.starts_with("6 the quick"), "{shown:#?}");
+    let (wrapped, padding) = &shown[short + 1];
+    assert!(!wrapped.is_empty() && padding.is_empty(), "{shown:#?}");
+    assert_eq!(
+        shown[short + 4],
+        ("7 line 6".to_owned(), "7 line 6".to_owned()),
+        "{shown:#?}"
+    );
+    let [(old_view, _), (new_view, _)] = panes(&session.app).unwrap();
+    let app = &session.app;
+    for view in [old_view, new_view] {
+        let color = background(app, view, short);
+        assert_ne!(
+            color,
+            background(app, view, short + 4),
+            "unlike an unchanged line"
+        );
+        for row in short + 1..short + 4 {
+            assert_eq!(background(app, view, row), color, "row {row}");
+        }
+    }
+    let padding_color = background(app, new_view, short);
+
+    // Scrolling keeps the rows lined up, through the wrapped line too, whose padding stays in
+    // its color at the top of the view.
+    let mut padded_tops = 0;
+    for _ in 0..8 {
+        session.keys("zj").await?;
+        assert_lined_up(&session.app);
+        if rows(&session.app)[0].1.is_empty() {
+            assert_eq!(background(&session.app, new_view, 0), padding_color);
+            padded_tops += 1;
+        }
+    }
+    assert!(padded_tops > 0);
+    // So does a narrower editor, which wraps the line to more rows.
+    session.app.editor.resize(Rect::new(0, 0, 90, 60));
+    session.keys("gg").await?;
+    assert_lined_up(&session.app);
+    session.quit().await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn closing_a_pane_buffer_closes_the_diff() -> anyhow::Result<()> {
     let (_dir, path) = repository("a\n")?;

@@ -158,7 +158,12 @@ impl EditorView {
         }
 
         if let Some(pane) = &doc.diff_view {
-            decorations.add_decoration(diff_view::Rows::new(pane, theme, inner));
+            decorations.add_decoration(diff_view::Rows::new(
+                pane,
+                doc.text().slice(..),
+                theme,
+                inner,
+            ));
         }
 
         let folds = text_annotations.folds();

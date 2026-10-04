@@ -30,8 +30,8 @@ use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view, current_ref,
-    diff_view::{builtin::Stats, Alignment, Pane, Side},
-    doc_mut,
+    diff_view::{builtin::Stats, Alignment, Pane, Side, Wrap},
+    doc, doc_mut,
     document::from_reader,
     editor::{Action, DiffTool},
     graphics::{CursorKind, Rect},
@@ -437,6 +437,7 @@ impl DiffView {
             }
             return;
         }
+        wrap(pair, editor);
         if let Some(index) = pair
             .views
             .iter()
@@ -887,6 +888,28 @@ fn show(request: Request, outcome: Outcome, parsed: Parsed, editor: &mut Editor)
         views,
         request,
         outcome,
+    }
+}
+
+/// Gives the panes of `pair` the wrapping of their lines, as their views lay them out now.
+fn wrap(pair: &Pair, editor: &mut Editor) {
+    let formats = [0, 1].map(|index| {
+        let (view, doc) = (
+            editor.tree.get(pair.views[index]),
+            doc!(editor, &pair.panes[index]),
+        );
+        doc.text_format(view.inner_width(doc), None)
+    });
+    let wraps = formats.iter().any(|format| format.soft_wrap);
+    let texts = pair.panes.map(|doc| doc!(editor, &doc).text().clone());
+    for doc in pair.panes {
+        let Some(pane) = doc_mut!(editor, &doc).diff_view.as_mut() else {
+            continue;
+        };
+        let current = pane.wrap.as_ref().map(Wrap::formats);
+        if current != wraps.then_some(&formats) {
+            pane.wrap = wraps.then(|| Wrap::new(texts.clone(), formats.clone()));
+        }
     }
 }
 

@@ -3,7 +3,14 @@
 
 use std::ops;
 
-use helix_core::{movement::Direction, Position, Range, RopeSlice, Selection};
+use helix_core::{
+    anchor_at_visual_offset,
+    doc_formatter::{FormattedGrapheme, TextFormat},
+    line_ending::line_end_char_index,
+    movement::Direction,
+    text_annotations::TextAnnotations,
+    visual_offset_from_anchor, Position, Range, RopeSlice, Selection,
+};
 use helix_view::{
     align_view, current, current_ref,
     diff_view::{LineChange, Pane, Side},
@@ -24,28 +31,46 @@ use crate::ui::{
 /// Scrolls the pane `docs[1]` in `views[1]` to the row the focused pane `docs[0]` in `views[0]`
 /// shows at its top, and puts its cursor on the row of the focused pane's cursor.
 pub(super) fn sync(editor: &mut Editor, views: [ViewId; 2], docs: [DocumentId; 2]) {
-    let doc = doc!(editor, &docs[0]);
+    let (view, doc) = (editor.tree.get(views[0]), doc!(editor, &docs[0]));
     let Some(pane) = doc.diff_view.as_ref() else {
         return;
     };
     let text = doc.text().slice(..);
-    let offset = doc.view_offset(views[0]);
-    let top = top_row(pane, text.char_to_line(offset.anchor), offset);
+    let format = doc.text_format(view.inner_width(doc), None);
+    let top = top(
+        pane,
+        text,
+        doc.view_offset(views[0]),
+        &format,
+        &view.text_annotations(doc, None),
+    );
     let cursor = text.char_to_line(doc.selection(views[0]).primary().cursor(text));
     let cursor_row = pane.row_of_line(cursor);
 
-    let partner = doc_mut!(editor, &docs[1]);
+    let (view, partner) = (editor.tree.get(views[1]), doc!(editor, &docs[1]));
     let Some(pane) = partner.diff_view.as_ref() else {
         return;
     };
     let text = partner.text().slice(..);
     let current = partner.view_offset(views[1]);
-    let offset = offset_at_row(pane, text, top, current.horizontal_offset);
+    let format = partner.text_format(view.inner_width(partner), None);
+    let annotations = view.text_annotations(partner, None);
+    let offset = offset_at(
+        pane,
+        text,
+        top,
+        current.horizontal_offset,
+        &format,
+        &annotations,
+    );
     let cursor_line = text.char_to_line(partner.selection(views[1]).primary().cursor(text));
     let cursor = cursor_row
         .map(|row| pane.line_at_or_before(row).unwrap_or(0) as usize)
         .filter(|&line| line != cursor_line)
         .map(|line| text.line_to_char(line));
+    drop(annotations);
+
+    let partner = doc_mut!(editor, &docs[1]);
     if offset != current {
         partner.set_view_offset(views[1], offset);
     }
@@ -54,30 +79,81 @@ pub(super) fn sync(editor: &mut Editor, views: [ViewId; 2], docs: [DocumentId; 2
     }
 }
 
-/// The row of the alignment at the top of a pane scrolled to `offset`, anchored on `line`.
-fn top_row(pane: &Pane, line: usize, offset: ViewPosition) -> u32 {
-    // A pane anchored at its start counts from the top, above its first line.
-    let anchor_row = if offset.anchor == 0 {
-        0
-    } else {
-        pane.row_of_line(line).unwrap_or(0)
-    };
-    anchor_row + offset.vertical_offset as u32
+/// Where the top of a pane is among the rows both panes show: on a row of the alignment, below
+/// `rows` of the visual rows it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Top {
+    row: u32,
+    rows: usize,
 }
 
-/// The offset showing `row` of the alignment at the top of `pane`.
-fn offset_at_row(pane: &Pane, text: RopeSlice, row: u32, horizontal_offset: usize) -> ViewPosition {
-    let (anchor, vertical_offset) = match pane.line_at_or_before(row) {
-        Some(line) if line > 0 => {
-            let line_row = pane.row_of_line(line as usize).unwrap_or(row);
-            (text.line_to_char(line as usize), row - line_row)
-        }
-        _ => (0, row),
+/// The top of `pane`, showing `text` laid out with `format` and `annotations`, scrolled to
+/// `offset`.
+fn top(
+    pane: &Pane,
+    text: RopeSlice,
+    offset: ViewPosition,
+    format: &TextFormat,
+    annotations: &TextAnnotations,
+) -> Top {
+    let line = text.char_to_line(offset.anchor.min(text.len_chars()));
+    // A pane anchored on its first line counts from the top, above it.
+    let (row, from) = match pane.row_of_line(line) {
+        Some(row) if line > 0 => (row, text.line_to_char(line)),
+        _ => (0, 0),
     };
+    // The rows of a wrapping line above the anchor.
+    let above = if offset.anchor == from {
+        0
+    } else {
+        visual_offset_from_anchor(text, from, offset.anchor, format, annotations, usize::MAX)
+            .map_or(0, |(pos, _)| pos.row)
+    };
+    let mut top = Top {
+        row,
+        rows: above + offset.vertical_offset,
+    };
+    // Rows past those of the row are those of the rows after it.
+    let last = pane.alignment.rows().len().saturating_sub(1) as u32;
+    while top.row < last {
+        let height = pane.row_height(top.row);
+        if top.rows < height {
+            break;
+        }
+        top.rows -= height;
+        top.row += 1;
+    }
+    top
+}
+
+/// The offset showing `top` at the top of `pane`, showing `text` laid out with `format` and
+/// `annotations`.
+fn offset_at(
+    pane: &Pane,
+    text: RopeSlice,
+    top: Top,
+    horizontal_offset: usize,
+    format: &TextFormat,
+    annotations: &TextAnnotations,
+) -> ViewPosition {
+    // From the pane's line on the row or the last one before it, else from the top.
+    let (from, from_row) = match pane.line_at_or_before(top.row) {
+        Some(line) if line > 0 => (
+            text.line_to_char(line as usize),
+            pane.row_of_line(line as usize).unwrap_or(top.row),
+        ),
+        _ => (0, 0),
+    };
+    let rows = (from_row..top.row)
+        .map(|row| pane.row_height(row))
+        .sum::<usize>()
+        + top.rows;
+    let (anchor, vertical_offset) =
+        anchor_at_visual_offset(text, from, rows as isize, format, annotations);
     ViewPosition {
         anchor,
         horizontal_offset,
-        vertical_offset: vertical_offset as usize,
+        vertical_offset,
     }
 }
 
@@ -260,23 +336,29 @@ pub fn changed_text(
     spans
 }
 
-/// Paints the rows of a pane: the background of its changed lines and of its fillers.
+/// Paints the rows of a pane: the background of its changed lines, with the rows padding them
+/// where the other side's line wraps to more, and of its fillers.
 pub struct Rows<'a> {
     pane: &'a Pane,
+    text: RopeSlice<'a>,
     styles: Styles,
     /// The text area of the pane.
     area: Rect,
     /// The first visual row not painted yet.
     next_row: u16,
+    /// Whether the visual line drawn last ends its line, rather than wrapping.
+    line_ends: bool,
 }
 
 impl<'a> Rows<'a> {
-    pub fn new(pane: &'a Pane, theme: &Theme, area: Rect) -> Self {
+    pub fn new(pane: &'a Pane, text: RopeSlice<'a>, theme: &Theme, area: Rect) -> Self {
         Self {
             pane,
+            text,
             styles: Styles::new(theme),
             area,
             next_row: 0,
+            line_ends: false,
         }
     }
 
@@ -293,23 +375,72 @@ impl<'a> Rows<'a> {
         renderer.set_style(area, style);
         self.next_row = self.next_row.max(rows.end);
     }
+
+    /// Paints `rows` as rows of `line`: in the color of a changed line.
+    fn paint_line(&mut self, renderer: &mut TextRenderer, rows: ops::Range<u16>, line: usize) {
+        if self
+            .pane
+            .alignment
+            .change(self.pane.side, line as u32)
+            .is_some()
+        {
+            self.paint(renderer, rows, self.styles.line(self.pane.side));
+        } else {
+            self.next_row = self.next_row.max(rows.end);
+        }
+    }
+
+    /// Paints `rows`, the last of the virtual rows after `line`, or of those above the first line
+    /// without one: the rows padding the line, then the fillers.
+    fn paint_virtual(
+        &mut self,
+        renderer: &mut TextRenderer,
+        rows: ops::Range<u16>,
+        line: Option<usize>,
+    ) {
+        let fillers = line.map_or(usize::MAX, |line| self.pane.rows_after(line as u32).1);
+        let padding = rows.len().saturating_sub(fillers) as u16;
+        let fillers_start = rows.start + padding;
+        if let Some(line) = line {
+            self.paint_line(renderer, rows.start..fillers_start, line);
+        }
+        self.paint(renderer, fillers_start..rows.end, self.styles.filler);
+    }
+
+    /// Where `line` ends: at its line break, or at the end of the text.
+    fn line_end(&self, line: usize) -> usize {
+        if line + 1 < self.text.len_lines() {
+            line_end_char_index(&self.text, line)
+        } else {
+            self.text.len_chars()
+        }
+    }
 }
 
 impl Decoration for Rows<'_> {
-    fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
-        // Rows skipped since the last line are fillers: those above the first line, or those
-        // after a line above the view.
-        self.paint(renderer, self.next_row..pos.visual_line, self.styles.filler);
-        let changed = self
-            .pane
-            .alignment
-            .change(self.pane.side, pos.doc_line as u32);
-        let row = pos.visual_line..pos.visual_line + 1;
-        if pos.first_visual_line && changed.is_some() {
-            self.paint(renderer, row, self.styles.line(self.pane.side));
+    fn reset_pos(&mut self, pos: usize) -> usize {
+        self.line_ends = false;
+        self.line_end(self.text.char_to_line(pos.min(self.text.len_chars())))
+    }
+
+    fn decorate_grapheme(&mut self, _: &mut TextRenderer, grapheme: &FormattedGrapheme) -> usize {
+        self.line_ends = true;
+        let line = self
+            .text
+            .char_to_line(grapheme.char_idx.min(self.text.len_chars()));
+        if line + 1 < self.text.len_lines() {
+            self.line_end(line + 1)
         } else {
-            self.next_row = self.next_row.max(row.end);
+            usize::MAX
         }
+    }
+
+    fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
+        // Rows skipped since the last line are virtual rows of the line before, whose end is
+        // above the view, or those above the first line.
+        let skipped = self.next_row..pos.visual_line;
+        self.paint_virtual(renderer, skipped, pos.doc_line.checked_sub(1));
+        self.paint_line(renderer, pos.visual_line..pos.visual_line + 1, pos.doc_line);
     }
 
     fn render_virt_lines(
@@ -318,13 +449,20 @@ impl Decoration for Rows<'_> {
         pos: LinePos,
         virt_off: Position,
     ) -> Position {
-        let fillers = &self.pane.alignment.fillers(self.pane.side).after;
-        let count = fillers
-            .binary_search_by_key(&(pos.doc_line as u32), |(line, _)| *line)
-            .map_or(0, |index| fillers[index].1) as u16;
+        // Where a line wraps, its virtual rows come after its last visual line.
+        if !std::mem::take(&mut self.line_ends) {
+            return Position::new(0, 0);
+        }
+        let (padding, fillers) = self.pane.rows_after(pos.doc_line as u32);
         let start = pos.visual_line + virt_off.row as u16;
-        self.paint(renderer, start..start + count, self.styles.filler);
-        Position::new(count as usize, 0)
+        let fillers_start = start + padding as u16;
+        self.paint_line(renderer, start..fillers_start, pos.doc_line);
+        self.paint(
+            renderer,
+            fillers_start..fillers_start + fillers as u16,
+            self.styles.filler,
+        );
+        Position::new(padding + fillers, 0)
     }
 }
 
@@ -334,7 +472,7 @@ mod tests {
     use std::sync::Arc;
 
     use helix_core::Rope;
-    use helix_view::diff_view::{builtin, Alignment, Row};
+    use helix_view::diff_view::{builtin, Alignment, Row, Wrap};
 
     use super::*;
 
@@ -396,6 +534,30 @@ mod tests {
         assert_eq!(hunk_from(&new_pane, 0, Direction::Forward, 1), None);
     }
 
+    /// The top of `pane` showing `text` at `offset`, laid out with `format`.
+    fn top_of(pane: &Pane, text: &Rope, offset: ViewPosition, format: &TextFormat) -> Top {
+        let text = text.slice(..);
+        let mut annotations = TextAnnotations::default();
+        annotations.add_line_annotation(Box::new(pane.filler_lines(text)));
+        top(pane, text, offset, format, &annotations)
+    }
+
+    /// The offset showing `top` at the top of `pane` showing `text`, laid out with `format`.
+    fn offset_of(pane: &Pane, text: &Rope, top: Top, format: &TextFormat) -> ViewPosition {
+        let text = text.slice(..);
+        let mut annotations = TextAnnotations::default();
+        annotations.add_line_annotation(Box::new(pane.filler_lines(text)));
+        offset_at(pane, text, top, 0, format, &annotations)
+    }
+
+    fn at(anchor: usize, vertical_offset: usize) -> ViewPosition {
+        ViewPosition {
+            anchor,
+            horizontal_offset: 0,
+            vertical_offset,
+        }
+    }
+
     #[test]
     fn panes_scroll_to_the_same_row() {
         // old: a b c       new: x y a b z c
@@ -420,28 +582,63 @@ mod tests {
             ]
         );
         let (old_pane, new_pane) = (pane(Side::Old, &alignment), pane(Side::New, &alignment));
-        let at = |anchor, vertical_offset| ViewPosition {
-            anchor,
-            horizontal_offset: 0,
-            vertical_offset,
-        };
+        let format = TextFormat::default();
+        let row = |row, rows| Top { row, rows };
         // The new side at its top shows the fillers above the old side's first line.
-        assert_eq!(top_row(&new_pane, 0, at(0, 0)), 0);
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 0, 0), at(0, 0));
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 1, 0), at(0, 1));
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 2, 0), at(0, 2));
+        assert_eq!(top_of(&new_pane, &new, at(0, 0), &format), row(0, 0));
+        assert_eq!(offset_of(&old_pane, &old, row(0, 0), &format), at(0, 0));
+        assert_eq!(offset_of(&old_pane, &old, row(1, 0), &format), at(0, 1));
+        assert_eq!(offset_of(&old_pane, &old, row(2, 0), &format), at(0, 2));
         // Line 1 of the old side, `b`, is on row 3.
-        assert_eq!(offset_at_row(&old_pane, old.slice(..), 3, 0), at(2, 0));
-        // Row 4 is a filler after `b` on the old side.
-        assert_eq!(
-            offset_at_row(&old_pane, old.slice(..), 4, 7),
-            ViewPosition {
-                anchor: 2,
-                horizontal_offset: 7,
-                vertical_offset: 1
-            }
-        );
-        assert_eq!(top_row(&old_pane, 1, at(2, 1)), 4);
-        assert_eq!(top_row(&new_pane, 4, at(8, 0)), 4);
+        assert_eq!(offset_of(&old_pane, &old, row(3, 0), &format), at(2, 0));
+        // Row 4 is a filler after `b` on the old side: below the end of `b`, as Helix anchors
+        // views on virtual lines.
+        assert_eq!(offset_of(&old_pane, &old, row(4, 0), &format), at(3, 1));
+        assert_eq!(top_of(&old_pane, &old, at(3, 1), &format), row(4, 0));
+        assert_eq!(top_of(&old_pane, &old, at(2, 1), &format), row(4, 0));
+        assert_eq!(top_of(&new_pane, &new, at(8, 0), &format), row(4, 0));
+    }
+
+    #[test]
+    fn wrapped_panes_scroll_to_the_same_row() {
+        // The old side's second line wraps to three rows, which the new one's pads.
+        let long = "the quick brown fox jumps";
+        let old = Rope::from(format!("a\n{long}\nc\n"));
+        let new = Rope::from("a\nthe quick\nc\n");
+        let alignment = Arc::new(builtin::align(old.slice(..), new.slice(..)));
+        let format = TextFormat {
+            soft_wrap: true,
+            viewport_width: 12,
+            ..TextFormat::default()
+        };
+        let wrap = || {
+            Some(Wrap::new(
+                [old.clone(), new.clone()],
+                [format.clone(), format.clone()],
+            ))
+        };
+        let (mut old_pane, mut new_pane) =
+            (pane(Side::Old, &alignment), pane(Side::New, &alignment));
+        (old_pane.wrap, new_pane.wrap) = (wrap(), wrap());
+        let rows = old_pane.row_height(1);
+        assert!(rows > 2, "{rows}");
+
+        // The old side's top on the second row of `long`.
+        let second =
+            anchor_at_visual_offset(old.slice(..), 2, 1, &format, &TextAnnotations::default());
+        assert!(second.0 > 2 && second.1 == 0, "{second:?}");
+        let top = top_of(&old_pane, &old, at(second.0, 0), &format);
+        assert_eq!(top, Top { row: 1, rows: 1 });
+        // The new side shows its padding there, below the end of its line, and comes back to
+        // the same row.
+        let end = new.line_to_char(2) - 1;
+        assert_eq!(offset_of(&new_pane, &new, top, &format), at(end, 1));
+        assert_eq!(top_of(&new_pane, &new, at(end, 1), &format), top);
+        assert_eq!(offset_of(&old_pane, &old, top, &format), at(second.0, 0));
+        // Past the padding, both are at `c`.
+        let after = Top { row: 2, rows: 0 };
+        assert_eq!(top_of(&new_pane, &new, at(2, rows), &format), after);
+        let c = old.line_to_char(2);
+        assert_eq!(offset_of(&old_pane, &old, after, &format), at(c, 0));
     }
 }

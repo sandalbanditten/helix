@@ -711,9 +711,10 @@ impl View {
             config.folding.placeholder.clone(),
         );
 
-        // jump labels are placed on the words of the text as it is
+        // jump labels are placed on the words of the text as it is, and the panes of the diff
+        // view show the text that changed
         let conceal = &config.conceal;
-        if conceal.enable && !doc.jump_labels.contains_key(&self.id) {
+        if conceal.enable && !doc.jump_labels.contains_key(&self.id) && doc.diff_view.is_none() {
             let reveal = focused.then(|| (doc.selection(self.id), conceal.reveal));
             if let Some(conceals) = doc.conceals(reveal) {
                 text_annotations.add_conceals(conceals);

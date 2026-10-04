@@ -2771,8 +2771,7 @@ impl Document {
             .unwrap_or_else(|| "↪ ".into());
         let tab_width = self.tab_width() as u16;
         TextFormat {
-            // The rows of the diff view's panes line up only while each line takes one.
-            soft_wrap: enable_soft_wrap && viewport_width > 10 && self.diff_view.is_none(),
+            soft_wrap: enable_soft_wrap && viewport_width > 10,
             tab_width,
             max_wrap: max_wrap.min(viewport_width / 4),
             max_indent_retain: max_indent_retain.min(viewport_width * 2 / 5),
