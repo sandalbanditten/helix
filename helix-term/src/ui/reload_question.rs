@@ -1,5 +1,4 @@
-//! The question whether to reload buffers whose files changed on disk while they had unsaved
-//! changes, asked in a box of keys like those of key sequences.
+//! The question whether to reload buffers with unsaved changes whose files changed on disk.
 
 use std::time::SystemTime;
 
@@ -27,14 +26,12 @@ struct Asked {
     doc: DocumentId,
     /// What its file holds now.
     disk: DiskText,
-    /// When the buffer last knew its file to change: once it writes or reloads the file, the
-    /// question is moot.
+    /// When the buffer last knew its file to change.
     known: SystemTime,
 }
 
 impl ReloadQuestion {
-    /// Asks about `doc`, whose file now holds `disk` and which knew of the file's change at
-    /// `known`, after the buffers asked about already.
+    /// Asks about `doc`, whose file now holds `disk`, after the buffers asked about already.
     pub fn ask(&mut self, doc: DocumentId, disk: DiskText, known: SystemTime) {
         let asked = Asked { doc, disk, known };
         match self.queue.iter_mut().find(|queued| queued.doc == doc) {
@@ -85,8 +82,7 @@ impl ReloadQuestion {
         }
     }
 
-    /// Keeps the text of the first `count` buffers asked about, so that writing them overwrites
-    /// their files.
+    /// Keeps the text of the first `count` buffers asked about.
     fn keep(&mut self, count: usize, editor: &mut Editor) {
         let answered: Vec<_> = self.queue.drain(..count).collect();
         let status = summary(&answered, "kept", editor);

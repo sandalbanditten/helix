@@ -1,9 +1,5 @@
 //! Reloads the buffers whose files change on disk, and refreshes their diff bases and HEAD names
 //! when HEAD of their repository moves.
-//!
-//! Only the directories of the open files are watched, each without its subdirectories, and the
-//! few files that move HEAD, so the cost grows with the open files, not with the project. Files
-//! are read and compared in the background; the main thread only applies what came of it.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -31,8 +27,7 @@ use crate::{compositor::Compositor, job, ui::EditorView, watch::Watcher};
 
 mod head;
 
-/// How long a check waits while the editor writes files itself: its own writes look like changes
-/// from outside until they are done, and an atomic save even moves the file away first.
+/// How long a check waits while the editor writes files itself.
 const RETRY: Duration = Duration::from_millis(100);
 
 /// The watched files, by what they are to the editor.
@@ -40,8 +35,7 @@ type Files = HashMap<PathBuf, Watched>;
 
 /// What a watched file is to the editor.
 enum Watched {
-    /// The file of the document at this path, by the document's own path or, for a symlink, by
-    /// the path of the file it links to, which is where writes go.
+    /// The file of the document at this path, or of the file it links to.
     Document(PathBuf),
     /// A file whose change moves HEAD of a repository, or the closest directory to it that is
     /// missing.
@@ -64,8 +58,7 @@ struct Watching {
     files: Arc<ArcSwap<Files>>,
     /// The names of the file of each document path, looked up once.
     names: HashMap<PathBuf, Vec<PathBuf>>,
-    /// The files moving HEAD of the repository holding each directory with documents, looked
-    /// up once and again after HEAD moved, its HEAD file first.
+    /// The files moving HEAD of the repository holding each directory with documents.
     heads: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -177,12 +170,10 @@ enum Trigger {
     /// The watcher saw the files change.
     Watcher,
     /// The terminal got the focus back, after other programs may have changed files unseen.
-    /// Deletions the watcher reported before aren't repeated.
     Focus,
 }
 
-/// Handles the files that the watcher saw change: checks their documents, and when HEAD moved,
-/// refreshes the diff bases and HEAD names of the documents in its repository.
+/// Handles the files that the watcher saw change.
 fn changed(watching: &Weak<Mutex<Watching>>, paths: HashSet<PathBuf>, editor: &mut Editor) {
     let Some(watching) = watching.upgrade() else {
         return;
@@ -367,8 +358,7 @@ fn is_not_found(err: &anyhow::Error) -> bool {
         .is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
-/// Applies what the files turned out to be, asking about the documents with unsaved changes and
-/// checking again those that moved on meanwhile.
+/// Applies what the files turned out to be, asking about the documents with unsaved changes.
 fn apply(
     results: Vec<(Candidate, Outcome)>,
     trigger: Trigger,

@@ -69,7 +69,7 @@
 | `default-line-ending` | The line ending to use for new documents. Can be `native`, `lf`, `crlf`, `ff`, `cr` or `nel`. `native` uses the platform's native line ending (`crlf` on Windows, otherwise `lf`). | `"native"` |
 | `insert-final-newline` | Whether to automatically insert a trailing line-ending on write if missing | `true` |
 | `atomic-save` | Whether to use atomic operations to write documents to disk. This prevents data loss if the editor is interrupted while writing the file, but may confuse some file watching/hot reloading programs. | `true` |
-| `auto-reload` | Whether to reload buffers whose files change on disk, asking first when they have unsaved changes, and to refresh the diff gutter when HEAD moves. See [Auto-reload](./auto-reload.md) | `true` |
+| `auto-reload` | Whether to reload buffers whose files change on disk. See [Auto-reload](./auto-reload.md) | `true` |
 | `trim-final-newlines` | Whether to automatically remove line-endings after the final one on write | `false` |
 | `trim-trailing-whitespace` | Whether to automatically remove whitespace preceding line endings on write | `false` |
 | `popup-border` | Draw border around `popup`, `menu`, `all`, or `none` | `"none"` |

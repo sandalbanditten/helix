@@ -1,5 +1,4 @@
-//! Watching directories, so that the file tree, dired buffers and other buffers follow changes
-//! made outside of them: in another program, by `git`, or by a build.
+//! Watching directories, so that the file tree and buffers follow changes made outside of them.
 
 use std::{
     collections::HashSet,
@@ -21,8 +20,7 @@ use crate::{compositor::Compositor, job};
 /// What handles a batch of changed paths, on the main thread.
 type Handler = Arc<dyn Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync>;
 
-/// How long changes are collected before they are handled, so that a burst of them, like
-/// `git checkout` rewriting many files, is handled at once.
+/// How long changes are collected before they are handled.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
 pub struct Watcher {
@@ -38,8 +36,7 @@ impl Watcher {
         Self::filtered(|_| true, handle)
     }
 
-    /// A watcher handing the paths that changed to `handle`, of those it `accept`s. `accept` runs
-    /// on the watcher's own thread, so that changes of no interest never wake the editor.
+    /// A watcher handing the paths that changed to `handle`, of those it `accept`s on its own thread.
     pub fn filtered(
         accept: impl Fn(&Path) -> bool + Send + 'static,
         handle: impl Fn(HashSet<PathBuf>, &mut Editor, &mut Compositor) + Send + Sync + 'static,

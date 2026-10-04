@@ -9,8 +9,7 @@ use helix_view::doc;
 
 use super::*;
 
-/// How long nothing should happen for when a change is not to be followed: well past the
-/// watcher's batching and a background read.
+/// How long nothing should happen for when a change is not to be followed.
 const QUIET: Duration = Duration::from_millis(400);
 
 fn session(path: &Path) -> anyhow::Result<Session> {

@@ -1,5 +1,4 @@
-//! Refreshing what documents show of their repository once HEAD moved: their diff bases, which
-//! are the files as of HEAD, and the name of HEAD.
+//! Refreshing the diff bases and HEAD names of documents once HEAD moved.
 
 use std::{collections::HashSet, path::PathBuf};
 
