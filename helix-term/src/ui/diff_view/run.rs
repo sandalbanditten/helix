@@ -87,19 +87,46 @@ async fn difftastic(path: &str, old: &Rope, new: &Rope) -> Result<Vec<u8>, Strin
         .await
         .map_err(|err| format!("difft failed to run: {err}"))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = stderr
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("no reason given");
-        return Err(format!("difft failed: {reason}"));
+        return Err(failure(&String::from_utf8_lossy(&output.stderr)));
     }
     Ok(output.stdout)
+}
+
+/// What went wrong, from what `difft` printed to `stderr`: its first line, or the message of a
+/// panic, which follows the line telling where it happened.
+fn failure(stderr: &str) -> String {
+    let mut lines = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    match lines.next() {
+        Some(line) if line.contains(" panicked at ") => {
+            format!(
+                "difft panicked: {}",
+                lines.next().unwrap_or("no reason given")
+            )
+        }
+        Some(line) => format!("difft failed: {line}"),
+        None => "difft failed: no reason given".to_owned(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failures_tell_what_went_wrong() {
+        assert_eq!(
+            failure("\nthread 'main' (1) panicked at src/display/hunks.rs:667:31:\nHunk lines should be present\nnote: run with `RUST_BACKTRACE=1`\n"),
+            "difft panicked: Hunk lines should be present"
+        );
+        assert_eq!(
+            failure("error: unexpected argument\n"),
+            "difft failed: error: unexpected argument"
+        );
+        assert_eq!(failure(""), "difft failed: no reason given");
+    }
 
     /// Times `difft` and reading its output on changes to this repository's biggest files: one
     /// it takes long on, one it panics on. Run it with
