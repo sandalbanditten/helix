@@ -62,7 +62,8 @@ opened from. From the old version's pane, the file opens at the line on the same
 When a diff has many files, the diff tree lists them on the left, or on the right with the file
 tree's [`side`](./editor.md#editorfile-tree-section), in place of the file tree. Each file shows
 the lines it adds and removes, like `+12 -3` in `git diff --stat`, and each directory the sums
-of its files. The file shown is marked. The diffs of the files next to it are worked out ahead,
+of its files. The marks next to them tell new, deleted and changed files apart, and directories
+get theirs like in the file tree. The file shown is marked. The diffs of the files next to it are worked out ahead,
 so `]g` and `[g` get there without waiting.
 
 `Space e` focuses the diff tree on the file shown, and `Space E` hides or shows it. While it is

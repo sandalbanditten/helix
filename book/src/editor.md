@@ -299,12 +299,14 @@ back; `Space E` switches between always showing the tree and showing it only whi
 While the tree is focused it takes the keys listed in the [keymap](./keymap.md#file-tree); any other
 key gives the editor its focus back and runs there.
 
-The tree follows the working directory, changes made on disk and the git status. It is fitted to
-its widest row when first shown; `=` fits it again and `+`/`-` widen and narrow it. With
-[`mouse`](#editor-section) on, clicking a file opens it, clicking a directory expands or collapses
-it, the wheel scrolls, and the rail between tree and editor scrolls, pages and, dragged sideways,
-resizes the tree. The search (`/`) goes through the files the file picker lists, following the
-[`[editor.file-picker]`](#editorfile-picker-section) settings.
+The tree follows the working directory, changes made on disk and the git status. A directory's
+git mark is the one its changed files share, or modified where they differ; a conflict below
+always shows. The tree is fitted to its widest row when first shown; `=` fits it again and
+`+`/`-` widen and narrow it. With [`mouse`](#editor-section) on, clicking a file opens it,
+clicking a directory expands or collapses it, the wheel scrolls, and the rail between tree and
+editor scrolls, pages and, dragged sideways, resizes the tree. The search (`/`) goes through the
+files the file picker lists, following the [`[editor.file-picker]`](#editorfile-picker-section)
+settings.
 
 | Key | Description | Default |
 | --- | --- | --- |
