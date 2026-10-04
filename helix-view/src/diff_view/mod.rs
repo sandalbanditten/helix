@@ -13,7 +13,7 @@ pub mod alignment;
 pub mod builtin;
 pub mod difftastic;
 
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, sync::Arc};
+use std::{cell::RefCell, path::PathBuf, sync::Arc};
 
 use helix_core::{
     doc_formatter::{DocumentFormatter, TextFormat},
@@ -46,7 +46,11 @@ impl Pane {
     /// The filler rows of the pane showing `text`, and the rows padding its wrapped lines, as
     /// virtual lines.
     pub fn filler_lines<'a>(&'a self, text: RopeSlice<'a>) -> FillerLines<'a> {
-        FillerLines { pane: self, text }
+        FillerLines {
+            pane: self,
+            text,
+            line_end: None,
+        }
     }
 
     /// The rows `row` of the alignment takes: as many as the taller of its lines wraps to.
@@ -59,7 +63,12 @@ impl Pane {
     /// The virtual rows above the first line: the fillers facing the other side's first lines.
     pub fn rows_above(&self) -> usize {
         let above = self.alignment.fillers(self.side).above;
-        (0..above).map(|row| self.row_height(row)).sum()
+        match &self.wrap {
+            Some(wrap) => (0..above)
+                .map(|row| wrap.row_height(&self.alignment, row))
+                .sum(),
+            None => above as usize,
+        }
     }
 
     /// The virtual rows after `line`: those padding it to the height of its row, then the fillers
@@ -96,8 +105,8 @@ impl Pane {
 pub struct Wrap {
     texts: [Rope; 2],
     formats: [TextFormat; 2],
-    /// The rows of the lines of each side measured so far.
-    heights: [RefCell<HashMap<u32, usize>>; 2],
+    /// The rows of the lines of each side measured so far, by line; 0 for those not measured.
+    heights: [RefCell<Vec<u32>>; 2],
 }
 
 impl Wrap {
@@ -121,16 +130,18 @@ impl Wrap {
             Side::Old => 0,
             Side::New => 1,
         };
-        *self.heights[index]
-            .borrow_mut()
-            .entry(line)
-            .or_insert_with(|| {
-                line_rows(
-                    self.texts[index].slice(..),
-                    line as usize,
-                    &self.formats[index],
-                )
-            })
+        let mut heights = self.heights[index].borrow_mut();
+        if heights.is_empty() {
+            *heights = vec![0; self.texts[index].len_lines()];
+        }
+        let Some(rows) = heights.get_mut(line as usize) else {
+            return 1;
+        };
+        if *rows == 0 {
+            let text = self.texts[index].slice(..);
+            *rows = line_rows(text, line as usize, &self.formats[index]) as u32;
+        }
+        *rows as usize
     }
 
     fn row_height(&self, alignment: &Alignment, row: u32) -> usize {
@@ -171,6 +182,8 @@ fn line_rows(text: RopeSlice, line: usize, format: &TextFormat) -> usize {
 pub struct FillerLines<'a> {
     pane: &'a Pane,
     text: RopeSlice<'a>,
+    /// The last line whose end was looked for, and where it ends.
+    line_end: Option<(usize, usize)>,
 }
 
 impl LineAnnotation for FillerLines<'_> {
@@ -185,12 +198,20 @@ impl LineAnnotation for FillerLines<'_> {
         doc_line: usize,
     ) -> Position {
         // A visual line ends where its line wraps too: only the end of the line gets rows.
-        if self
-            .text
-            .char_to_line(line_end_char_idx.min(self.text.len_chars()))
-            <= doc_line
-        {
-            return Position::new(0, 0);
+        if self.pane.wrap.is_some() {
+            let end = match self.line_end {
+                Some((line, end)) if line == doc_line => end,
+                _ => {
+                    let end = self
+                        .text
+                        .line_to_char((doc_line + 1).min(self.text.len_lines()));
+                    self.line_end = Some((doc_line, end));
+                    end
+                }
+            };
+            if line_end_char_idx < end {
+                return Position::new(0, 0);
+            }
         }
         let (padding, fillers) = self.pane.rows_after(doc_line as u32);
         Position::new(padding + fillers, 0)

@@ -346,8 +346,10 @@ pub struct Rows<'a> {
     area: Rect,
     /// The first visual row not painted yet.
     next_row: u16,
-    /// Whether the visual line drawn last ends its line, rather than wrapping.
+    /// While the pane wraps lines: whether the visual line drawn last ends its line, and the
+    /// line whose end comes next.
     line_ends: bool,
+    next_line: usize,
 }
 
 impl<'a> Rows<'a> {
@@ -359,6 +361,7 @@ impl<'a> Rows<'a> {
             area,
             next_row: 0,
             line_ends: false,
+            next_line: 0,
         }
     }
 
@@ -398,6 +401,9 @@ impl<'a> Rows<'a> {
         rows: ops::Range<u16>,
         line: Option<usize>,
     ) {
+        if rows.is_empty() {
+            return;
+        }
         let fillers = line.map_or(usize::MAX, |line| self.pane.rows_after(line as u32).1);
         let padding = rows.len().saturating_sub(fillers) as u16;
         let fillers_start = rows.start + padding;
@@ -407,9 +413,13 @@ impl<'a> Rows<'a> {
         self.paint(renderer, fillers_start..rows.end, self.styles.filler);
     }
 
-    /// Where `line` ends: at its line break, or at the end of the text.
-    fn line_end(&self, line: usize) -> usize {
-        if line + 1 < self.text.len_lines() {
+    /// Asks for the grapheme where `line` ends, at its line break or at the end of the text,
+    /// while the pane wraps lines.
+    fn hook_line_end(&mut self, line: usize) -> usize {
+        self.next_line = line;
+        if self.pane.wrap.is_none() || line >= self.text.len_lines() {
+            usize::MAX
+        } else if line + 1 < self.text.len_lines() {
             line_end_char_index(&self.text, line)
         } else {
             self.text.len_chars()
@@ -420,19 +430,15 @@ impl<'a> Rows<'a> {
 impl Decoration for Rows<'_> {
     fn reset_pos(&mut self, pos: usize) -> usize {
         self.line_ends = false;
-        self.line_end(self.text.char_to_line(pos.min(self.text.len_chars())))
+        if self.pane.wrap.is_none() {
+            return usize::MAX;
+        }
+        self.hook_line_end(self.text.char_to_line(pos.min(self.text.len_chars())))
     }
 
-    fn decorate_grapheme(&mut self, _: &mut TextRenderer, grapheme: &FormattedGrapheme) -> usize {
+    fn decorate_grapheme(&mut self, _: &mut TextRenderer, _: &FormattedGrapheme) -> usize {
         self.line_ends = true;
-        let line = self
-            .text
-            .char_to_line(grapheme.char_idx.min(self.text.len_chars()));
-        if line + 1 < self.text.len_lines() {
-            self.line_end(line + 1)
-        } else {
-            usize::MAX
-        }
+        self.hook_line_end(self.next_line + 1)
     }
 
     fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
@@ -450,10 +456,11 @@ impl Decoration for Rows<'_> {
         virt_off: Position,
     ) -> Position {
         // Where a line wraps, its virtual rows come after its last visual line.
-        if !std::mem::take(&mut self.line_ends) {
+        let line_ends = std::mem::take(&mut self.line_ends) || self.pane.wrap.is_none();
+        let (padding, fillers) = self.pane.rows_after(pos.doc_line as u32);
+        if !line_ends || padding + fillers == 0 {
             return Position::new(0, 0);
         }
-        let (padding, fillers) = self.pane.rows_after(pos.doc_line as u32);
         let start = pos.visual_line + virt_off.row as u16;
         let fillers_start = start + padding as u16;
         self.paint_line(renderer, start..fillers_start, pos.doc_line);
