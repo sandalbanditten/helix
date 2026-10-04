@@ -64,13 +64,10 @@ pub enum Error {
 pub fn parse(json: &[u8], old: RopeSlice, new: RopeSlice) -> Result<Alignment, Error> {
     let file: File = serde_json::from_slice(json)?;
     let lines = [text_lines(old) as u32, text_lines(new) as u32];
-    let alignment = match file.status {
+    let (rows, mut changes): (Vec<Row>, [BTreeMap<u32, LineChange>; 2]) = match file.status {
         // Unchanged as far as difftastic cares, which leaves out e.g. blank lines: the lines
-        // still have to line up, with nothing highlighted.
-        Status::Unchanged => {
-            let rows = builtin::align(old, new).rows().to_vec();
-            Alignment::new(rows, lines, [Vec::new(), Vec::new()])
-        }
+        // still have to line up.
+        Status::Unchanged => (builtin::align(old, new).rows().to_vec(), Default::default()),
         Status::Created | Status::Deleted => {
             let rows = (0..lines[0])
                 .map(|line| Row {
@@ -83,7 +80,7 @@ pub fn parse(json: &[u8], old: RopeSlice, new: RopeSlice) -> Result<Alignment, E
                 }))
                 .collect();
             let whole = |lines: u32| (0..lines).map(|line| (line, LineChange::Whole)).collect();
-            Alignment::new(rows, lines, [whole(lines[0]), whole(lines[1])])
+            (rows, [whole(lines[0]), whole(lines[1])])
         }
         Status::Changed => {
             // difftastic also aligns the empty line after a final line break, or one past the
@@ -126,14 +123,26 @@ pub fn parse(json: &[u8], old: RopeSlice, new: RopeSlice) -> Result<Alignment, E
                     })
                     .collect()
             };
-            Alignment::new(
+            (
                 rows,
-                lines,
                 [changes(old, 0, old_parts), changes(new, 1, new_parts)],
             )
         }
     };
-    alignment.ok_or(Error::Lines)
+    // Blank lines hold no tokens for difftastic to list as changed, yet facing fillers they were
+    // added or removed. Other lines facing fillers may have only moved.
+    for row in &rows {
+        let (side, line, text) = match (row.old, row.new) {
+            (Some(line), None) => (0, line, old),
+            (None, Some(line)) => (1, line, new),
+            _ => continue,
+        };
+        if text.line(line as usize).chars().all(char::is_whitespace) {
+            changes[side].entry(line).or_insert(LineChange::Whole);
+        }
+    }
+    let changes = changes.map(|changes| changes.into_iter().collect());
+    Alignment::new(rows, lines, changes).ok_or(Error::Lines)
 }
 
 #[cfg(test)]
@@ -203,6 +212,27 @@ mod tests {
     }
 
     #[test]
+    fn blank_lines_facing_fillers_are_added_or_removed() {
+        // What difftastic 0.71 printed for a blank line added between functions and one in `b`.
+        let json = r#"{"aligned_lines":[[0,0],[null,1],[1,2],[2,3],[null,4],[null,5],[3,6],[4,7]],"chunks":[[{"rhs":{"line_number":5,"changes":[{"start":4,"end":5,"content":"y","highlight":"normal"},{"start":5,"end":6,"content":"(","highlight":"delimiter"},{"start":6,"end":7,"content":")","highlight":"delimiter"},{"start":7,"end":8,"content":";","highlight":"normal"}]}}]],"language":"Rust","path":"new.rs","status":"changed"}"#;
+        let alignment = parse_texts(
+            json,
+            "fn a() {}\nfn b() {\n    x();\n}\n",
+            "fn a() {}\n\nfn b() {\n    x();\n    \n    y();\n}\n",
+        )
+        .unwrap();
+        assert_eq!(alignment.change(Side::New, 1), Some(&LineChange::Whole));
+        assert_eq!(
+            alignment.change(Side::New, 4),
+            Some(&LineChange::Whole),
+            "only whitespace"
+        );
+        assert_eq!(alignment.change(Side::New, 5), Some(&LineChange::Whole));
+        assert_eq!(alignment.change(Side::New, 3), None);
+        assert_eq!(alignment.changes(Side::New, 0..8).len(), 3);
+    }
+
+    #[test]
     fn crlf_and_missing_final_line_breaks_line_up() {
         let crlf = r#"{"aligned_lines":[[0,0],[1,1],[2,2]],"chunks":[[{"lhs":{"line_number":1,"changes":[{"start":3,"end":4,"content":"b","highlight":"normal"}]},"rhs":{"line_number":1,"changes":[{"start":3,"end":4,"content":"c","highlight":"normal"}]}}]],"language":"Rust","path":"crlf_new.rs","status":"changed"}"#;
         let alignment = parse_texts(
@@ -237,7 +267,11 @@ mod tests {
             rows(&alignment),
             [(Some(0), Some(0)), (Some(1), None), (Some(2), Some(1))]
         );
-        assert_eq!(alignment.change(Side::Old, 1), None, "nothing highlighted");
+        assert_eq!(
+            alignment.change(Side::Old, 1),
+            Some(&LineChange::Whole),
+            "a blank line removed"
+        );
     }
 
     #[test]
