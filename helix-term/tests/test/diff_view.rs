@@ -530,6 +530,23 @@ async fn the_diff_tree_lists_the_files_with_their_lines() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_diff_tree_shows_the_file_opened_again() -> anyhow::Result<()> {
+    let (_dir, old, new) = directories()?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session
+        .until("the first file", |app| panes(app).is_some())
+        .await;
+    session.keys("gf").await?;
+    assert!(panes(&session.app).is_none());
+    session.keys("<space>e<ret>").await?;
+    session
+        .until("its diff again", |app| name(app) == "sub/b.rs (new)")
+        .await;
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn changes_since_head_are_diffed_together() -> anyhow::Result<()> {
     let (dir, path) = repository("a\nb\n")?;
     fs::write(&path, "a\nc\n")?;

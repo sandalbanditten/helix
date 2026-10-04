@@ -254,7 +254,7 @@ struct Files {
     set: DiffSet,
     reader: Reader,
     tree: DiffTree,
-    /// The file shown in the panes, by its index.
+    /// The file shown in the panes, or shown last when they closed to open it, by its index.
     current: Option<usize>,
     /// The view focused when the diff was asked for.
     origin: Option<ViewId>,
@@ -403,10 +403,7 @@ impl DiffView {
             }
             // Closing the panes ends a diff of many, unless they closed to open their file.
             match &mut self.files {
-                Some(files) if files.keep => {
-                    files.keep = false;
-                    files.current = None;
-                }
+                Some(files) if files.keep => files.keep = false,
                 _ => self.end_many(),
             }
             return;
@@ -728,7 +725,10 @@ impl DiffView {
             return;
         };
         let index = files.set.files.iter().position(|file| file.path == path);
-        if let Some(index) = index.filter(|&index| files.current != Some(index)) {
+        // The file shown last shows again once its panes closed.
+        if let Some(index) =
+            index.filter(|&index| self.pair.is_none() || files.current != Some(index))
+        {
             self.show_file(index, editor);
         }
     }
