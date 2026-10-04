@@ -1,17 +1,9 @@
 //! Concealing: document text shown as the symbol it stands for, like `α` for `alpha` in Typst
 //! math.
 //!
-//! A language's `conceals.scm` query captures the text to conceal with `@conceal` and names the
-//! [`SymbolTable`] that resolves it with `(#set! conceal.symbols "<table>")`. The `@conceal`
-//! nodes of a match are concealed together, so a query can hide a prefix, like the `#` of Typst's
-//! `#sym.qed`, along with the symbol. Nothing inside a node captured with `@noconceal` is
-//! concealed, and of nested conceals only the outermost is shown.
-//!
-//! [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except the
-//! ones that the cursors of a selection reveal (see [`ConcealReveal`]). The conceals of a line
-//! are computed once and kept in a [`ConcealCache`] until the tree changes: a query costs about
-//! as much as walking to the line through the tree, which an editor would otherwise do several
-//! times per key press.
+//! A language's `conceals.scm` query captures the text to conceal, and a [`SymbolTable`] resolves
+//! it. [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except
+//! the ones the cursors reveal.
 
 mod typst;
 
@@ -31,17 +23,13 @@ use crate::syntax::{merge_regions, Loader, Syntax};
 use crate::text_annotations::{Conceal, ConcealSource};
 use crate::{RopeSlice, Selection};
 
-/// The longest text, in bytes, that is looked up in a [`SymbolTable`]. Longer captures are left
-/// as they are, which bounds the work for a query capturing large nodes.
+/// The longest text, in bytes, that is looked up in a [`SymbolTable`].
 const MAX_CONCEALED_BYTES: usize = 64;
 
-/// The most lines whose conceals are computed at once: the line the document formatter reaches,
-/// up to a quarter before it, which covers traversals that step back line by line, and the lines
-/// after it.
+/// The most lines whose conceals are computed at once.
 const FETCHED_LINES: usize = 128;
 
-/// The most lines whose conceals are handed to the document formatter at once. A traversal that
-/// steps back line by line is handed them again for every line.
+/// The most lines whose conceals are handed to the document formatter at once.
 const SERVED_LINES: usize = 16;
 
 /// A table of symbols that the text a `conceals.scm` query captures is looked up in.
@@ -79,13 +67,11 @@ impl FromStr for SymbolTable {
     }
 }
 
-/// When concealed text is shown as it is, at the cursors of the focused view. In any case a
-/// selection that starts or ends inside concealed text reveals it.
+/// When concealed text is shown as it is, at the cursors of the focused view.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConcealReveal {
-    /// While a cursor is on the text, on the char before it on the same line, or on the char
-    /// after it.
+    /// While a cursor is on the text or next to it.
     #[default]
     Adjacent,
     /// While a cursor is on the text.
@@ -126,8 +112,8 @@ impl ConcealReveal {
     }
 }
 
-/// The conceals of the lines of a syntax tree, computed as they are needed and kept for later
-/// traversals, before any are revealed. It has to be cleared whenever the tree changes.
+/// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
+/// whenever the tree changes.
 #[derive(Debug, Default)]
 pub struct ConcealCache {
     /// The conceals of each line computed so far, sorted and disjoint.
@@ -163,8 +149,8 @@ pub struct SyntaxConceals<'a> {
 }
 
 impl<'a> SyntaxConceals<'a> {
-    /// The conceals of `syntax`, a tree of `text`, or `None` if its language has no conceals.
-    /// `cache` keeps them for this tree.
+    /// The conceals of `syntax`, a tree of `text`, kept in `cache`, or `None` if its language has no
+    /// conceals.
     pub fn new(
         text: RopeSlice<'a>,
         syntax: &'a Syntax,

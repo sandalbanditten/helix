@@ -1669,8 +1669,7 @@ pub struct ConcealMatch {
     /// The bytes from the first to the last node of the match's `@conceal` or `@noconceal`
     /// capture.
     pub bytes: ops::Range<u32>,
-    /// The table that resolves the text of a `@conceal` match, or `None` for a `@noconceal`
-    /// match, whose text nothing is concealed in.
+    /// The table that resolves the text of a `@conceal` match, or `None` for a `@noconceal` match.
     pub table: Option<SymbolTable>,
 }
 

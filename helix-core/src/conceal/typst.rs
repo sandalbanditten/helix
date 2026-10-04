@@ -3,8 +3,7 @@
 
 use codex::{Def, ModifierSet, Module};
 
-/// Typst's shorthands of more than one character, in math and in markup, and the characters they
-/// stand for, from `typst-syntax`'s `MathShorthand::LIST` and `Shorthand::LIST`.
+/// Typst's shorthands of more than one character and the characters they stand for.
 const SHORTHANDS: &[(&str, &str)] = &[
     // markup and math
     ("...", "…"),
@@ -48,8 +47,7 @@ const SHORTHANDS: &[(&str, &str)] = &[
     ("||", "‖"),
 ];
 
-/// The symbol that `path`, a name with modifiers like `arrow.r.long`, stands for in math, which
-/// looks names up in the `sym` module.
+/// The symbol that `path`, a name with modifiers like `arrow.r.long`, stands for in math.
 pub(super) fn math_symbol(path: &str) -> Option<&'static str> {
     resolve(codex::SYM, path)
 }
@@ -67,8 +65,7 @@ pub(super) fn shorthand(shorthand: &str) -> Option<&'static str> {
         .map(|&(_, symbol)| symbol)
 }
 
-/// Resolves `path` in `module` like Typst does: the names of submodules, then the name of a
-/// symbol, then its modifiers in any order.
+/// Resolves `path` in `module` like Typst does, with modifiers in any order.
 fn resolve(mut module: Module, path: &str) -> Option<&'static str> {
     if path.split('.').any(str::is_empty) {
         return None;

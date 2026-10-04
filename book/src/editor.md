@@ -665,22 +665,15 @@ placeholder = "⋯"
 
 ### `[editor.conceal]` Section
 
-Concealing shows text as the symbol it stands for until a cursor comes close: Typst's
-`$2 alpha^2$` is shown as `$2 α^2$`, and as it is while a cursor is on `alpha` or next to it. The
-text to conceal and its symbols come from the language's `conceals.scm` query (see
-[Adding conceal queries](./guides/conceal.md)); `hx --health` lists the languages that have one.
-
-Only the cursors of the focused view reveal concealed text. A selection that starts or ends inside
-concealed text reveals it too, and nothing is concealed while jump labels are shown, nor in the
-panes of the [diff view](./diff-view.md). Moving the
-cursor up or down keeps to the columns as they are shown.
+Options for concealing, which shows text as the symbol it stands for until the cursor comes close:
+Typst's `$2 alpha^2$` is shown as `$2 α^2$`.
 
 | Key | Description | Default |
 | --- | --- | --- |
 | `enable` | Whether text is concealed | `true` |
-| `reveal` | When a cursor shows concealed text as it is: `adjacent` while it is on the text or on the character before or after it, `symbol` while it is on the text, `line` while it is on the text's line | `adjacent` |
+| `reveal` | When the cursor shows concealed text as it is: `adjacent` while it is on or next to the text, `symbol` while it is on the text, `line` while it is on the text's line | `adjacent` |
 
-Concealed text keeps its syntax highlighting, with the `ui.virtual.conceal` theme scope on top.
+Concealed text is highlighted with the `ui.virtual.conceal` theme scope.
 
 Example:
 
