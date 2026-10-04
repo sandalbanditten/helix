@@ -67,8 +67,8 @@ These configuration keys are available:
 | `language-servers`    | The Language Servers used for this language. See below for more information in the section [Configuring Language Servers for a language](#configuring-language-servers-for-a-language)   |
 | `grammar`             | The tree-sitter grammar to use (defaults to the value of `name`) |
 | `formatter`           | The formatter for the language, it will take precedence over the lsp when defined. The formatter must be able to take the original file as input from stdin and write the formatted file to stdout. The filename of the current buffer can be passed as argument by using the `%{buffer_name}` expansion variable. See below for more information in the [Configuring the formatter command](#configuring-the-formatter-command) |
-| `compile-command`     | The shell command `:compile` runs in the [compilation buffer](./compilation.md), for example `"cargo build"`. It runs through `editor.shell` in the topmost directory with a root marker (see [below](#project-and-lsp-root-selection)) and can use [expansions](./command-line.md#expansions) like `%{file_path_absolute}` |
-| `test-command`        | The shell command `:compile-test` runs, for example `"cargo test"`, like `compile-command` |
+| `compile-command`     | The shell command `:compile` runs in the [compilation buffer](./compilation.md), for example `"cargo build"` |
+| `test-command`        | The shell command `:compile-test` runs, for example `"cargo test"` |
 | `soft-wrap`           | [editor.softwrap](./editor.md#editorsoft-wrap-section)
 | `text-width`          |  Maximum line length. Used for the `:reflow` command and soft-wrapping if `soft-wrap.wrap-at-text-width` is set, defaults to `editor.text-width`   |
 | `rulers`              | Overrides the `editor.rulers` config key for the language. |

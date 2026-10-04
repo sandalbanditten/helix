@@ -30,8 +30,7 @@ use crate::{compositor::Compositor, job};
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
 pub struct Output {
-    /// The chars at the end of the buffer that `text` replaces: the rows of the screen shown
-    /// before that changed since.
+    /// The chars at the end of the buffer that `text` replaces.
     pub replace: usize,
     pub text: String,
     /// The chars of `text`.
@@ -89,8 +88,7 @@ impl Output {
         }
     }
 
-    /// Adds `shown` with the `loci` in it, in place of the last `replace` chars of the output:
-    /// rows of the screen, which are either still pending here or in the buffer already.
+    /// Adds `shown` with the `loci` in it, in place of the last `replace` chars of the output.
     fn push(&mut self, replace: usize, shown: &Shown, loci: Vec<Locus>) {
         let pending = replace.min(self.chars);
         if pending > 0 {
@@ -131,8 +129,7 @@ impl Output {
 #[derive(Debug, Default)]
 struct Pending {
     output: Output,
-    /// Whether a callback that takes output is queued. Only one is, so that output arriving
-    /// while the editor is busy makes the next batch larger rather than queueing more renders.
+    /// Whether a callback that takes output is queued.
     queued: bool,
 }
 
@@ -145,19 +142,17 @@ struct Shared {
 
 /// A callback appends at most this much output, so that keys wait for no more than that.
 const BATCH: usize = 256 * 1024;
-/// The reader waits while this much output is pending, rather than filling memory with output
-/// that arrives faster than the editor takes it.
+/// The reader waits while this much output is pending.
 const PENDING: usize = 4 * 1024 * 1024;
 /// How often the reader looks at the leader when no output arrives.
 const TICK: Duration = Duration::from_millis(50);
 /// The screen shows anew at most this often, as a progress bar is redrawn say.
 const REFRESH: Duration = Duration::from_millis(100);
-/// How long what keeps running has before it is stopped by force: after a kill, or after the
-/// leader exited. Output that comes later than twice this after the leader exited is dropped.
+/// How long what keeps running has before it is stopped by force, after a kill or after the
+/// leader exited.
 const GRACE: Duration = Duration::from_secs(1);
 
-/// What commands writing to a terminal are told: that it shows colors and moves the cursor, and
-/// that there's no one to page their output for.
+/// The environment of commands writing to a terminal.
 const TERMINAL: [(&str, &str); 4] = [
     ("TERM", "xterm-256color"),
     ("PAGER", "cat"),
@@ -173,11 +168,8 @@ const FORCE_COLORS: [(&str, &str); 3] = [
 ];
 
 /// Runs `command` with `shell` in `dir`, and appends what it writes to the compilation buffer
-/// `doc` as run `run`, with the loci `finder` finds in it, and with its `colors`.
-///
-/// Its stdout and stderr are a terminal of `size`, columns and rows, where there are
-/// pseudo-terminals, else one pipe, into which tools are asked for colors. Returns the group
-/// that stops it, and the terminal, to resize.
+/// `doc` as run `run`, with the loci `finder` finds in it. Returns the group that stops it, and
+/// its terminal of `size`, if there is one.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     shell: &[String],
@@ -260,9 +252,7 @@ fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
     }
 }
 
-/// Hands over the output in `chunks` as it arrives, until it ends and the leader exited. Stops
-/// what the leader leaves behind, and by force what a kill didn't stop. The screen takes the
-/// `size` of the terminal, when there is one.
+/// Hands over the output in `chunks` as it arrives, until it ends and the leader exited.
 #[allow(clippy::too_many_arguments)]
 fn follow(
     chunks: &Receiver<Vec<u8>>,
@@ -359,9 +349,7 @@ fn follow(
 }
 
 /// How the end of the buffer changes from the screen it shows, `shown`, once the lines
-/// `scrolled` scrolled away and the screen shows `screen`: the chars of `shown` that change,
-/// from the first line that does, and what replaces them, with the loci in it. `shown` becomes
-/// `screen`.
+/// `scrolled` scrolled away and the screen shows `screen`. `shown` becomes `screen`.
 fn change(
     shown: &mut Shown,
     scrolled: Shown,
@@ -402,8 +390,7 @@ fn exit_end(exit: std::process::ExitStatus) -> End {
     End::Exited(exit.code().unwrap_or(-1))
 }
 
-/// Adds to the pending output with `add`, and queues a callback that appends it to the buffer
-/// unless one is queued already. Waits while much is pending.
+/// Adds to the pending output with `add`, and queues a callback that appends it to the buffer.
 fn hand_over(
     shared: &Arc<Shared>,
     handle: &Handle,
@@ -431,8 +418,7 @@ fn hand_over(
     }
 }
 
-/// The callback that appends the next batch of pending output to the buffer, and queues itself
-/// again for the rest, after the keys that came meanwhile.
+/// The callback that appends the next batch of pending output to the buffer.
 fn take(
     shared: Arc<Shared>,
     doc: DocumentId,

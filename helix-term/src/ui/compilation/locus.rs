@@ -1,5 +1,4 @@
-//! The loci of compilation output: the file positions in it, like `src/lib.rs:3:9`, which become
-//! diagnostics of the buffer that open their files.
+//! The loci of compilation output: the file positions in it, like `src/lib.rs:3:9`.
 
 use std::{
     collections::HashMap,
@@ -69,7 +68,7 @@ fn python_frame(line: &str) -> Option<Found> {
 }
 
 /// The package directories of the stack frame that `before` ends with, like `demo` for
-/// `at demo.App.main(`: the frame's name without its class and method.
+/// `at demo.App.main(`.
 fn package(before: &str) -> Option<PathBuf> {
     let frame = before.strip_suffix('(')?;
     let name = frame
@@ -90,8 +89,7 @@ fn keyword(word: &str) -> Option<Severity> {
     }
 }
 
-/// The severity a word before a locus names: also that of an exception thrown there, like
-/// `AssertionFailedError at AppTest.java:6`.
+/// The severity a word before a locus names.
 fn keyword_before(word: &str) -> Option<Severity> {
     let exception =
         word.len() > "Error".len() && word.ends_with("Error") || word.ends_with("Exception");
@@ -103,17 +101,15 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
         .filter(|word| !word.is_empty())
 }
 
-/// The severity of a header line like `error[E0425]: …` or `warning: …`, which the locus on the
-/// next line belongs to, as with rustc and Typst.
+/// The severity of a header line like `error[E0425]: …` or `warning: …`.
 fn header(line: &str) -> Option<Severity> {
     let word = line.split(|c: char| !c.is_alphabetic()).next()?;
     let after = line[word.len()..].chars().next()?;
     matches!(after, ':' | '[').then(|| keyword(word)).flatten()
 }
 
-/// How severe the message is that the locus at `range` in `line` belongs to: as the word after
-/// it says (`main.c:3:7: warning: …`), or a word before it (`[error] …`, Kotlin's `w: …`,
-/// `… panicked at …`, an exception), or the header line `above` it; else it is a note.
+/// How severe the message is that the locus at `range` in `line` belongs to, from the words
+/// around it or the header line `above` it.
 pub fn severity(line: &str, range: &Range<usize>, above: &str) -> Severity {
     let kotlin = || match line.get(..3)? {
         "e: " => Some(Severity::Error),
@@ -130,8 +126,8 @@ pub fn severity(line: &str, range: &Range<usize>, above: &str) -> Severity {
         .unwrap_or(Severity::Info)
 }
 
-/// The message of the locus at `range` in `line`, as the `space d` picker lists it: the line, or
-/// the header `above` it when the line holds the locus alone, like ` --> src/lib.rs:3:9`.
+/// The message of the locus at `range` in `line`: the line, or the header `above` it when the line
+/// holds the locus alone.
 pub fn message(line: &str, range: &Range<usize>, above: &str) -> String {
     let after = &line[range.end..];
     let alone = after
@@ -161,12 +157,7 @@ pub fn target(data: &serde_json::Value) -> Option<(PathBuf, Position)> {
 }
 
 /// The display column, from 1, that the caret of the source excerpt below the locus on `line`
-/// of `text` points at, as gcc, clang, GHC and rustc print it, with tabs expanded:
-///
-/// ```text
-///     4 |   std::vector<int> v = 3;
-///       |                        ^
-/// ```
+/// of `text` points at.
 pub fn caret_column(text: RopeSlice, line: usize) -> Option<usize> {
     let below: Vec<String> = (line + 1..text.len_lines().min(line + 8))
         .map(|line| text.line(line).to_string())
@@ -187,9 +178,8 @@ pub fn caret_column(text: RopeSlice, line: usize) -> Option<usize> {
     })
 }
 
-/// The char a locus at `column` (from 0) of `line` points at. Compilers like gcc and GHC count
-/// display columns, tabs to the next multiple of eight: that is what they count when the caret
-/// of their excerpt, `caret`, is at the column they tell, or when it is past the line's end.
+/// The char a locus at `column` (from 0) of `line` points at, counting display columns when the
+/// excerpt's `caret` shows that the compiler does.
 pub fn column_in(line: RopeSlice, column: usize, caret: Option<usize>) -> usize {
     const TAB: usize = 8;
     if !line.chars().any(|c| c == '\t') {
@@ -375,8 +365,7 @@ impl Finder {
         loci
     }
 
-    /// The loci in `text`, output that may still change: the output after it goes on from the
-    /// output before it.
+    /// The loci in `text`, output that may still change.
     pub fn peek(&mut self, text: &str) -> Vec<Locus> {
         let above = self.above.clone();
         let loci = self.find(text);

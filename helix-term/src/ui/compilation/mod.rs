@@ -1,8 +1,5 @@
-//! The compilation buffer: the output of a command like `cargo build`, shown over the whole
-//! editor as it arrives.
-//!
-//! It is a pathless [`Document`] carrying the [`Compilation`] it shows. The command runs in a
-//! process group of its own, read off the main thread; dropping the document stops it.
+//! The compilation buffer: the output of a command, shown over the whole editor as it arrives. It
+//! is a pathless [`Document`] carrying the [`Compilation`] it shows.
 
 mod locus;
 pub(crate) mod output;
@@ -62,9 +59,7 @@ pub fn run_for(editor: &Editor, kind: Kind, command: String) -> Run {
     }
 }
 
-/// The directory a build for `doc` runs in, the one its language server gets: the top-most one in
-/// its workspace with one of its language's root markers, like `Cargo.toml`, else the workspace.
-/// That is the workspace of Helix's working directory when `doc` lies in it, else `doc`'s own.
+/// The directory a build for `doc` runs in: the root of its language, else its workspace.
 fn language_root(editor: &Editor, doc: &Document) -> PathBuf {
     let (cwd_workspace, _) = helix_loader::find_workspace();
     let workspace = match doc.path() {
@@ -83,9 +78,7 @@ fn language_root(editor: &Editor, doc: &Document) -> PathBuf {
     root.unwrap_or(workspace)
 }
 
-/// The configured command of `kind` for the focused buffer, with its expansions done: its
-/// language's, or that of the compilation buffer's language when it is the focused one. There it
-/// is the command it ran, when that was of `kind`.
+/// The configured command of `kind` for the focused buffer, with its expansions done.
 pub fn configured(editor: &Editor, kind: Kind) -> anyhow::Result<String> {
     let doc = doc!(editor);
     let language = match &doc.compilation {
@@ -186,8 +179,7 @@ fn size(view: &View, doc: &Document) -> (u16, u16) {
     (view.inner_width(doc), rows)
 }
 
-/// Gives the terminal of the running command the size of the view that shows its output, the
-/// focused one if it does, and tells the command when that changes.
+/// Gives the terminal of the running command the size of the view that shows its output.
 pub fn follow_size(editor: &Editor) {
     let Some(doc) = buffer(editor).and_then(|doc| editor.document(doc)) else {
         return;
@@ -215,8 +207,7 @@ pub fn follow_size(editor: &Editor) {
     }
 }
 
-/// How a hidden compilation buffer shows over the whole editor: in a split of its own, or, when
-/// loci open to `return`, in the focused one, which gets back what it showed when they open.
+/// How a hidden compilation buffer shows over the whole editor.
 fn covering(editor: &Editor) -> Action {
     if editor.config().compilation.open == CompilationOpen::Return {
         Action::Replace
@@ -294,7 +285,7 @@ fn last_line(text: RopeSlice) -> usize {
 }
 
 /// Appends `output` of run `run` to the compilation buffer `doc_id`, unless it shows another run
-/// by now, in place of the line it shows unfinished. The cursors on the last line stay on it.
+/// by now.
 fn append(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output) {
     let Some(doc) = editor.document(doc_id) else {
         return;
@@ -427,8 +418,8 @@ fn loci(doc: &Document) -> impl DoubleEndedIterator<Item = &Diagnostic> {
         .filter(|diagnostic| diagnostic.provider == DiagnosticProvider::Compilation)
 }
 
-/// Opens the locus on the line of the cursor, if the focused buffer is the compilation buffer:
-/// the locus under the cursor, else the first on the line. Tells whether there is one.
+/// Opens the locus on the line of the cursor, if the focused buffer is the compilation buffer.
+/// Tells whether there is one.
 pub fn open_on_cursor_line(editor: &mut Editor) -> bool {
     let (view, doc) = current_ref!(editor);
     if doc.compilation.is_none() {
@@ -450,9 +441,7 @@ pub fn open_on_cursor_line(editor: &mut Editor) -> bool {
     true
 }
 
-/// Selects the next or previous locus of the compilation buffer, after the cursor of its split,
-/// which gets the focus. A hidden buffer is shown as loci open, and goes on from the locus
-/// selected or opened last.
+/// Selects the next or previous locus of the compilation buffer, which gets the focus.
 pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
     let Some(doc_id) = buffer(editor) else {
         bail!("No compilation buffer");
@@ -518,10 +507,8 @@ pub fn visit(editor: &mut Editor, direction: Direction) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Opens the locus starting at `start` in the compilation buffer `doc_id`, which has the focus:
-/// in its split, or, opening `beside` it, in the split the command was run from, else in
-/// another, else in a new one. To `return`, the file opens in a split showing it, the output's
-/// getting back what it showed before (or closing), else in the output's split.
+/// Opens the locus starting at `start` in the compilation buffer `doc_id`, which has the focus,
+/// where the `open` config says.
 fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     let doc = doc_mut!(editor, &doc_id);
     let locus = loci(doc).find(|locus| locus.range.start == start);
@@ -574,8 +561,7 @@ fn open(editor: &mut Editor, doc_id: DocumentId, start: usize) {
     }
 }
 
-/// Shows again in the focused split, which shows the compilation buffer `doc_id`, what it showed
-/// before; or closes the split when it showed nothing else.
+/// Shows again what the focused split showed before the compilation buffer `doc_id`.
 fn give_back(editor: &mut Editor, doc_id: DocumentId) {
     let view = view_mut!(editor);
     let previous = std::iter::from_fn(|| view.docs_access_history.pop())
@@ -600,8 +586,7 @@ pub fn kill(editor: &mut Editor) -> anyhow::Result<()> {
     }
 }
 
-/// Runs the command of the compilation buffer `doc_id` again, refusing while file buffers are
-/// unsaved.
+/// Runs the command of the compilation buffer `doc_id` again.
 pub fn rerun(editor: &mut Editor, doc_id: DocumentId) -> anyhow::Result<()> {
     let Some(compilation) = editor
         .document(doc_id)
@@ -629,8 +614,8 @@ pub fn forced(kind: Kind, command: &str) -> String {
     }
 }
 
-/// Refuses to compile while file buffers have unsaved changes, which the build would miss;
-/// `forced` names the command that compiles anyway.
+/// Refuses to compile while file buffers have unsaved changes; `forced` names the command that
+/// compiles anyway.
 pub fn ensure_saved(editor: &Editor, forced: &str) -> anyhow::Result<()> {
     let unsaved: Vec<_> = editor
         .documents()

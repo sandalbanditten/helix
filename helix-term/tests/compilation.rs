@@ -1,6 +1,5 @@
-//! The compilation buffer runs commands in the root of the workspace of the working directory,
-//! which the whole process shares, so its tests run in a binary of their own and one after
-//! another, each in a workspace of its own.
+//! The compilation buffer runs commands in the workspace of the working directory, which the
+//! process shares, so its tests run in a binary of their own, one after another.
 
 #[cfg(feature = "integration")]
 mod test {

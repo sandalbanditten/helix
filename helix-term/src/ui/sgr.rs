@@ -2,9 +2,7 @@
 
 use helix_view::graphics::{Color, Modifier, Style, UnderlineStyle};
 
-/// Applies the SGR parameters `params` to `style`, as a terminal does: `0` (or none) resets, `1`
-/// adds bold, `31` makes the foreground red, `39` takes it back, and so on. Colors are those of
-/// the terminal's palette; unknown parameters are left out.
+/// Applies the SGR parameters `params` to `style`, as a terminal does.
 pub fn apply(mut style: Style, params: &str) -> Style {
     if params.is_empty() {
         return Style::default();
@@ -70,8 +68,7 @@ pub fn apply(mut style: Style, params: &str) -> Style {
     style
 }
 
-/// Reads the color of `38`, `48` or `58`: `5;index` or `2;red;green;blue`, after semicolons or,
-/// as sub-parameters, after colons (`2::red:green:blue`, with an optional color space).
+/// Reads the color of `38`, `48` or `58`: `5;index` or `2;red;green;blue`.
 fn extended<'a>(
     parts: &mut impl Iterator<Item = &'a str>,
     codes: &mut impl Iterator<Item = &'a str>,

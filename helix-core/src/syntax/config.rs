@@ -62,10 +62,10 @@ pub struct LanguageConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formatter: Option<FormatterConfiguration>,
 
-    /// The shell command `:compile` runs in the compilation buffer, like `cargo build`.
+    /// The shell command `:compile` runs in the compilation buffer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compile_command: Option<String>,
-    /// The shell command `:compile-test` runs in the compilation buffer, like `cargo test`.
+    /// The shell command `:compile-test` runs in the compilation buffer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test_command: Option<String>,
 

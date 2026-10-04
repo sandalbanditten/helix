@@ -1,11 +1,4 @@
 //! Commands run as a group of processes, so that stopping one stops everything it started.
-//!
-//! The process leading the group is only reaped once the group is done with, so that the group's
-//! id, which is the leader's pid, stays its own while it is signalled.
-//!
-//! On Unix, the group is the one of a session of its own, with no controlling terminal: commands
-//! opening `/dev/tty`, to prompt for a password say, fail instead of taking over the terminal
-//! that Helix runs in.
 
 use std::{
     io,
@@ -55,8 +48,7 @@ struct GroupStatus {
 }
 
 impl ProcessGroup {
-    /// Stops every process of the group with `SIGTERM` on Unix, or `taskkill /T /F` on
-    /// Windows, unless its leader was reaped.
+    /// Stops every process of the group, unless its leader was reaped.
     pub fn kill(&self) -> io::Result<()> {
         if self.status.reaped.load(Ordering::Acquire) {
             return Ok(());
@@ -65,8 +57,7 @@ impl ProcessGroup {
         kill_group(self.pid, false)
     }
 
-    /// Tells the processes of the group that their terminal changed size, with `SIGWINCH` on
-    /// Unix, unless its leader was reaped.
+    /// Tells the processes of the group that their terminal changed size.
     pub fn notify_resize(&self) -> io::Result<()> {
         if self.status.reaped.load(Ordering::Acquire) {
             return Ok(());
@@ -115,8 +106,7 @@ impl Leader {
         }
     }
 
-    /// Stops the processes of the group, the ones the leader left behind too: with `SIGTERM`,
-    /// or with `SIGKILL` when `force` is set.
+    /// Stops the processes of the group, by force if `force` is set.
     pub fn stop(&self, force: bool) -> io::Result<()> {
         kill_group(self.child.id(), force)
     }

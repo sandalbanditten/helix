@@ -1,5 +1,4 @@
-//! The last rows of compilation output as a terminal shows them. Commands redraw them, like a
-//! progress bar, until they scroll away, after which they stay as they were.
+//! The last rows of compilation output as a terminal shows them, which commands may redraw.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -16,8 +15,7 @@ use crate::ui::sgr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Glyph {
     Char(char),
-    /// A char and the zero-width ones after it, like a variation selector: one of the
-    /// [`Clusters`] of the screen.
+    /// A char and the zero-width ones after it: one of the [`Clusters`] of the screen.
     Cluster(u32),
     /// The rest of the wide char, or of the tab, in the cells before.
     Rest,
@@ -75,8 +73,7 @@ struct Row {
 }
 
 impl Row {
-    /// Whether the row, of a screen `cols` wide, is filled up with spaces to its end, as some
-    /// commands write lines instead of ending them. Its line ends there, without the spaces.
+    /// Whether the row, of a screen `cols` wide, is filled up with spaces to its end.
     fn padded(&self, cols: usize) -> bool {
         self.cells.len() >= cols && self.cells.iter().rev().take(2).all(Cell::is_blank)
     }
@@ -113,8 +110,7 @@ impl Row {
         }
     }
 
-    /// Turns a wide char or a tab covering `col` and other cells into spaces, so that `col` can
-    /// change alone.
+    /// Turns a wide char or a tab covering `col` and other cells into spaces.
     fn split(&mut self, col: usize) {
         let rest = |col: usize| {
             self.cells
@@ -209,8 +205,7 @@ const MAX_PARAMS: usize = 64;
 /// Tabs stop at every multiple of this.
 const TAB: usize = 8;
 
-/// A terminal screen of the last rows of output, `cols` wide and `height` high. Lines that
-/// scroll off its top become output that doesn't change any more.
+/// A terminal screen of the last rows of output, `cols` wide and `height` high.
 #[derive(Debug)]
 pub struct Screen {
     cols: usize,
@@ -257,8 +252,7 @@ impl Screen {
         }
     }
 
-    /// Changes the size of the screen. The rows that no longer fit above the cursor scroll
-    /// away; rows wider than the screen stay as they are.
+    /// Changes the size of the screen.
     pub fn resize(&mut self, cols: u16, height: u16) {
         let (cols, height) = (usize::from(cols.max(1)), usize::from(height.max(1)));
         if (cols, height) == (self.cols, self.height) {
@@ -320,8 +314,7 @@ impl Screen {
         mem::take(&mut self.scrolled)
     }
 
-    /// The screen as it shows: its lines down to the cursor or the last one written, the last
-    /// without a line break.
+    /// The lines of the screen down to the cursor or the last one written.
     pub fn shown(&self) -> Shown {
         let mut shown = self.held.clone();
         let last = self.used().saturating_sub(1).max(self.row);
@@ -334,8 +327,7 @@ impl Screen {
         shown
     }
 
-    /// Ends the output, after which the lines on the screen scrolled away too, down to the last
-    /// one written. Takes the lines that scrolled away.
+    /// Ends the output and takes the lines that scrolled away.
     pub fn finish(&mut self) -> Shown {
         if !mem::take(&mut self.partial).is_empty() {
             self.put(char::REPLACEMENT_CHARACTER);

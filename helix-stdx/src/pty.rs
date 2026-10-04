@@ -1,8 +1,4 @@
 //! Pseudo-terminals, to run commands as if a terminal showed their output.
-//!
-//! Many commands color their output, or show their progress, only when it goes to a terminal.
-//! Writing to the terminal end of a pseudo-terminal, they do, and what they write is read from
-//! its other end.
 
 use std::{
     fs::File,
@@ -18,16 +14,12 @@ pub struct Pty {
 impl Pty {
     /// Opens a pseudo-terminal `cols` wide and `rows` high, and its terminal end for commands to
     /// write to. Fails where there are no pseudo-terminals, like on Windows.
-    ///
-    /// Output arrives as written: `\n` is not turned into `\r\n`. The terminal controls no
-    /// session, so commands opening `/dev/tty`, to prompt for a password say, fail instead of
-    /// waiting for input.
     pub fn open(cols: u16, rows: u16) -> io::Result<(Self, File)> {
         imp::open(cols, rows)
     }
 
-    /// Changes the size of the terminal. As it controls no session, nothing tells the commands:
-    /// see [`ProcessGroup::notify_resize`](crate::process::ProcessGroup::notify_resize).
+    /// Changes the size of the terminal, see
+    /// [`ProcessGroup::notify_resize`](crate::process::ProcessGroup::notify_resize).
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
         imp::resize(&self.master, cols, rows)
     }

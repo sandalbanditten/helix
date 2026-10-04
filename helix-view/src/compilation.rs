@@ -1,7 +1,4 @@
-//! The run a compilation buffer shows.
-//!
-//! A compilation buffer is a document holding the output of a command, like `cargo build`, as it
-//! arrives. The file positions in it, its loci, are diagnostics that open their files.
+//! The run a compilation buffer shows: the output of a command, whose file positions are loci.
 
 use std::{ops::Range, path::PathBuf, time::Instant};
 
@@ -36,13 +33,11 @@ pub struct Compilation {
     pub started: Instant,
     /// The running command, stopped when dropped; `None` once it ended.
     pub process: Option<ProcessGroup>,
-    /// The terminal the running command writes to, as large as the view showing its output;
-    /// `None` on a pipe, or once it ended.
+    /// The terminal the running command writes to, if any.
     pub terminal: Option<Pty>,
     /// The split the command was run from, which loci open in.
     pub origin: Option<ViewId>,
-    /// Where the locus selected or opened last starts, which `]q` and `[q` go on from while the
-    /// buffer is hidden.
+    /// Where the locus selected or opened last starts.
     pub visited: Option<usize>,
     /// The colors of the output: the styles of char ranges, in order and apart.
     pub styles: Vec<(Range<usize>, Style)>,
@@ -54,8 +49,7 @@ impl Compilation {
         format!("[compilation] {}", self.command)
     }
 
-    /// Maps the styles of the output over `changes` to the buffer, dropping those of text
-    /// removed. The ones before the first change keep their place.
+    /// Maps the styles of the output over `changes` to the buffer.
     pub fn map(&mut self, changes: &ChangeSet) {
         let Some((first, ..)) = changes.changes_iter().next() else {
             return;
