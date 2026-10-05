@@ -1,7 +1,6 @@
 use crate::text::StyledGrapheme;
 use helix_core::line_ending::str_is_line_ending;
 use helix_core::unicode::width::UnicodeWidthStr;
-use unicode_segmentation::UnicodeSegmentation;
 
 const NBSP: &str = "\u{00a0}";
 const NNBSP: &str = "\u{202f}";
@@ -188,9 +187,15 @@ impl<'a> LineComposer<'a> for LineTruncator<'a, '_> {
             } else {
                 let w = symbol.width();
                 if w > horizontal_offset {
-                    let t = trim_offset(symbol, horizontal_offset);
+                    // The columns of a wide grapheme left after the offset show as blanks, so
+                    // what follows stays in its column.
+                    for _ in horizontal_offset + 1..w {
+                        current_line_width += 1;
+                        self.current_line
+                            .push(StyledGrapheme { symbol: " ", style });
+                    }
                     horizontal_offset = 0;
-                    t
+                    " "
                 } else {
                     horizontal_offset -= w;
                     ""
@@ -214,22 +219,6 @@ impl<'a> LineComposer<'a> for LineTruncator<'a, '_> {
             Some((&self.current_line[..], current_line_width))
         }
     }
-}
-
-/// This function will return a str slice which start at specified offset.
-/// As src is a unicode str, start offset has to be calculated with each character.
-fn trim_offset(src: &str, mut offset: usize) -> &str {
-    let mut start = 0;
-    for c in UnicodeSegmentation::graphemes(src, true) {
-        let w = c.width();
-        if w <= offset {
-            offset -= w;
-            start += c.len();
-        } else {
-            break;
-        }
-    }
-    &src[start..]
 }
 
 #[cfg(test)]
@@ -418,6 +407,23 @@ mod test {
         ];
         assert_eq!(word_wrapper, wrapped);
         assert_eq!(word_wrapper_width, vec![width, width, width, width, 4]);
+    }
+
+    #[test]
+    fn line_truncator_horizontal_offset_double_width_chars() {
+        let truncate = |offset| {
+            let style = Default::default();
+            let mut styled = UnicodeSegmentation::graphemes("コンピュ", true)
+                .map(|g| StyledGrapheme { symbol: g, style });
+            let mut truncator = LineTruncator::new(&mut styled, 4);
+            truncator.set_horizontal_offset(offset);
+            let (line, width) = truncator.next_line().unwrap();
+            let line: String = line.iter().map(|grapheme| grapheme.symbol).collect();
+            (line, width)
+        };
+        assert_eq!(truncate(2), ("ンピ".to_string(), 4));
+        // the right half of `ン` is left
+        assert_eq!(truncate(3), (" ピ".to_string(), 3));
     }
 
     #[test]
