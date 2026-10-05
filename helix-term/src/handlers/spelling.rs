@@ -5,6 +5,7 @@ use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap},
     io,
+    iter::Peekable,
     ops::{ControlFlow, Range},
     sync::Arc,
     time::Duration,
@@ -473,13 +474,13 @@ fn spell_check_regions(
         .collect()
 }
 
-/// Words: runs of letters, marks and digits, split at camelCase humps.
-static WORDS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"[\p{Lu}\p{Lt}\p{Nd}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:['’-][\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*|[\p{Lu}\p{Lt}\p{Nd}]+",
-    )
-    .unwrap()
-});
+/// A word: a run of letters, marks and digits, up to a camelCase hump.
+const WORD: &str = r"[\p{Lu}\p{Lt}\p{Nd}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:['’-][\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*|[\p{Lu}\p{Lt}\p{Nd}]+";
+static WORDS: Lazy<Regex> = Lazy::new(|| Regex::new(WORD).unwrap());
+/// Words joined by dots and ending in one, like `f.eks.`, `Dvs.` or the end of a sentence, which a
+/// dictionary may know as a whole, as an abbreviation.
+static DOTTED_WORDS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(&format!(r"(?:{WORD})+(?:\.(?:{WORD})+)*\.")).unwrap());
 /// URLs and email addresses, whose words are skipped.
 static IGNORED_SPANS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+|[\w.+-]+@[A-Za-z0-9-]+\.[\w.-]+").unwrap()
@@ -537,23 +538,25 @@ impl<'a> Scan<'a> {
     }
 
     fn check_chunk(&mut self, text: RopeSlice, chunk: Range<usize>) -> ControlFlow<()> {
+        let input = || text.regex_input_at(chunk.clone());
         let mut ignored_spans = IGNORED_SPANS
-            .find_iter(text.regex_input_at(chunk.clone()))
+            .find_iter(input())
+            .map(|span| span.range())
             .peekable();
-        for word in WORDS.find_iter(text.regex_input_at(chunk)) {
-            // Both iterators are ordered, so a span that ends before this word ends before all the
-            // following ones too.
-            while ignored_spans
-                .next_if(|span| span.end() <= word.start())
-                .is_some()
-            {}
-            if ignored_spans
-                .peek()
-                .is_some_and(|span| span.start() < word.end())
-            {
+        let guards = &self.guards;
+        let mut known_dotted_words = DOTTED_WORDS
+            .find_iter(input())
+            .map(|span| span.range())
+            .filter(|span| {
+                let words = Cow::from(text.byte_slice(span.clone()));
+                guards.iter().any(|dictionary| dictionary.check(&words))
+            })
+            .peekable();
+        for word in WORDS.find_iter(input()) {
+            let range = word.range();
+            if overlaps(&mut ignored_spans, &range) || overlaps(&mut known_dotted_words, &range) {
                 continue;
             }
-            let range = word.range();
             let word = Cow::from(text.byte_slice(range.clone()));
             if self.filter.ignores(&word)
                 || self.guards.iter().any(|dictionary| dictionary.check(&word))
@@ -568,6 +571,14 @@ impl<'a> Scan<'a> {
         }
         ControlFlow::Continue(())
     }
+}
+
+/// Whether `word` overlaps one of the ordered `spans`, dropping the spans before it.
+fn overlaps(spans: &mut Peekable<impl Iterator<Item = Range<usize>>>, word: &Range<usize>) -> bool {
+    // The words are ordered too, so a span that ends before this word ends before all the
+    // following ones.
+    while spans.next_if(|span| span.end <= word.start).is_some() {}
+    spans.peek().is_some_and(|span| span.start < word.end)
 }
 
 fn misspelling(text: RopeSlice, range: Range<usize>, word: &str) -> Diagnostic {
@@ -667,6 +678,12 @@ mod tests {
     fn en_us() -> Arc<RwLock<Dictionary>> {
         static EN_US: Lazy<Arc<RwLock<Dictionary>>> = Lazy::new(|| dictionary("en_US"));
         EN_US.clone()
+    }
+
+    /// The `da_DK` dictionary vendored under `runtime/dictionaries/`.
+    fn da_dk() -> Arc<RwLock<Dictionary>> {
+        static DA_DK: Lazy<Arc<RwLock<Dictionary>>> = Lazy::new(|| dictionary("da_DK"));
+        DA_DK.clone()
     }
 
     /// A throwaway dictionary containing exactly `words`.
@@ -780,12 +797,24 @@ mod tests {
 
     #[test]
     fn checks_danish() {
-        let dictionaries = [dictionary("da_DK")];
         let text = "smørrebrød sommerhusudlejning kærlihed Ærø hvorden";
         assert_eq!(
-            check_with(&dictionaries, &no_filter(), text),
+            check_with(&[da_dk()], &no_filter(), text),
             ["kærlihed", "hvorden"]
         );
+    }
+
+    #[test]
+    fn knows_abbreviations_by_their_dots() {
+        let danish = |text| check_with(&[da_dk()], &no_filter(), text);
+        assert!(danish("Dvs. det er f.eks. godt, bl.a. osv. Kl. 5 er ca. 3 timer.").is_empty());
+        // A misspelling leaves out the dot after it.
+        assert_eq!(
+            danish("Dvs det er gdot. Dsv. f.esk."),
+            ["Dvs", "gdot", "Dsv", "esk"]
+        );
+        // Dotted words no dictionary knows are checked one by one.
+        assert!(check("Call self.offset. The end.").is_empty());
     }
 
     #[test]

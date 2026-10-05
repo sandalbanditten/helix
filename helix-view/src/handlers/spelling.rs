@@ -4,15 +4,17 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     future::Future,
+    sync::Arc,
 };
 
 use helix_core::{
     diagnostic::DiagnosticProvider, ChangeSet, Rope, SpellingLanguage, Tendril, Transaction,
 };
 use helix_event::{send_blocking, TaskController, TaskHandle};
+use parking_lot::RwLock;
 use tokio::sync::mpsc::Sender;
 
-use crate::{action::Action, events::DiagnosticsDidChange, DocumentId, Editor};
+use crate::{action::Action, events::DiagnosticsDidChange, Dictionary, DocumentId, Editor};
 
 #[derive(Debug)]
 pub struct SpellingHandler {
@@ -103,6 +105,40 @@ impl Editor {
 /// Spelling actions sort after LSP code actions (which use a higher priority).
 const SPELLING_ACTION_PRIORITY: u8 = 0;
 
+/// The suggestions of the dictionaries for a misspelled `word`, in order and without duplicates.
+/// When a dot follows the word (`dotted`), the replacement keeps it: like Hunspell, the suggestions
+/// for the word with its dot follow, for abbreviations like `dvs.` for `dsv.`, and no suggestion
+/// brings a dot of its own.
+fn suggestions<'a>(
+    dictionaries: impl Iterator<Item = &'a Arc<RwLock<Dictionary>>>,
+    word: &str,
+    dotted: bool,
+) -> Vec<String> {
+    let mut suggestions = Vec::new();
+    let mut candidates = Vec::new();
+    for dictionary in dictionaries {
+        let dictionary = dictionary.read();
+        dictionary.suggest(word, &mut candidates);
+        suggestions.append(&mut candidates);
+        if dotted {
+            dictionary.suggest(&format!("{word}."), &mut candidates);
+            // the other ones read the dot as a letter, like `tempeh` for `teh.`
+            candidates.retain(|candidate| candidate.ends_with('.'));
+            suggestions.append(&mut candidates);
+        }
+    }
+    if dotted {
+        for suggestion in &mut suggestions {
+            if suggestion.ends_with('.') {
+                suggestion.pop();
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    suggestions.retain(|suggestion| seen.insert(suggestion.clone()));
+    suggestions
+}
+
 /// Appends a word to the `language`'s personal dictionary file.
 fn persist_to_personal_dictionary(language: &SpellingLanguage, word: &str) -> std::io::Result<()> {
     use std::io::Write as _;
@@ -151,7 +187,8 @@ impl Editor {
             .map(|diagnostic| {
                 let range = diagnostic.range;
                 let word = Cow::from(text.slice(range.start..range.end)).into_owned();
-                (range, word)
+                let dotted = text.get_char(range.end) == Some('.');
+                (range, word, dotted)
             })
             .collect();
 
@@ -161,18 +198,9 @@ impl Editor {
             }
             let actions = tokio::task::spawn_blocking(move || {
                 let mut actions = Vec::new();
-                for (range, word) in misspellings {
-                    // Offer the suggestions from every dictionary, in order, without duplicates.
-                    let mut suggestions = Vec::new();
-                    let mut candidates = Vec::new();
-                    for (_, dictionary) in &dictionaries {
-                        dictionary.read().suggest(&word, &mut candidates);
-                        suggestions.append(&mut candidates);
-                    }
-                    let mut seen = HashSet::new();
-                    suggestions.retain(|suggestion| seen.insert(suggestion.clone()));
-
-                    for suggestion in suggestions {
+                for (range, word, dotted) in misspellings {
+                    let checked = dictionaries.iter().map(|(_, dictionary)| dictionary);
+                    for suggestion in suggestions(checked, &word, dotted) {
                         let title = format!("Replace '{word}' with '{suggestion}'");
                         actions.push(Action::new(
                             title,
@@ -247,6 +275,43 @@ impl Editor {
             SpellingEvent::DictionaryLoaded {
                 language: language.clone(),
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn dictionary(aff: &str, dic: &str) -> [Arc<RwLock<Dictionary>>; 1] {
+        [Arc::new(RwLock::new(Dictionary::new(aff, dic).unwrap()))]
+    }
+
+    #[test]
+    fn suggestions_keep_the_dot_after_the_word() {
+        // only the suggestions from single edits, like `.` added at the end
+        let dictionaries = dictionary("SET UTF-8\nTRY .\nMAXNGRAMSUGS 0\n", "2\ndvs.\ngodt\n");
+        let suggest = |word, dotted| suggestions(dictionaries.iter(), word, dotted);
+        assert_eq!(suggest("dvs", false), ["dvs."]);
+        assert_eq!(suggest("dvs", true), ["dvs"]);
+        // `dvs.` is an edit of `dsv.`, not of `dsv`
+        assert!(suggest("dsv", false).is_empty());
+        assert_eq!(suggest("dsv", true), ["dvs"]);
+        assert_eq!(suggest("gdot", true), ["godt"]);
+    }
+
+    #[test]
+    fn suggestions_for_a_word_with_its_dot_are_abbreviations() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../runtime/dictionaries/en_US/en_US"
+        );
+        let read = |extension| std::fs::read_to_string(format!("{path}.{extension}")).unwrap();
+        let dictionaries = dictionary(&read("aff"), &read("dic"));
+        // `teh.` alone is closest to `tempeh`
+        assert_eq!(
+            suggestions(dictionaries.iter(), "teh", true),
+            suggestions(dictionaries.iter(), "teh", false)
         );
     }
 }

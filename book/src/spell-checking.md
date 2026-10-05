@@ -63,5 +63,7 @@ named after the language:
 ~/.config/helix/runtime/dictionaries/de_DE/de_DE.dic
 ```
 
+Abbreviations, like `dvs.` and `f.eks.` in `da_DK`, are checked with their dots.
+
 Words added to your dictionary are kept in `~/.local/state/helix/dictionaries/<language>.txt` on
 Linux, one per line.
