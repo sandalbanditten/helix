@@ -4,7 +4,7 @@
 use std::{borrow::Cow, ops::Range};
 
 use helix_core::unicode::width::UnicodeWidthStr;
-use helix_view::{graphics::Rect, Document, Editor};
+use helix_view::{graphics::Rect, smooth_scroll::SmoothOffset, Document, Editor};
 use tui::{
     buffer::Buffer as Surface,
     text::{Span, Spans, Text},
@@ -18,10 +18,11 @@ const MORE: &str = "…";
 pub(crate) struct Bufferline {
     /// Columns of tabs scrolled out on the left.
     offset: usize,
+    smooth_scroll: SmoothOffset,
 }
 
 impl Bufferline {
-    pub fn render(&mut self, editor: &Editor, area: Rect, surface: &mut Surface) {
+    pub fn render(&mut self, editor: &mut Editor, area: Rect, surface: &mut Surface) {
         if area.width == 0 {
             return;
         }
@@ -37,6 +38,9 @@ impl Bufferline {
             .unwrap_or_else(|| theme.get("ui.statusline.active"));
         let inactive_style = theme
             .try_get("ui.bufferline")
+            .unwrap_or_else(|| theme.get("ui.statusline.inactive"));
+        let more_style = theme
+            .try_get("ui.bufferline.marker")
             .unwrap_or_else(|| theme.get("ui.statusline.inactive"));
 
         // the columns of each buffer's tab
@@ -54,7 +58,7 @@ impl Bufferline {
         }
         let width = area.width as usize;
         self.offset = scroll(self.offset, active, total, width, editor.config().scrolloff);
-        let shown = self.offset;
+        let shown = self.smooth_scroll.frame(self.offset, area.width, editor);
 
         // only the tabs in view are labelled and drawn
         let first = tabs.partition_point(|tab| tab.end <= shown);
@@ -77,9 +81,6 @@ impl Bufferline {
             .scroll((0, scrolled_in as u16))
             .render(area, surface);
 
-        let more_style = theme
-            .try_get("ui.bufferline.marker")
-            .unwrap_or_else(|| theme.get("ui.statusline.inactive"));
         if shown > 0 {
             surface.set_stringn(area.left(), area.top(), MORE, 1, more_style);
         }

@@ -566,7 +566,7 @@ wrap-indicator = ""  # set wrap-indicator to "" to hide it
 ### `[editor.smooth-scroll]` Section
 
 Options for animating scrolling, jumps and searches instead of moving the view at once. Popups,
-menus and pickers scroll smoothly too.
+menus, pickers and the bufferline scroll smoothly too.
 
 | Key | Description | Default |
 | --- | --- | --- |

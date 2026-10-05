@@ -103,7 +103,7 @@ fn step_towards(from: usize, to: usize, step: usize) -> usize {
     }
 }
 
-/// The scroll offset of a popup or list, drawn gliding towards its real value.
+/// The scroll offset of a popup, a list or the bufferline, drawn gliding towards its real value.
 #[derive(Debug, Default)]
 pub struct SmoothOffset {
     /// The real offset and the visible height at the last frame.
@@ -127,8 +127,8 @@ impl OffsetAnimation {
 }
 
 impl SmoothOffset {
-    /// Returns the offset to draw content scrolled to `offset` in `height` rows with, and
-    /// schedules the redraw for the next frame.
+    /// Returns the offset to draw content scrolled to `offset` in `height` rows (or columns)
+    /// with, and schedules the redraw for the next frame.
     pub fn frame(&mut self, offset: usize, height: u16, editor: &mut Editor) -> usize {
         let now = Instant::now();
         let offset = self.update(offset, height, &editor.config().smooth_scroll, now);

@@ -1901,6 +1901,9 @@ impl Component for EditorView {
         if use_bufferline {
             self.bufferline
                 .render(cx.editor, views_area.with_height(1), surface);
+        } else {
+            // the bar comes back where it starts, not gliding from where it was
+            self.bufferline = Bufferline::default();
         }
 
         for (view, is_focused) in cx.editor.tree.visible_views() {
