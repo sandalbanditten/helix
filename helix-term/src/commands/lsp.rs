@@ -695,34 +695,32 @@ pub fn code_action(cx: &mut Context) {
     let mut futures: FuturesUnordered<_> =
         code_actions_for_range(doc, selection_range, None, CodeActionTriggerKind::INVOKED)
             .into_iter()
-            .map(|(request, ls_id)| {
-                async move {
-                    let Some(mut actions) = request.await? else {
-                        return anyhow::Ok(Vec::new());
-                    };
+            .map(|(request, ls_id)| async move {
+                let Some(mut actions) = request.await? else {
+                    return anyhow::Ok(Vec::new());
+                };
 
-                    // remove disabled code actions
-                    actions.retain(|action| {
-                        matches!(
-                            action,
-                            CodeActionOrCommand::Command(_)
-                                | CodeActionOrCommand::CodeAction(CodeAction {
-                                    disabled: None,
-                                    ..
-                                })
-                        )
-                    });
+                // remove disabled code actions
+                actions.retain(|action| {
+                    matches!(
+                        action,
+                        CodeActionOrCommand::Command(_)
+                            | CodeActionOrCommand::CodeAction(CodeAction { disabled: None, .. })
+                    )
+                });
 
-                    Ok(actions
-                        .into_iter()
-                        .map(|lsp_item| CodeActionItem::lsp(ls_id, lsp_item))
-                        .collect())
-                }
-                .boxed()
+                Ok(actions
+                    .into_iter()
+                    .map(|lsp_item| CodeActionItem::lsp(ls_id, lsp_item))
+                    .collect())
             })
             .collect();
-    // Misspellings have code actions too, even in documents without language servers.
-    futures.push(cx.editor.spelling_actions().boxed());
+
+    if futures.is_empty() {
+        cx.editor
+            .set_error("No configured language server supports code actions");
+        return;
+    }
 
     cx.jobs.callback(async move {
         let mut actions = Vec::new();

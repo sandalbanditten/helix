@@ -102,7 +102,7 @@ impl Editor {
     }
 }
 
-/// Spelling actions sort after LSP code actions (which use a higher priority).
+/// All spelling actions share a priority, so the menu keeps their order.
 const SPELLING_ACTION_PRIORITY: u8 = 0;
 
 /// The suggestions of the dictionaries for a misspelled `word`, in order and without duplicates.

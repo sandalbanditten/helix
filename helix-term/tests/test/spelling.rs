@@ -106,3 +106,37 @@ async fn misspellings_with_messages_are_diagnostics() -> anyhow::Result<()> {
     )
     .await
 }
+
+/// The text drawn on the screen.
+fn screen(app: &Application) -> String {
+    app.screen()
+        .content
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn misspellings_are_fixed_apart_from_code_actions() -> anyhow::Result<()> {
+    test_key_sequences(
+        &mut app(false).await?,
+        vec![
+            (
+                Some("]s<space>a"),
+                Some(&|app| {
+                    assert_eq!(
+                        app.editor.get_status().unwrap().0,
+                        "No configured language server supports code actions"
+                    );
+                    assert!(!screen(app).contains("Replace 'heding'"));
+                }),
+            ),
+            (
+                Some("<space>A"),
+                Some(&|app| assert!(screen(app).contains("Replace 'heding' with"))),
+            ),
+        ],
+        false,
+    )
+    .await
+}

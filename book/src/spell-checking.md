@@ -1,8 +1,8 @@
 # Spell checking
 
 Helix can spell check the prose of documents, such as the text of Markdown, LaTeX and Typst
-documents and the comments of code. Misspellings are underlined, and their corrections are offered
-as code actions.
+documents and the comments of code. Misspellings are underlined, and `Space A` offers their
+corrections.
 
 ## Enabling
 
@@ -45,8 +45,7 @@ document is checked against the language it is written in.
 | `]S`, `[S` | Go to the last, first misspelling     |
 | `Space A`  | Fix the misspelling under the cursor  |
 
-The fixes, the suggested corrections and adding the word to your dictionary, are also among the
-code actions of `Space a`.
+The fixes are the suggested corrections and adding the word to your dictionary.
 
 Which parts of a document are checked is decided per language by a `spellcheck.scm` query (see
 [Adding spellcheck queries](./guides/spellcheck.md)). Documents without one, like plain text, are
