@@ -30,6 +30,7 @@ lto = "fat"
 codegen-units = 1
 strip = true
 opt-level = 3
+incremental = false
 
 [profile.integration]
 inherits = "test"
