@@ -25,7 +25,7 @@ use ::parking_lot::Mutex;
 use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
@@ -230,7 +230,7 @@ pub struct Document {
     // It can be used as a cell where we will take it out to get some parts of the history and put
     // it back as it separated from the edits. We could split out the parts manually but that will
     // be more troublesome.
-    pub history: Cell<History>,
+    pub history: RefCell<History>,
     pub config: Arc<dyn DynAccess<Config>>,
 
     savepoints: Vec<Weak<SavePoint>>,
@@ -813,7 +813,7 @@ impl Document {
             old_state,
             diagnostics: Vec::new(),
             version: 0,
-            history: Cell::new(History::default()),
+            history: RefCell::new(History::default()),
             savepoints: Vec::new(),
             last_saved_time: SystemTime::now(),
             disk_text,
@@ -1457,7 +1457,7 @@ impl Document {
             undo_file::read(&dir, path, &self.text, config.undo.max_revisions)
         {
             self.last_saved_revision = history.current_revision();
-            self.history.set(history);
+            *self.history.get_mut() = history;
             self.undo_file = Some(state);
         }
     }
@@ -1958,7 +1958,7 @@ impl Document {
         } else {
             false
         };
-        self.history.set(history);
+        *self.history.get_mut() = history;
 
         if success {
             // reset changeset to fix len
@@ -2100,9 +2100,9 @@ impl Document {
         // HAXX: we need to reconstruct the state as it was before the changes..
         let old_state = self.old_state.take().expect("no old_state available");
 
-        let mut history = self.history.take();
-        history.commit_revision(&transaction, &old_state);
-        self.history.set(history);
+        self.history
+            .get_mut()
+            .commit_revision(&transaction, &old_state);
 
         // Update jumplist entries in the view.
         view.apply(&transaction, self);
@@ -2117,9 +2117,7 @@ impl Document {
         if self.compilation.is_some() {
             return false;
         }
-        let history = self.history.take();
-        let current_revision = history.current_revision();
-        self.history.set(history);
+        let current_revision = self.history.borrow().current_revision();
         log::debug!(
             "id {} modified - last saved: {}, current: {}",
             self.id,
@@ -2131,17 +2129,14 @@ impl Document {
 
     /// Save modifications to history, and so [`Self::is_modified`] will return false.
     pub fn reset_modified(&mut self) {
-        let history = self.history.take();
-        let current_revision = history.current_revision();
-        self.history.set(history);
-        self.last_saved_revision = current_revision;
+        self.last_saved_revision = self.history.get_mut().current_revision();
     }
 
     /// Starts the history afresh at the current text, which counts as saved; see
     /// [`Editor::reset_history`](crate::Editor::reset_history).
     pub(crate) fn reset_history(&mut self) {
         debug_assert!(self.changes.is_empty());
-        self.history.set(History::default());
+        *self.history.get_mut() = History::default();
         self.last_saved_revision = 0;
     }
 
@@ -2177,10 +2172,7 @@ impl Document {
 
     /// Get the current revision number
     pub fn get_current_revision(&mut self) -> usize {
-        let history = self.history.take();
-        let current_revision = history.current_revision();
-        self.history.set(history);
-        current_revision
+        self.history.get_mut().current_revision()
     }
 
     /// Corresponding language scope name. Usually `source.<lang>`.

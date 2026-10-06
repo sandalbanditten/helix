@@ -6,6 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
+        bufferline::Bufferline,
         diff_view::{self, DiffView},
         dired::{self, Dired},
         dock,
@@ -50,6 +51,7 @@ pub struct EditorView {
     spinners: ProgressSpinners,
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
+    bufferline: Bufferline,
     pub(crate) file_tree: FileTree,
     pub(crate) undo_tree: UndoTree,
     pub(crate) dired: Dired,
@@ -78,6 +80,7 @@ impl EditorView {
             completion: None,
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
+            bufferline: Bufferline::default(),
             file_tree: FileTree::default(),
             undo_tree: UndoTree::default(),
             dired: Dired::default(),
@@ -759,56 +762,6 @@ impl EditorView {
             ranges.extend(tabstop.ranges.iter().map(|range| range.start..range.end));
         }
         Some(OverlayHighlights::Homogeneous { highlight, ranges })
-    }
-
-    /// Render bufferline at the top
-    pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface) {
-        surface.clear_with(
-            viewport,
-            editor
-                .theme
-                .try_get("ui.bufferline.background")
-                .unwrap_or_else(|| editor.theme.get("ui.statusline")),
-        );
-
-        let bufferline_active = editor
-            .theme
-            .try_get("ui.bufferline.active")
-            .unwrap_or_else(|| editor.theme.get("ui.statusline.active"));
-
-        let bufferline_inactive = editor
-            .theme
-            .try_get("ui.bufferline")
-            .unwrap_or_else(|| editor.theme.get("ui.statusline.inactive"));
-
-        let mut x = viewport.x;
-        let current_doc = view!(editor).doc;
-
-        for doc in editor.documents() {
-            // A buffer without a path goes by its name, like `[scratch]`.
-            let fname = doc
-                .path()
-                .and_then(|path| path.file_name())
-                .map_or_else(|| doc.display_name(), |name| name.to_string_lossy());
-
-            let style = if current_doc == doc.id() {
-                bufferline_active
-            } else {
-                bufferline_inactive
-            };
-
-            let text = format!(" {}{} ", fname, if doc.is_modified() { "[+]" } else { "" });
-            let used_width = viewport.x.saturating_sub(x);
-            let rem_width = surface.area.width.saturating_sub(used_width);
-
-            x = surface
-                .set_stringn(x, viewport.y, &text, rem_width as usize, style)
-                .0;
-
-            if x >= surface.area.right() {
-                break;
-            }
-        }
     }
 
     pub fn render_gutter<'d>(
@@ -1946,7 +1899,11 @@ impl Component for EditorView {
         cx.editor.update_smooth_scroll();
 
         if use_bufferline {
-            Self::render_bufferline(cx.editor, views_area.with_height(1), surface);
+            self.bufferline
+                .render(cx.editor, views_area.with_height(1), surface);
+        } else {
+            // the bar comes back where it starts, not gliding from where it was
+            self.bufferline = Bufferline::default();
         }
 
         for (view, is_focused) in cx.editor.tree.visible_views() {

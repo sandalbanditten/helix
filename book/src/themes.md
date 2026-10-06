@@ -334,6 +334,7 @@ These scopes are used for theming the editor interface:
 | `ui.bufferline`                   | Style for the buffer line                                                                      |
 | `ui.bufferline.active`            | Style for the active buffer in buffer line                                                     |
 | `ui.bufferline.background`        | Style for bufferline background                                                                |
+| `ui.bufferline.marker`            | The `…` marking more buffers beyond an edge of the buffer line                                 |
 | `ui.popup`                        | Documentation popups (e.g. Space + k)                                                          |
 | `ui.popup.info`                   | Prompt for multiple key options                                                                |
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
