@@ -545,6 +545,10 @@ impl Path {
             limit,
         );
         let rows = match distance {
+            // Anchored on the start, both count their offsets from above the virtual lines there.
+            Ok(_) if bottom.anchor == 0 => {
+                bottom.vertical_offset as isize - top.vertical_offset as isize
+            }
             Ok((position, _)) => {
                 (position.row + bottom.vertical_offset) as isize - top.vertical_offset as isize
             }
@@ -921,6 +925,43 @@ mod tests {
             );
             assert_eq!(lines.last(), Some(&0));
         }
+    }
+
+    #[test]
+    fn view_glides_among_virtual_lines_above_the_first_line() {
+        use crate::diff_view::{builtin, Pane, Side};
+
+        let (mut view, mut doc) = setup(0, smooth_scroll(true, false));
+        // The empty side of a diff: 30 fillers above its only line.
+        let new: String = (0..30).map(|line| format!("line {line}\n")).collect();
+        let alignment = builtin::align(doc.text().slice(..), Rope::from(new).slice(..));
+        doc.diff_view = Some(Box::new(Pane {
+            side: Side::Old,
+            alignment: Arc::new(alignment),
+            name: String::new(),
+            partner: DocumentId::default(),
+            file: None,
+            origin: None,
+            wrap: None,
+        }));
+        let at = |vertical_offset| ViewPosition {
+            anchor: 0,
+            horizontal_offset: 0,
+            vertical_offset,
+        };
+        doc.set_view_offset(view.id, at(3));
+        let now = Instant::now();
+        view.update_smooth_scroll(&doc, now);
+
+        doc.set_view_offset(view.id, at(10));
+        let offsets = frames(&mut view, &doc, now, |view, doc| {
+            view.render_offset(doc).vertical_offset
+        });
+        assert!(
+            offsets.iter().all(|offset| (3..=10).contains(offset)),
+            "{offsets:?}"
+        );
+        assert_eq!(offsets.last(), Some(&10));
     }
 
     #[test]
