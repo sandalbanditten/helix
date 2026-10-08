@@ -35,9 +35,10 @@ diff otherwise (see [`[editor.diff]`](./editor.md#editordiff-section)). The pane
 ## Diffs of many files
 
 When a diff has many files, the diff tree lists them in place of the file tree, with the lines each
-adds and removes. `]g` and `[g` go on to the next or previous file. `Space e` focuses the diff tree
-and `Space E` toggles it. While it is focused it takes these keys; any other key returns focus to
-the editor.
+adds and removes. A renamed file is listed once, below the directory its old and new paths share,
+the way `git log --stat` shows it: `src/{ => ui}/main.rs`. `]g` and `[g` go on to the next or
+previous file. `Space e` focuses the diff tree and `Space E` toggles it. While it is focused it
+takes these keys; any other key returns focus to the editor.
 
 | Key | Description |
 | --- | --- |
