@@ -239,7 +239,15 @@ impl UndoTree {
         dock::fitted_width(widest.saturating_sub(1), self.max_width)
     }
 
-    pub fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+    /// Draws the panel into `area`, its rail carrying the bars of the splits beside it,
+    /// `neighbours`.
+    pub fn render(
+        &mut self,
+        area: Rect,
+        neighbours: &[Bar],
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
         let Some(current) = self.refresh(cx.editor) else {
             return;
         };
@@ -270,11 +278,11 @@ impl UndoTree {
             start,
             now,
             matches: &self.search.matches,
-            neighbours: &[],
+            neighbours,
         }
         .render(area, surface);
         match diff_area {
-            Some(diff_area) => self.render_diff(diff_area, current, surface, cx.editor),
+            Some(diff_area) => self.render_diff(diff_area, current, neighbours, surface, cx.editor),
             None => self.diff_focused = false,
         }
     }
@@ -296,6 +304,7 @@ impl UndoTree {
         &mut self,
         area: Rect,
         current: usize,
+        neighbours: &[Bar],
         surface: &mut Surface,
         editor: &mut Editor,
     ) {
@@ -352,7 +361,7 @@ impl UndoTree {
         self.diff
             .render(content, surface, styles.base, header, editor);
         let bar = Bar::new(area.top(), area.height.into(), None, styles.rail.thumb);
-        dock::render_rail(surface, area, Side::Right, bar, &[], styles.rail);
+        dock::render_rail(surface, area, Side::Right, bar, neighbours, styles.rail);
     }
 
     /// Runs the editor's command `name`, `count` times, if the panel has the keys and handles the

@@ -677,7 +677,15 @@ impl FileTree {
             .filter(|workspace| workspace.generation == generation)
     }
 
-    pub fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+    /// Draws the tree into `area`, its rail carrying the bars of the splits beside it,
+    /// `neighbours`.
+    pub fn render(
+        &mut self,
+        area: Rect,
+        neighbours: &[scrollbar::Bar],
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
         let config = cx.editor.config();
         let lister = self.lister(cx.editor);
         let palette = self.palette.get(&config.file_tree.ls_colors);
@@ -715,7 +723,7 @@ impl FileTree {
             edit: workspace.edit_row(),
             matches: &matches,
             stats: None,
-            neighbours: &[],
+            neighbours,
         }
         .render(area, surface);
 

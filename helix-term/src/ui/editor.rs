@@ -12,6 +12,7 @@ use crate::{
         dock,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
+        scrollbar::{self, Bar, RailStyles},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         undo_tree::UndoTree,
@@ -38,7 +39,7 @@ use helix_view::{
     keyboard::{KeyCode, KeyModifiers},
     Document, Editor, Theme, View,
 };
-use std::{borrow::Cow, mem::take, num::NonZeroUsize, ops, rc::Rc};
+use std::{borrow::Cow, cell::Cell, mem::take, num::NonZeroUsize, ops, rc::Rc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
@@ -110,7 +111,8 @@ impl EditorView {
     }
 
     /// Draws `view`, whose statusline goes to `statusline_area`. `viewport` is the area of all
-    /// views.
+    /// views. Returns the view's scrollbar when the rail to its right is a panel's, which draws
+    /// it.
     #[allow(clippy::too_many_arguments)]
     pub fn render_view(
         &self,
@@ -121,7 +123,7 @@ impl EditorView {
         statusline_area: Rect,
         surface: &mut Surface,
         is_focused: bool,
-    ) {
+    ) -> Option<Bar> {
         // While a panel has the keys, the text is drawn as unfocused; the statusline still shows
         // the view's focus and mode.
         let statusline_focused = is_focused;
@@ -280,6 +282,13 @@ impl EditorView {
             .diagnostics_handler
             .show_cursorline_diagnostics(doc, view.id);
         let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
+        // The document lines on screen, for the scrollbar.
+        let last_line = Cell::new(first);
+        if config.scrollbar.enable {
+            decorations.add_decoration(|_: &mut TextRenderer, pos: LinePos| {
+                last_line.set(last_line.get().max(pos.doc_line));
+            });
+        }
         decorations.add_decoration(InlineDiagnostics::new(
             doc,
             theme,
@@ -300,16 +309,23 @@ impl EditorView {
             decorations,
         );
 
-        // if we're not at the edge of the screen, draw a right border
+        // The rail to the right: a separator, or the one at the edge of the views. A panel docked
+        // beside the view draws its own.
+        let rail = RailStyles::new(theme, theme.get("ui.background"));
+        let mut bar = config.scrollbar.enable.then(|| {
+            let height = inner.height as usize;
+            let thumb = scrollbar::thumb(text.len_lines(), first..last_line.get() + 1, height);
+            Bar::new(inner.top(), height, thumb, rail.thumb)
+        });
         if viewport.right() != view.area.right() {
             let x = area.right();
-            let border_style = theme.get("ui.window");
-            for y in area.top()..area.bottom() {
-                surface[(x, y)]
-                    .set_symbol(tui::symbols::line::VERTICAL)
-                    //.set_symbol(" ")
-                    .set_style(border_style);
+            let mut rows = area.top()..area.bottom();
+            // The statusline runs under the rail at the edge.
+            if statusline_area.right() > x {
+                rows.end -= 1;
             }
+            let bars = bar.take();
+            scrollbar::render_rail(surface, x, rows, bars.as_slice(), &[], rail);
         }
 
         if config.inline_diagnostics.disabled()
@@ -322,6 +338,7 @@ impl EditorView {
             statusline::RenderContext::new(editor, doc, view, statusline_focused, &self.spinners);
 
         statusline::render(&mut context, statusline_area, surface);
+        bar
     }
 
     pub fn render_rulers(
@@ -1879,10 +1896,13 @@ impl Component for EditorView {
                 views_area.clip_right(file_tree_area.width)
             };
         }
-        let docks: Vec<_> = [file_tree_area, undo_tree_area]
+        let mut docks: Vec<_> = [file_tree_area, undo_tree_area]
             .into_iter()
             .flatten()
             .collect();
+        // A panel docked to the right of the views shares its rail with them.
+        let is_beside_views = |area: Rect| area.left() == views_area.right();
+        let rail_docked = docks.iter().any(|&dock| is_beside_views(dock));
         if float {
             undo_tree_area = self.undo_tree.layout(views_area, cx.editor);
         }
@@ -1890,6 +1910,13 @@ impl Component for EditorView {
         let mut editor_area = views_area;
         if use_bufferline {
             editor_area = editor_area.clip_top(1);
+        }
+        // Otherwise the views have a rail of their own at the right edge, ending above the
+        // statusline like the panels do.
+        if config.scrollbar.enable && !rail_docked && editor_area.width > 1 {
+            editor_area = editor_area.clip_right(1);
+            let height = editor_area.height.saturating_sub(1);
+            docks.push(Rect::new(editor_area.right(), editor_area.y, 1, height));
         }
 
         // if the terminal size suddenly changed, we need to trigger a resize
@@ -1907,10 +1934,12 @@ impl Component for EditorView {
             self.bufferline = Bufferline::default();
         }
 
+        // The scrollbars of the views beside a panel's rail.
+        let mut bars = Vec::new();
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
             let statusline_area = dock::statusline_area(view.area, &docks);
-            self.render_view(
+            bars.extend(self.render_view(
                 cx.editor,
                 doc,
                 view,
@@ -1918,18 +1947,30 @@ impl Component for EditorView {
                 statusline_area,
                 surface,
                 is_focused,
-            );
+            ));
         }
+        let neighbours = |area: Rect| {
+            if is_beside_views(area) {
+                &bars[..]
+            } else {
+                &[]
+            }
+        };
 
         if let Some(file_tree_area) = file_tree_area {
+            let neighbours = neighbours(file_tree_area);
             if self.diff_view.has_tree() {
-                self.diff_view.render_tree(file_tree_area, surface, cx);
+                self.diff_view
+                    .render_tree(file_tree_area, neighbours, surface, cx);
             } else {
-                self.file_tree.render(file_tree_area, surface, cx);
+                self.file_tree
+                    .render(file_tree_area, neighbours, surface, cx);
             }
         }
         if let Some(undo_tree_area) = undo_tree_area {
-            self.undo_tree.render(undo_tree_area, surface, cx);
+            let neighbours = neighbours(undo_tree_area);
+            self.undo_tree
+                .render(undo_tree_area, neighbours, surface, cx);
         }
 
         if config.auto_info {

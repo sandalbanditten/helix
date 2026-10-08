@@ -32,6 +32,7 @@ use crate::{
             Palette,
         },
         panel_keys::{self, bind, Bindings},
+        scrollbar::Bar,
     },
 };
 
@@ -487,10 +488,12 @@ impl DiffTree {
         self.update(editor);
     }
 
-    /// Draws the panel into `area`, with the file shown in the panes, `current`, marked.
+    /// Draws the panel into `area`, with the file shown in the panes, `current`, marked, its rail
+    /// carrying the bars of the splits beside it, `neighbours`.
     pub fn render(
         &mut self,
         area: Rect,
+        neighbours: &[Bar],
         surface: &mut Surface,
         current: Option<&Path>,
         cx: &mut Context,
@@ -532,7 +535,7 @@ impl DiffTree {
             edit: None,
             matches: &matches,
             stats: Some(&self.stats),
-            neighbours: &[],
+            neighbours,
         }
         .render(area, surface);
     }

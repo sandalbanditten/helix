@@ -581,6 +581,8 @@ pub struct Config {
     /// Animation of view movements. Defaults to disabled.
     #[serde(deserialize_with = "deserialize_smooth_scroll")]
     pub smooth_scroll: SmoothScrollConfig,
+    /// Scrollbars on the rails beside splits.
+    pub scrollbar: ScrollbarConfig,
     /// Code folding.
     pub folding: FoldingConfig,
     /// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math.
@@ -1426,6 +1428,15 @@ impl SmoothScrollConfig {
     }
 }
 
+/// Scrollbars on the rails beside splits: the separators between them, and a rail at the right
+/// edge of the editor or beside a panel docked there.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ScrollbarConfig {
+    /// Whether splits have scrollbars. Defaults to `false`.
+    pub enable: bool,
+}
+
 /// Text shown as the symbol it stands for, like `α` for `alpha`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -1630,6 +1641,7 @@ impl Default for Config {
             scrolloff: 5,
             scroll_lines: 3,
             smooth_scroll: SmoothScrollConfig::default(),
+            scrollbar: ScrollbarConfig::default(),
             folding: FoldingConfig::default(),
             conceal: ConcealConfig::default(),
             mouse: true,

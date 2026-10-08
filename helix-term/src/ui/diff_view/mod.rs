@@ -46,7 +46,7 @@ use self::{
 use crate::{
     compositor::{Context, EventResult},
     job,
-    ui::EditorView,
+    ui::{scrollbar::Bar, EditorView},
 };
 
 /// How long a buffer rests after a change before its diff is worked out again.
@@ -730,10 +730,18 @@ impl DiffView {
         self.files.as_mut()?.tree.layout(main, editor)
     }
 
-    pub fn render_tree(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+    pub fn render_tree(
+        &mut self,
+        area: Rect,
+        neighbours: &[Bar],
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
         if let Some(files) = &mut self.files {
             let current = files.current.map(|index| files.set.files[index].key());
-            files.tree.render(area, surface, current.as_deref(), cx);
+            files
+                .tree
+                .render(area, neighbours, surface, current.as_deref(), cx);
         }
     }
 
