@@ -136,6 +136,15 @@ pub fn render_text<'a>(
 
         // if the end of the viewport is reached stop rendering
         if grapheme.visual_pos.row as u16 >= renderer.viewport.height + renderer.offset.row as u16 {
+            // the view shows only virtual lines above the first line
+            if last_line_pos.doc_line == usize::MAX {
+                let first_line = LinePos {
+                    first_visual_line: true,
+                    doc_line: grapheme.line_idx,
+                    visual_line: grapheme.visual_pos.row as u16,
+                };
+                decorations.render_virtual_lines_above(renderer, first_line);
+            }
             break;
         }
 
@@ -217,8 +226,10 @@ pub fn render_text<'a>(
         }
     }
 
-    renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
-    decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
+    if last_line_pos.doc_line != usize::MAX {
+        renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
+        decorations.render_virtual_lines(renderer, last_line_pos, last_line_end)
+    }
 }
 
 #[derive(Debug)]

@@ -496,6 +496,32 @@ async fn fillers_are_drawn_with_the_filler_character() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fillers_fill_a_pane_that_shows_no_line() -> anyhow::Result<()> {
+    let (_dir, path) = repository("a\n")?;
+    let mut config = test_config();
+    config.editor.diff.tool = DiffTool::Builtin;
+    config.editor.diff.filler_character = Some('╱');
+    let app = AppBuilder::new()
+        .with_file(&path, None)
+        .with_config(config)
+        .build()?;
+    let mut session = Session::new(app);
+    // More lines added above the first than the screen is tall.
+    set_text(&mut session.app, &format!("{}a\n", "new\n".repeat(300)));
+    session.keys(":diff<ret>").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let shown = rows(&session.app);
+    assert_eq!(shown[0].1, "1 new");
+    assert!(
+        shown
+            .iter()
+            .all(|(old, _)| old.chars().all(|c| c == '╱') && old.len() > 10),
+        "{shown:#?}"
+    );
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn wrapped_panes_line_up_as_the_diff_tree_comes_and_goes() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let (old, new) = (dir.path().join("old"), dir.path().join("new"));

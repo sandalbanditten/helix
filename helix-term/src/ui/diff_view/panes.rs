@@ -469,6 +469,10 @@ impl Decoration for Rows<'_> {
         self.paint_line(renderer, pos.visual_line..pos.visual_line + 1, pos.doc_line);
     }
 
+    fn render_virt_lines_above(&mut self, renderer: &mut TextRenderer, first_line: LinePos) {
+        self.paint_virtual(renderer, self.next_row..first_line.visual_line, None);
+    }
+
     fn render_virt_lines(
         &mut self,
         renderer: &mut TextRenderer,

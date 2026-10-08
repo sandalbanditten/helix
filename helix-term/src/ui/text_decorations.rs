@@ -63,6 +63,10 @@ pub trait Decoration {
         Position::new(0, 0)
     }
 
+    /// Called instead of any other hook when the view shows only virtual lines above the
+    /// document's first line, which starts at `first_line`, below the view.
+    fn render_virt_lines_above(&mut self, _renderer: &mut TextRenderer, _first_line: LinePos) {}
+
     fn reset_pos(&mut self, _pos: usize) -> usize {
         usize::MAX
     }
@@ -130,6 +134,12 @@ impl<'a> DecorationManager<'a> {
     pub fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
         for (decoration, _) in &mut self.decorations {
             decoration.decorate_line(renderer, pos);
+        }
+    }
+
+    pub fn render_virtual_lines_above(&mut self, renderer: &mut TextRenderer, first_line: LinePos) {
+        for (decoration, _) in &mut self.decorations {
+            decoration.render_virt_lines_above(renderer, first_line);
         }
     }
 
