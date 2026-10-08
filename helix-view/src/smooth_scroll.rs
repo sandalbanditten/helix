@@ -536,13 +536,15 @@ impl Path {
 
         let forward = (to.anchor, to.vertical_offset) >= (from.anchor, from.vertical_offset);
         let (top, bottom) = if forward { (from, to) } else { (to, from) };
+        // The limit counts from the top of the view, which may lie far below its anchor, among
+        // the virtual lines after it.
         let distance = visual_offset_from_anchor(
             text,
             top.anchor,
             bottom.anchor,
             &text_fmt,
             &annotations,
-            limit,
+            limit + top.vertical_offset,
         );
         let rows = match distance {
             // Anchored on the start, both count their offsets from above the virtual lines there.
@@ -962,6 +964,50 @@ mod tests {
             "{offsets:?}"
         );
         assert_eq!(offsets.last(), Some(&10));
+    }
+
+    #[test]
+    fn view_glides_a_short_way_among_many_virtual_lines() {
+        use crate::diff_view::{builtin, Pane, Side};
+
+        // Lines 0 to 2, then 100 fillers facing lines the new side adds, then lines 3 to 29.
+        let (mut view, mut doc) = setup(30, smooth_scroll(true, false));
+        let added: String = (0..100).map(|line| format!("added {line}\n")).collect();
+        let old = doc.text().to_string();
+        let (head, tail) = old.split_at("line 0\nline 1\nline 2\n".len());
+        let new = format!("{head}{added}{tail}");
+        let alignment = builtin::align(doc.text().slice(..), Rope::from(new).slice(..));
+        doc.diff_view = Some(Box::new(Pane {
+            side: Side::Old,
+            alignment: Arc::new(alignment),
+            name: String::new(),
+            partner: DocumentId::default(),
+            file: None,
+            origin: None,
+            wrap: None,
+        }));
+        let text = doc.text().clone();
+        let at = |line, vertical_offset| ViewPosition {
+            anchor: text.line_to_char(line),
+            horizontal_offset: 0,
+            vertical_offset,
+        };
+        let row = |offset: ViewPosition| match text.char_to_line(offset.anchor) {
+            line @ 0..=2 => line + offset.vertical_offset,
+            line => 100 + line + offset.vertical_offset,
+        };
+        // Deep among the fillers, a few rows above line 10.
+        doc.set_view_offset(view.id, at(2, 95));
+        let now = Instant::now();
+        view.update_smooth_scroll(&doc, now);
+
+        doc.set_view_offset(view.id, at(10, 0));
+        let rows = frames(&mut view, &doc, now, |view, doc| {
+            row(view.render_offset(doc))
+        });
+        assert!(rows.windows(2).all(|rows| rows[0] <= rows[1]), "{rows:?}");
+        assert!(rows.iter().all(|row| (97..=110).contains(row)), "{rows:?}");
+        assert_eq!(rows.last(), Some(&110));
     }
 
     #[test]
