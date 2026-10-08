@@ -361,6 +361,10 @@ These scopes are used for theming the editor interface:
 | `ui.menu`                         | Code and command completion menus                                                              |
 | `ui.menu.selected`                | Selected autocomplete item                                                                     |
 | `ui.menu.scroll`                  | `fg` sets thumb color, `bg` sets track color of scrollbar                                      |
+| `ui.scrollbar.search`             | Matches of a search on the scrollbars of splits (see the [`editor.scrollbar` config][editor-section]) |
+| `ui.minimap`                      | Minimaps (see the [`editor.minimap` config][editor-section])                                   |
+| `ui.minimap.viewport`             | `bg` shades the lines on screen in a minimap                                                   |
+| `ui.minimap.search`               | Matches of a search in minimaps                                                                |
 | `ui.file-tree`                    | The [file tree](./file-tree.md)                                                                |
 | `ui.file-tree.selected`           | The file tree's cursor row                                                                     |
 | `ui.file-tree.active`             | The file tree's row of the current file                                                        |

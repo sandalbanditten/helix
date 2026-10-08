@@ -1,4 +1,4 @@
-use std::{io::Write, ops::Range};
+use std::{io::Write, ops::Range, time::Instant};
 
 use helix_core::{
     diagnostic::{DiagnosticProvider, Severity},
@@ -434,6 +434,21 @@ mod minimap {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn maps_follow_edits() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, minimap_config())?;
+        session.keys("").await?;
+        // "line 0" to "line 3" fill both dots of the first cell.
+        assert_eq!(symbols(&session.app, 108, 0, 2), "⣿⠀");
+        // Typing on the first line changes its row, typing a line break the rows below.
+        session.keys("A 1234567<esc>").await?;
+        assert_eq!(symbols(&session.app, 108, 0, 2), "⣿⠉");
+        session.keys("ggO<esc>").await?;
+        assert_eq!(symbols(&session.app, 108, 0, 2), "⣶⠒");
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn narrow_splits_have_no_minimap() -> anyhow::Result<()> {
         let file = text_file(".txt", &lines(600))?;
         let mut session = open(&file, minimap_config())?;
@@ -514,4 +529,59 @@ mod minimap {
         assert_eq!(changes, [75]);
         session.quit().await
     }
+}
+
+/// Prints how long a frame takes while scrolling, typing and searching in `text`, without and
+/// with scrollbars and minimaps.
+async fn measure(name: &str, text: &str) -> anyhow::Result<()> {
+    const STEPS: usize = 200;
+    let file = text_file(".rs", text)?;
+    let mut session = open(&file, scrollbar_config(false))?;
+    session.keys("").await?;
+    for (scrollbar, minimap) in [(false, false), (true, false), (false, true), (true, true)] {
+        session
+            .keys(&format!(":set scrollbar.enable {scrollbar}<ret>"))
+            .await?;
+        session
+            .keys(&format!(":set minimap.enable {minimap}<ret>"))
+            .await?;
+        session.keys("gg").await?;
+        // Two keys, two frames a step.
+        let start = Instant::now();
+        session.keys(&"zj".repeat(STEPS)).await?;
+        let scrolling = start.elapsed() / (2 * STEPS as u32);
+        // Every key an edit.
+        session.keys("ggi").await?;
+        let start = Instant::now();
+        session.keys(&"x".repeat(STEPS)).await?;
+        let typing = start.elapsed() / STEPS as u32;
+        session.keys("<esc>u").await?;
+        // Every key a new search.
+        session.keys("/").await?;
+        let start = Instant::now();
+        session
+            .keys(&"self<backspace><backspace><backspace><backspace>".repeat(STEPS / 8))
+            .await?;
+        let searching = start.elapsed() / STEPS as u32;
+        session.keys("<esc>").await?;
+        println!(
+            "{name}: scrollbar {scrollbar}, minimap {minimap}: scrolling {scrolling:?}, \
+             typing {typing:?}, searching {searching:?} a key"
+        );
+    }
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement, not a check"]
+async fn measure_a_large_file() -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))?;
+    measure("commands.rs", &text).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "a measurement, not a check"]
+async fn measure_a_huge_file() -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))?;
+    measure("4 x commands.rs", &text.repeat(4)).await
 }
