@@ -12,6 +12,7 @@ use crate::{
         dock,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
+        minimap::Minimaps,
         overview::{self, Overview},
         scrollbar::{self, Bar, Gesture, RailStyles},
         statusline,
@@ -40,7 +41,14 @@ use helix_view::{
     keyboard::{KeyCode, KeyModifiers},
     Document, Editor, Theme, View, ViewId,
 };
-use std::{borrow::Cow, cell::Cell, mem::take, num::NonZeroUsize, ops, rc::Rc};
+use std::{
+    borrow::Cow,
+    cell::{Cell, RefCell},
+    mem::take,
+    num::NonZeroUsize,
+    ops,
+    rc::Rc,
+};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
@@ -59,8 +67,10 @@ pub struct EditorView {
     pub(crate) dired: Dired,
     pub(crate) diff_view: DiffView,
     pub(crate) reload_question: ReloadQuestion,
-    /// What the scrollbars mark.
+    /// What the scrollbars and minimaps mark.
     overview: Overview,
+    /// The cells of the minimaps, worked out while drawing them.
+    minimaps: RefCell<Minimaps>,
     /// The rails of the views as last drawn, and a press on one with the drag that may follow.
     rails: Vec<Rail>,
     rail_gesture: Option<(ViewId, Gesture)>,
@@ -106,6 +116,7 @@ impl EditorView {
             diff_view: DiffView::default(),
             reload_question: ReloadQuestion::default(),
             overview: Overview::default(),
+            minimaps: RefCell::default(),
             rails: Vec::new(),
             rail_gesture: None,
         }
@@ -303,9 +314,10 @@ impl EditorView {
             .diagnostics_handler
             .show_cursorline_diagnostics(doc, view.id);
         let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
-        // The document lines on screen, for the scrollbar.
+        // The document lines on screen, for the scrollbar and the minimap.
         let last_line = Cell::new(first);
-        if config.scrollbar.enable {
+        let minimap_area = view.minimap_area(doc);
+        if config.scrollbar.enable || minimap_area.is_some() {
             decorations.add_decoration(|_: &mut TextRenderer, pos: LinePos| {
                 last_line.set(last_line.get().max(pos.doc_line));
             });
@@ -330,17 +342,31 @@ impl EditorView {
             decorations,
         );
 
+        let shown = first..last_line.get() + 1;
+        if let Some(minimap_area) = minimap_area {
+            let cursor = doc.selection(view.id).primary().cursor(text);
+            self.minimaps.borrow_mut().render(
+                minimap_area,
+                surface,
+                doc,
+                shown.clone(),
+                text.char_to_line(cursor),
+                &self.overview,
+                theme,
+                &loader,
+            );
+        }
+
         // The rail to the right: a separator, or the one at the edge of the views. A panel docked
         // beside the view draws its own.
         let rail = RailStyles::new(theme, theme.get("ui.background"));
-        let shown = first..last_line.get() + 1;
         let bar = config.scrollbar.enable.then(|| {
             let height = inner.height as usize;
             let thumb = scrollbar::thumb(text.len_lines(), shown.clone(), height);
             let mut bar = Bar::new(inner.top(), height, thumb, rail.thumb);
             // Everything shows when there is no thumb, the marks in the gutter.
             if bar.has_thumb() {
-                let colors = overview::Colors::new(theme);
+                let colors = overview::Colors::new(theme, &["ui.scrollbar.search"]);
                 let filter = overview::Filter::from(&config.scrollbar);
                 for (row, mark) in self
                     .overview
@@ -2105,6 +2131,7 @@ impl Component for EditorView {
         }
 
         self.overview.update(cx.editor);
+        self.minimaps.get_mut().retain(cx.editor);
         let mut rails = Vec::new();
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();

@@ -6,7 +6,12 @@ use helix_core::{
     Diagnostic, Rope,
 };
 use helix_term::application::Application;
-use helix_view::{doc, doc_mut, editor::ScrollbarConfig, graphics::Color, view};
+use helix_view::{
+    doc, doc_mut,
+    editor::ScrollbarConfig,
+    graphics::{Color, Rect},
+    view,
+};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -348,6 +353,127 @@ mod mouse {
         assert_eq!(lines_shown(&session.app).0, 0);
         drag(&mut session, (rail, 10), (rail, 147)).await?;
         assert_eq!(lines_shown(&session.app).0, 453);
+        session.quit().await
+    }
+}
+
+mod minimap {
+    use helix_view::{current_ref, editor::MinimapConfig};
+
+    use super::*;
+
+    fn minimap_config() -> Config {
+        let mut config = test_config();
+        config.editor.minimap = MinimapConfig {
+            enable: true,
+            ..Default::default()
+        };
+        config
+    }
+
+    /// The symbols of the screen row `y` from the column `x` on, `count` of them.
+    fn symbols(app: &Application, x: u16, y: u16, count: u16) -> String {
+        (x..x + count)
+            .map(|x| app.screen()[(x, y)].symbol.as_str())
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn documents_show_in_braille_beside_the_text() -> anyhow::Result<()> {
+        // A cell is 8 columns of 4 lines, a dot 4 columns of a line; tabs are 4 wide.
+        let text = "aaaaaaaa\n\n        x\n\tab\nzzzz\n";
+        let file = text_file(".txt", text)?;
+        let mut session = open(&file, minimap_config())?;
+        session.keys("").await?;
+        let app = &session.app;
+        let (view, doc) = current_ref!(app.editor);
+        // 12 cells and the column of changes take the right edge; the text wraps before them.
+        assert_eq!(view.minimap_area(doc), Some(Rect::new(107, 0, 13, 148)));
+        assert_eq!(view.inner_area(doc).right(), 107);
+        assert_eq!(symbols(app, 108, 0, 3), "⢉⠄⠀");
+        assert_eq!(symbols(app, 108, 1, 2), "⠁⠀");
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn narrow_splits_have_no_minimap() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, minimap_config())?;
+        session.keys("<C-w>v").await?;
+        let (view, doc) = current_ref!(session.app.editor);
+        assert!(view.area.width < 80);
+        assert_eq!(view.minimap_area(doc), None);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cells_take_the_colors_of_their_text() -> anyhow::Result<()> {
+        let source = "// a comment\nfn f() {}\n";
+        let file = text_file(".rs", source)?;
+        let mut session = open(&file, minimap_config())?;
+        session.keys("").await?;
+        let app = &session.app;
+        let comment = app.editor.theme.get("comment").fg.unwrap();
+        assert_eq!(fg(app, 108, 0), comment);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maps_slide_and_shade_the_lines_on_screen() -> anyhow::Result<()> {
+        // 2000 lines: 500 rows of cells, on a map of 148.
+        let file = text_file(".txt", &lines(2000))?;
+        let mut session = open(&file, minimap_config())?;
+        session.keys("").await?;
+        let shade = session
+            .app
+            .editor
+            .theme
+            .get("ui.cursorline.primary")
+            .bg
+            .unwrap();
+        let shaded = |app: &Application| {
+            (0..TEXT_ROWS)
+                .filter(|&y| app.screen()[(108, y)].bg == shade)
+                .collect::<Vec<_>>()
+        };
+        // Lines 0..148 are the first 37 rows.
+        assert_eq!(shaded(&session.app), (0..37).collect::<Vec<_>>());
+        session.keys("ge").await?;
+        assert_eq!(shaded(&session.app).last(), Some(&(TEXT_ROWS - 1)));
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn marks_tint_dots_and_changes_have_a_column() -> anyhow::Result<()> {
+        let text: String = (0..600)
+            .map(|i| match i {
+                100 | 500 => "needle\n".to_owned(),
+                _ => format!("line {i}\n"),
+            })
+            .collect();
+        let file = text_file(".txt", &text)?;
+        let mut session = open(&file, minimap_config())?;
+        let special = session.app.editor.theme.get("special").fg.unwrap();
+        let doc = doc_mut!(session.app.editor);
+        doc.set_diff_override(Some(Rope::from(text.replace("line 300\n", "x\n"))));
+        session
+            .until("the diff", |app| {
+                doc!(app.editor)
+                    .diff_handle()
+                    .is_some_and(|handle| !handle.load().is_empty())
+            })
+            .await;
+        // Lines 100 and 500 are in rows 25 and 125, line 300 in row 75.
+        session.keys("/needle").await?;
+        let app = &session.app;
+        let tinted: Vec<_> = (0..TEXT_ROWS)
+            .filter(|&y| fg(app, 108, y) == special)
+            .collect();
+        assert_eq!(tinted, [25, 125]);
+        let changes: Vec<_> = (0..TEXT_ROWS)
+            .filter(|&y| app.screen()[(107, y)].symbol.as_str() == "▍")
+            .collect();
+        assert_eq!(changes, [75]);
         session.quit().await
     }
 }

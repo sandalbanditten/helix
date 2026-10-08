@@ -11,6 +11,7 @@ mod info;
 pub mod lsp;
 mod markdown;
 pub mod menu;
+mod minimap;
 pub mod overlay;
 mod overview;
 mod panel_keys;

@@ -179,6 +179,9 @@ pub struct View {
     smooth_scroll: SmoothScroll,
 }
 
+/// The narrowest a view showing a minimap gets.
+pub const MINIMAP_VIEW_WIDTH: u16 = 80;
+
 impl fmt::Debug for View {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("View")
@@ -214,7 +217,10 @@ impl View {
     }
 
     pub fn inner_area(&self, doc: &Document) -> Rect {
-        self.area.clip_left(self.gutter_offset(doc)).clip_bottom(1) // -1 for statusline
+        self.area
+            .clip_left(self.gutter_offset(doc))
+            .clip_right(self.minimap_width(doc))
+            .clip_bottom(1) // -1 for statusline
     }
 
     pub fn inner_height(&self) -> usize {
@@ -222,7 +228,30 @@ impl View {
     }
 
     pub fn inner_width(&self, doc: &Document) -> u16 {
-        self.area.clip_left(self.gutter_offset(doc)).width
+        self.area
+            .clip_left(self.gutter_offset(doc))
+            .clip_right(self.minimap_width(doc))
+            .width
+    }
+
+    /// The columns the minimap takes at the right edge: a column of changes and its cells, in
+    /// views wide enough.
+    pub fn minimap_width(&self, doc: &Document) -> u16 {
+        let config = &doc.config.load().minimap;
+        if config.enable && config.width > 0 && self.area.width >= MINIMAP_VIEW_WIDTH {
+            (config.width + 1).min(self.area.width / 2)
+        } else {
+            0
+        }
+    }
+
+    /// The area of the minimap beside the text, if the view shows one.
+    pub fn minimap_area(&self, doc: &Document) -> Option<Rect> {
+        let width = self.minimap_width(doc);
+        (width > 0).then(|| {
+            let area = self.area.clip_bottom(1);
+            area.clip_left(area.width - width)
+        })
     }
 
     pub fn gutters(&self) -> &[GutterType] {

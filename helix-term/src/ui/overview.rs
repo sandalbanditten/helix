@@ -47,7 +47,7 @@ impl From<&ScrollbarConfig> for Filter {
     }
 }
 
-/// The colors of marks: those of the diagnostics and diff gutters, and `ui.scrollbar.search`.
+/// The colors of marks: those of the diagnostics and diff gutters, and of a search scope.
 pub struct Colors {
     error: Color,
     warning: Color,
@@ -60,7 +60,8 @@ pub struct Colors {
 }
 
 impl Colors {
-    pub fn new(theme: &Theme) -> Self {
+    /// The colors of `theme`, searches taking the first of the `search` scopes it has.
+    pub fn new(theme: &Theme, search: &[&str]) -> Self {
         let color = |scope| theme.get(scope).fg.unwrap_or(Color::Reset);
         Self {
             error: color("error"),
@@ -71,8 +72,9 @@ impl Colors {
             modified: color("diff.delta.gutter"),
             deleted: color("diff.minus.gutter"),
             // Like the matches in the file tree, which fall back to `special` too.
-            search: theme
-                .try_get_exact("ui.scrollbar.search")
+            search: search
+                .iter()
+                .find_map(|scope| theme.try_get_exact(scope))
                 .unwrap_or_else(|| theme.get("special"))
                 .fg
                 .unwrap_or(Color::Reset),
@@ -111,11 +113,9 @@ pub struct Overview {
 impl Overview {
     /// Finds the matches of the search being made, unless they are known.
     pub fn update(&mut self, editor: &Editor) {
-        let config = &editor.config().scrollbar;
-        let live_search = editor
-            .live_search
-            .as_ref()
-            .filter(|_| config.enable && config.search);
+        let config = editor.config();
+        let marked = config.scrollbar.enable && config.scrollbar.search || config.minimap.enable;
+        let live_search = editor.live_search.as_ref().filter(|_| marked);
         let Some(LiveSearch { doc, query, regex }) = live_search else {
             self.search = None;
             return;

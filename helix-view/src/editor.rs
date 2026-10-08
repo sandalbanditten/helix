@@ -583,6 +583,8 @@ pub struct Config {
     pub smooth_scroll: SmoothScrollConfig,
     /// Scrollbars on the rails beside splits.
     pub scrollbar: ScrollbarConfig,
+    /// Overviews of documents in braille beside the text of splits.
+    pub minimap: MinimapConfig,
     /// Code folding.
     pub folding: FoldingConfig,
     /// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math.
@@ -1454,6 +1456,26 @@ impl Default for ScrollbarConfig {
     }
 }
 
+/// An overview of the document beside the text of a split: its lines in braille, colored like
+/// the text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct MinimapConfig {
+    /// Whether splits show minimaps. Defaults to `false`.
+    pub enable: bool,
+    /// The braille cells of a row, each for 8 columns of 4 lines. Defaults to `12`.
+    pub width: u16,
+}
+
+impl Default for MinimapConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            width: 12,
+        }
+    }
+}
+
 /// The search being made, whose matches the scrollbars mark: the one typed or stepped through
 /// last, until a command other than a search runs.
 #[derive(Debug, Clone)]
@@ -1669,6 +1691,7 @@ impl Default for Config {
             scroll_lines: 3,
             smooth_scroll: SmoothScrollConfig::default(),
             scrollbar: ScrollbarConfig::default(),
+            minimap: MinimapConfig::default(),
             folding: FoldingConfig::default(),
             conceal: ConcealConfig::default(),
             mouse: true,
