@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gix::bstr::ByteSlice;
+use gix::diff::blob::pipeline::{Mode, WorktreeRoots};
+use gix::diff::rewrites::{tracker::ChangeKind, Tracker};
 use gix::diff::Rewrites;
 use gix::dir::entry::Status;
-use gix::objs::tree::EntryKind;
+use gix::objs::tree::{EntryKind, EntryMode};
 use gix::sec::trust::DefaultForLevel;
 use gix::status::{
     index_worktree::Item,
@@ -456,6 +458,105 @@ fn index_side_change(change: &gix::diff::index::Change) -> (gix::bstr::BString, 
             (location.clone().into_owned(), change)
         }
     }
+}
+
+/// A file on one side of [`renames`]: gone from the old directory, or new in the new one.
+#[derive(Clone)]
+struct SideFile {
+    id: ObjectId,
+    kind: ChangeKind,
+    /// Its index among the files gone or the files new.
+    index: usize,
+}
+
+impl gix::diff::rewrites::tracker::Change for SideFile {
+    fn id(&self) -> &gix::hash::oid {
+        &self.id
+    }
+
+    fn relation(&self) -> Option<gix::diff::tree::visit::Relation> {
+        None
+    }
+
+    fn kind(&self) -> ChangeKind {
+        self.kind
+    }
+
+    fn entry_mode(&self) -> EntryMode {
+        EntryKind::Blob.into()
+    }
+
+    fn id_and_entry_mode(&self) -> (&gix::hash::oid, EntryMode) {
+        (&self.id, self.entry_mode())
+    }
+}
+
+/// Pairs the files `deleted` from the directory `old` with the files `added` to the directory
+/// `new` that they were renamed to, as git does: identical files first, then files at least half
+/// alike. The paths are relative to their directory.
+pub fn renames(
+    old: &Path,
+    new: &Path,
+    deleted: &[PathBuf],
+    added: &[PathBuf],
+) -> Result<Vec<(PathBuf, PathBuf)>> {
+    if deleted.is_empty() || added.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tracker = Tracker::new(Rewrites::default());
+    for (kind, dir, files) in [
+        (ChangeKind::Deletion, old, deleted),
+        (ChangeKind::Addition, new, added),
+    ] {
+        for (index, path) in files.iter().enumerate() {
+            let data = std::fs::read(dir.join(path))
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, &data)?;
+            let location =
+                gix::path::to_unix_separators_on_windows(gix::path::try_into_bstr(path)?);
+            let file = SideFile { id, kind, index };
+            // Additions and deletions are always taken.
+            let _ = tracker.try_push_change(file, location.as_ref());
+        }
+    }
+
+    // Both sides are read from their directories, without a repository's filters or attributes.
+    let roots = WorktreeRoots {
+        old_root: Some(old.to_path_buf()),
+        new_root: Some(new.to_path_buf()),
+    };
+    let pipeline = gix::diff::blob::Pipeline::new(
+        roots,
+        gix::filter::plumbing::Pipeline::default(),
+        Vec::new(),
+        Default::default(),
+    );
+    let attributes = gix::worktree::Stack::new(
+        new,
+        gix::worktree::stack::State::AttributesStack(Default::default()),
+        gix::glob::pattern::Case::Sensitive,
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut cache =
+        gix::diff::blob::Platform::new(Default::default(), pipeline, Mode::ToGit, attributes);
+    let mut pairs = Vec::new();
+    tracker.emit(
+        |destination, source| {
+            if let Some(source) = source {
+                pairs.push((
+                    deleted[source.change.index].clone(),
+                    added[destination.change.index].clone(),
+                ));
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+        &mut cache,
+        &gix::objs::find::Never,
+        // Only for finding copies.
+        |_| Ok::<_, std::io::Error>(()),
+    )?;
+    Ok(pairs)
 }
 
 /// Finds the object that contains the contents of a file at a specific commit.

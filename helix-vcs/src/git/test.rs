@@ -1,4 +1,9 @@
-use std::{fs::File, io::Write, path::Path, process::Command};
+use std::{
+    fs::File,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use tempfile::TempDir;
 
@@ -427,4 +432,41 @@ fn head_files_of_a_worktree() {
             git_dir.join("refs/heads/other"),
         ]
     );
+}
+
+#[test]
+fn renames_pair_files_gone_with_files_new_like_git() {
+    let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let write = |dir: &Path, path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    let lines = |count: usize, last: &str| format!("{}{last}\n", "line\n".repeat(count));
+    write(old.path(), "src/foo/Poisson.java", &lines(20, "a"));
+    write(new.path(), "src/foo/bar/Poisson.java", &lines(20, "a"));
+    write(old.path(), "Fish.java", &lines(8, "a"));
+    write(new.path(), "Trout.java", &lines(8, "b"));
+    write(old.path(), "gone.rs", "fn gone() {}\n");
+    write(new.path(), "new.rs", "struct New;\n");
+
+    let paths = |paths: &[&str]| -> Vec<PathBuf> { paths.iter().map(PathBuf::from).collect() };
+    let deleted = paths(&["src/foo/Poisson.java", "Fish.java", "gone.rs"]);
+    let added = paths(&["new.rs", "src/foo/bar/Poisson.java", "Trout.java"]);
+    let mut renames = git::renames(old.path(), new.path(), &deleted, &added).unwrap();
+    renames.sort();
+    assert_eq!(
+        renames,
+        [
+            ("Fish.java".into(), "Trout.java".into()),
+            (
+                "src/foo/Poisson.java".into(),
+                "src/foo/bar/Poisson.java".into()
+            ),
+        ],
+        "identical, and alike but for one line in nine"
+    );
+    assert!(git::renames(old.path(), new.path(), &deleted, &[])
+        .unwrap()
+        .is_empty());
 }

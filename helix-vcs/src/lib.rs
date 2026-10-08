@@ -147,6 +147,30 @@ impl DiffProviderRegistry {
             .find_map(|provider| provider.status_by_side(dir, trust_full, paths).ok())
             .ok_or_else(|| anyhow!("no diff provider returns success"))
     }
+
+    /// Pairs the files `deleted` from the directory `old` with the files `added` to the directory
+    /// `new` that they were renamed to. The paths are relative to their directory.
+    pub fn renames(
+        &self,
+        old: &Path,
+        new: &Path,
+        deleted: &[PathBuf],
+        added: &[PathBuf],
+    ) -> Vec<(PathBuf, PathBuf)> {
+        self.providers
+            .iter()
+            .find_map(
+                |provider| match provider.renames(old, new, deleted, added) {
+                    Ok(renames) => Some(renames),
+                    Err(err) => {
+                        log::debug!("{err:#?}");
+                        log::debug!("failed to find renames into {}", new.display());
+                        None
+                    }
+                },
+            )
+            .unwrap_or_default()
+    }
 }
 
 impl Default for DiffProviderRegistry {
@@ -234,6 +258,20 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::status_by_side(dir, trust_full, paths),
+            Self::None => bail!("No diff support compiled in"),
+        }
+    }
+
+    fn renames(
+        &self,
+        old: &Path,
+        new: &Path,
+        deleted: &[PathBuf],
+        added: &[PathBuf],
+    ) -> Result<Vec<(PathBuf, PathBuf)>> {
+        match self {
+            #[cfg(feature = "git")]
+            Self::Git => git::renames(old, new, deleted, added),
             Self::None => bail!("No diff support compiled in"),
         }
     }
