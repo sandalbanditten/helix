@@ -470,3 +470,60 @@ fn renames_pair_files_gone_with_files_new_like_git() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn status_pairs_many_edited_renames_like_git() {
+    let temp_git = empty_git_repo();
+    let repo = temp_git.path();
+    std::fs::create_dir_all(repo.join("foo/bar")).unwrap();
+    let text = |index: usize, package: &str| {
+        let lines: String = (0..20)
+            .map(|line| format!("int f{index}_{line};\n"))
+            .collect();
+        format!("package {package};\n{lines}")
+    };
+    for index in 0..40 {
+        std::fs::write(repo.join(format!("foo/C{index}.java")), text(index, "foo")).unwrap();
+    }
+    create_commit(repo, true);
+    // A package moved with each file's `package` line changed, as IDEs do.
+    for index in 0..40 {
+        exec_git_cmd(&format!("mv foo/C{index}.java foo/bar/C{index}.java"), repo);
+        let path = repo.join(format!("foo/bar/C{index}.java"));
+        std::fs::write(path, text(index, "foo.bar")).unwrap();
+    }
+    exec_git_cmd("add -A", repo);
+
+    let entries = status_entries(repo, crate::StatusOptions { staged: true });
+    assert_eq!(entries.len(), 40);
+    assert!(
+        entries.iter().all(|(kind, _)| *kind == "renamed"),
+        "{entries:?}"
+    );
+}
+
+#[test]
+#[ignore = "a measurement, not a check"]
+fn measure_unrelated_renames() {
+    let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut deleted = Vec::new();
+    let mut added = Vec::new();
+    for index in 0..1000 {
+        let text = |side: &str| {
+            (0..20)
+                .map(|line| format!("let {side}{index}_{line} = {line};\n"))
+                .collect::<String>()
+        };
+        std::fs::write(old.path().join(format!("a{index}.rs")), text("a")).unwrap();
+        std::fs::write(new.path().join(format!("b{index}.rs")), text("b")).unwrap();
+        deleted.push(PathBuf::from(format!("a{index}.rs")));
+        added.push(PathBuf::from(format!("b{index}.rs")));
+    }
+    let start = std::time::Instant::now();
+    let renames = git::renames(old.path(), new.path(), &deleted, &added).unwrap();
+    eprintln!(
+        "1000 x 1000 unrelated: {} renames in {:?}",
+        renames.len(),
+        start.elapsed()
+    );
+}

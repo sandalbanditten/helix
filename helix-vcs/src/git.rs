@@ -227,12 +227,8 @@ fn status(
         // the feature unusable to many.
         .untracked_files(UntrackedFiles::Files)
         // Turn on file rename detection, which is off by default.
-        .index_worktree_rewrites(Some(Rewrites {
-            copies: None,
-            percentage: Some(0.5),
-            limit: 1000,
-            ..Default::default()
-        }));
+        .index_worktree_rewrites(Some(rewrites()))
+        .tree_index_track_renames(gix::status::tree_index::TrackRenames::Given(rewrites()));
     // No filtering based on path
     let empty_patterns = vec![];
 
@@ -262,6 +258,16 @@ fn status(
     }
 
     Ok(())
+}
+
+/// Rename tracking like git's by default. gix compares the number of pairs to check with `limit`,
+/// where git compares it with `limit` squared.
+fn rewrites() -> Rewrites {
+    let limit = Rewrites::default().limit;
+    Rewrites {
+        limit: limit * limit,
+        ..Rewrites::default()
+    }
 }
 
 /// Maps a change between the index and the working tree.
@@ -503,7 +509,7 @@ pub fn renames(
     if deleted.is_empty() || added.is_empty() {
         return Ok(Vec::new());
     }
-    let mut tracker = Tracker::new(Rewrites::default());
+    let mut tracker = Tracker::new(rewrites());
     for (kind, dir, files) in [
         (ChangeKind::Deletion, old, deleted),
         (ChangeKind::Addition, new, added),
