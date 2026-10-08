@@ -543,6 +543,14 @@ impl View {
         self.smooth_scroll = smooth_scroll;
     }
 
+    /// Draws the view at `offset` in the frame being drawn, rather than gliding on its own, to
+    /// keep it in step with the frame of another view.
+    pub fn follow_frame(&mut self, doc: &Document, offset: ViewPosition) {
+        let mut smooth_scroll = std::mem::take(&mut self.smooth_scroll);
+        smooth_scroll.follow(self, doc, offset);
+        self.smooth_scroll = smooth_scroll;
+    }
+
     /// Whether the cursor and its decorations are hidden while the view smoothly scrolls.
     pub fn hides_cursor(&self, doc: &Document) -> bool {
         doc.config.load().smooth_scroll.hide_cursor && self.smooth_scroll.is_animating(doc, self.id)

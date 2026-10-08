@@ -288,6 +288,20 @@ struct Pair {
     outcome: Outcome,
 }
 
+impl Pair {
+    /// The views and documents of the panes, the focused one first, if either is focused.
+    fn focused_first(&self, editor: &Editor) -> Option<([ViewId; 2], [DocumentId; 2])> {
+        let index = self
+            .views
+            .iter()
+            .position(|&view| view == editor.tree.focus)?;
+        Some((
+            [self.views[index], self.views[1 - index]],
+            [self.panes[index], self.panes[1 - index]],
+        ))
+    }
+}
+
 /// A diff of many files, browsed in the diff tree.
 struct Files {
     set: DiffSet,
@@ -456,16 +470,20 @@ impl DiffView {
             return;
         };
         wrap(pair, editor);
-        if let Some(index) = pair
-            .views
-            .iter()
-            .position(|&view| view == editor.tree.focus)
+        if let Some((views, docs)) = pair.focused_first(editor) {
+            panes::sync(editor, views, docs);
+        }
+    }
+
+    /// Keeps the frames of the panes in step while the focused one glides, once the views have
+    /// advanced to the frame drawn.
+    pub fn follow_frame(&mut self, editor: &mut Editor) {
+        if let Some((views, docs)) = self
+            .pair
+            .as_ref()
+            .and_then(|pair| pair.focused_first(editor))
         {
-            panes::sync(
-                editor,
-                [pair.views[index], pair.views[1 - index]],
-                [pair.panes[index], pair.panes[1 - index]],
-            );
+            panes::follow_frame(editor, views, docs);
         }
     }
 

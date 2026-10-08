@@ -1897,6 +1897,7 @@ impl Component for EditorView {
         super::compilation::follow_size(cx.editor);
         self.diff_view.follow_size(cx.editor);
         cx.editor.update_smooth_scroll();
+        self.diff_view.follow_frame(cx.editor);
 
         if use_bufferline {
             self.bufferline

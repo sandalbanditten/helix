@@ -197,6 +197,15 @@ pub(crate) struct SmoothScroll {
     /// How `View::scroll` moved the selections since the last frame.
     hint: Option<ScrollHint>,
     animation: Option<Animation>,
+    /// The frame another view's frame decides, drawn instead of gliding.
+    followed: Option<Followed>,
+}
+
+/// A frame decided by another view's, for one version of a document.
+struct Followed {
+    doc: DocumentId,
+    version: i32,
+    offset: ViewPosition,
 }
 
 impl Clone for SmoothScroll {
@@ -341,6 +350,7 @@ impl SmoothScroll {
     pub(crate) fn update(&mut self, view: &View, doc: &Document, now: Instant) -> Option<Instant> {
         let config = doc.config.load();
         let hint = self.hint.take();
+        self.followed = None;
         if !config.smooth_scroll.is_enabled() {
             *self = Self::default();
             return None;
@@ -381,6 +391,22 @@ impl SmoothScroll {
         next_frame
     }
 
+    /// Draws the frame at `offset`, decided by another view's frame, rather than gliding. Until
+    /// the next [`update`](Self::update).
+    pub(crate) fn follow(&mut self, view: &View, doc: &Document, offset: ViewPosition) {
+        self.last = Some(Shown {
+            key: FrameKey::new(view, doc),
+            offset: doc.view_offset(view.id),
+        });
+        self.hint = None;
+        self.animation = None;
+        self.followed = Some(Followed {
+            doc: doc.id(),
+            version: doc.version(),
+            offset,
+        });
+    }
+
     /// Maps the frame drawn last through `changes`, so that a scroll right after glides from it.
     pub(crate) fn follow_changes(&mut self, view: &View, doc: &Document, changes: &ChangeSet) {
         let Some(last) = self.last.as_ref().filter(|last| last.key.doc == doc.id()) else {
@@ -413,7 +439,14 @@ impl SmoothScroll {
     }
 
     pub(crate) fn offset(&self, doc: &Document, view: ViewId) -> Option<ViewPosition> {
-        self.current(doc, view).map(|animation| animation.offset)
+        let followed = self
+            .followed
+            .as_ref()
+            .filter(|followed| followed.doc == doc.id() && followed.version == doc.version());
+        match followed {
+            Some(followed) => Some(followed.offset),
+            None => self.current(doc, view).map(|animation| animation.offset),
+        }
     }
 
     pub(crate) fn selection(&self, doc: &Document, view: ViewId) -> Option<&Selection> {
@@ -422,7 +455,7 @@ impl SmoothScroll {
     }
 
     pub(crate) fn is_animating(&self, doc: &Document, view: ViewId) -> bool {
-        self.current(doc, view).is_some()
+        self.offset(doc, view).is_some()
     }
 }
 

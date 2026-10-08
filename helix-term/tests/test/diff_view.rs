@@ -522,6 +522,61 @@ async fn fillers_fill_a_pane_that_shows_no_line() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn panes_line_up_while_they_glide() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old.txt"), dir.path().join("new.txt"));
+    let lines = |name: &str, lines: std::ops::Range<usize>| -> String {
+        lines.map(|line| format!("{name} {line}\n")).collect()
+    };
+    // 300 lines removed: 300 fillers on the new side, longer than two screens.
+    let old_text = format!(
+        "{}{}{}",
+        lines("same", 0..200),
+        lines("removed", 0..300),
+        lines("same", 200..600)
+    );
+    fs::write(&old, old_text)?;
+    fs::write(&new, lines("same", 0..600))?;
+    let mut config = test_config();
+    config.editor.diff.tool = DiffTool::Builtin;
+    config.editor.smooth_scroll.enable = true;
+    let app = AppBuilder::new()
+        .with_config(config)
+        .with_diff()
+        .with_file(&old, None)
+        .with_file(&new, None)
+        .build()?;
+    let mut session = Session::new(app);
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    // The number of the unchanged line a pane shows on a row.
+    let same = |row: &str| -> Option<usize> {
+        let mut words = row.split(' ').skip_while(|word| *word != "same");
+        words.nth(1)?.parse().ok()
+    };
+    for keys in ["ge", "gg", "250gg", "<C-d>", "<C-d>", "<C-u>", "<C-u>"] {
+        session.send(keys)?;
+        let mut glided = false;
+        for _ in 0..300 {
+            session.run_for(Duration::from_millis(1)).await;
+            let [(view, doc), _] = panes(&session.app).unwrap();
+            let (view, doc) = (
+                session.app.editor.tree.get(view),
+                session.app.editor.document(doc).unwrap(),
+            );
+            glided |= view.render_offset(doc) != doc.view_offset(view.id);
+            for (old, new) in rows(&session.app) {
+                if let (Some(old), Some(new)) = (same(&old), same(&new)) {
+                    assert_eq!(old, new, "after {keys}");
+                }
+            }
+        }
+        assert!(glided, "{keys} glides");
+    }
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn wrapped_panes_line_up_as_the_diff_tree_comes_and_goes() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let (old, new) = (dir.path().join("old"), dir.path().join("new"));

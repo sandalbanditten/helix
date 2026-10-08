@@ -32,52 +32,79 @@ use crate::ui::{
 /// Scrolls the pane `docs[1]` in `views[1]` to the row the focused pane `docs[0]` in `views[0]`
 /// shows at its top, and puts its cursor on the row of the focused pane's cursor.
 pub(super) fn sync(editor: &mut Editor, views: [ViewId; 2], docs: [DocumentId; 2]) {
-    let (view, doc) = (editor.tree.get(views[0]), doc!(editor, &docs[0]));
-    let Some(pane) = doc.diff_view.as_ref() else {
+    let offset = doc!(editor, &docs[0]).view_offset(views[0]);
+    let Some(offset) = partner_offset(editor, views, docs, offset) else {
         return;
     };
+    let doc = doc!(editor, &docs[0]);
     let text = doc.text().slice(..);
-    let format = doc.text_format(view.inner_width(doc), None);
-    let top = top(
-        pane,
-        text,
-        doc.view_offset(views[0]),
-        &format,
-        &view.text_annotations(doc, None),
-    );
     let cursor = text.char_to_line(doc.selection(views[0]).primary().cursor(text));
-    let cursor_row = pane.row_of_line(cursor);
+    let cursor_row = doc
+        .diff_view
+        .as_ref()
+        .and_then(|pane| pane.row_of_line(cursor));
 
-    let (view, partner) = (editor.tree.get(views[1]), doc!(editor, &docs[1]));
+    let partner = doc!(editor, &docs[1]);
     let Some(pane) = partner.diff_view.as_ref() else {
         return;
     };
     let text = partner.text().slice(..);
-    let current = partner.view_offset(views[1]);
-    let format = partner.text_format(view.inner_width(partner), None);
-    let annotations = view.text_annotations(partner, None);
-    let offset = offset_at(
-        pane,
-        text,
-        top,
-        current.horizontal_offset,
-        &format,
-        &annotations,
-    );
     let cursor_line = text.char_to_line(partner.selection(views[1]).primary().cursor(text));
     let cursor = cursor_row
         .map(|row| pane.line_at_or_before(row).unwrap_or(0) as usize)
         .filter(|&line| line != cursor_line)
         .map(|line| text.line_to_char(line));
-    drop(annotations);
 
     let partner = doc_mut!(editor, &docs[1]);
-    if offset != current {
+    if offset != partner.view_offset(views[1]) {
         partner.set_view_offset(views[1], offset);
     }
     if let Some(pos) = cursor {
         partner.set_selection(views[1], Selection::point(pos));
     }
+}
+
+/// Draws the pane `docs[1]` in `views[1]` at the row the frame of the focused pane `docs[0]` in
+/// `views[0]` shows at its top, while the focused pane glides, so that their rows line up.
+pub(super) fn follow_frame(editor: &mut Editor, views: [ViewId; 2], docs: [DocumentId; 2]) {
+    let (view, doc) = (editor.tree.get(views[0]), doc!(editor, &docs[0]));
+    let frame = view.render_offset(doc);
+    if frame == doc.view_offset(views[0]) {
+        return;
+    }
+    let Some(offset) = partner_offset(editor, views, docs, frame) else {
+        return;
+    };
+    let partner = &editor.documents[&docs[1]];
+    editor.tree.get_mut(views[1]).follow_frame(partner, offset);
+}
+
+/// The offset of the pane `docs[1]` in `views[1]` that shows the row the focused pane `docs[0]`
+/// in `views[0]` shows at its top when scrolled to `offset`.
+fn partner_offset(
+    editor: &Editor,
+    views: [ViewId; 2],
+    docs: [DocumentId; 2],
+    offset: ViewPosition,
+) -> Option<ViewPosition> {
+    let (view, doc) = (editor.tree.get(views[0]), doc!(editor, &docs[0]));
+    let pane = doc.diff_view.as_ref()?;
+    let format = doc.text_format(view.inner_width(doc), None);
+    let annotations = view.text_annotations(doc, None);
+    let top = top(pane, doc.text().slice(..), offset, &format, &annotations);
+
+    let (view, partner) = (editor.tree.get(views[1]), doc!(editor, &docs[1]));
+    let pane = partner.diff_view.as_ref()?;
+    let format = partner.text_format(view.inner_width(partner), None);
+    let annotations = view.text_annotations(partner, None);
+    Some(offset_at(
+        pane,
+        partner.text().slice(..),
+        top,
+        partner.view_offset(views[1]).horizontal_offset,
+        &format,
+        &annotations,
+    ))
 }
 
 /// Where the top of a pane is among the rows both panes show: on a row of the alignment, below
