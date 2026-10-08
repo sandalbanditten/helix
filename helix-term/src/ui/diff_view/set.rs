@@ -553,6 +553,7 @@ mod tests {
             "lib/{a/b/x.rs => c/y.rs}"
         );
         assert_eq!(shown("a/x.rs", "b/x.rs"), "{a => b}/x.rs");
+        assert_eq!(shown("x.rs", "sub/x.rs"), "x.rs => sub/x.rs");
         assert_eq!(shown("README.md", "docs.md"), "README.md => docs.md");
         assert_eq!(
             shown("a/xä", "b/xĤ"),
@@ -776,6 +777,39 @@ mod tests {
         eprintln!(
             "10000 identical files in two directories: {} differ, found in {:?}",
             set.files.len(),
+            start.elapsed()
+        );
+
+        // 1000 files moved and 500 moved and edited, each file unlike the others.
+        let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let text = |index: usize, last: &str| {
+            let lines: String = (0..20)
+                .map(|line| format!("let x{index}_{line} = {line};\n"))
+                .collect();
+            format!("{lines}{last}\n")
+        };
+        for index in 0..1500 {
+            let path = |dir: &str| format!("{dir}{}/file{index}.rs", index / 100);
+            let last = if index < 1000 { "old" } else { "new" };
+            write(old.path().join(path("dir")), text(index, "old"));
+            write(new.path().join(path("moved")), text(index, last));
+        }
+        let start = Instant::now();
+        let set = DiffSet::of_directories(
+            old.path(),
+            new.path(),
+            None,
+            &reader.providers,
+            FileTreeSort::DirectoriesFirst,
+        )
+        .unwrap();
+        let renamed = set
+            .files
+            .iter()
+            .filter(|file| file.renamed_from.is_some())
+            .count();
+        eprintln!(
+            "1500 files moved, 500 of them edited: {renamed} renames found in {:?}",
             start.elapsed()
         );
     }

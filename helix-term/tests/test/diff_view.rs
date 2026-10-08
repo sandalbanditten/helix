@@ -817,6 +817,71 @@ async fn changes_since_head_are_diffed_together() -> anyhow::Result<()> {
     session.quit().await
 }
 
+/// The names of the panes shown, old and new.
+fn pane_names(app: &Application) -> [String; 2] {
+    let panes = panes(app).expect("the panes are shown");
+    panes.map(|(_, doc)| {
+        let doc = app.editor.document(doc).unwrap();
+        doc.diff_view.as_ref().unwrap().name.clone()
+    })
+}
+
+/// Nine lines and `last`.
+fn ten_lines(last: &str) -> String {
+    format!("{}{last}\n", "line\n".repeat(9))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_tree_lists_a_renamed_file_once() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old"), dir.path().join("new"));
+    for (path, text) in [
+        (old.join("src/r.rs"), ten_lines("old")),
+        (new.join("src/sub/r.rs"), ten_lines("new")),
+    ] {
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, text)?;
+    }
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session
+        .until("the stats and the diff", |app| {
+            shows(app, "{ => sub}/r.rs +1 -1") && panes(app).is_some()
+        })
+        .await;
+    let app = &session.app;
+    assert!(!shows(app, "r.rs -10") && !shows(app, "r.rs +10"));
+    assert_eq!(
+        pane_names(app),
+        ["src/r.rs (old)", "src/sub/r.rs (new)"].map(String::from)
+    );
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_renamed_and_edited_since_head_is_listed_once() -> anyhow::Result<()> {
+    let (dir, path) = repository(&ten_lines("old"))?;
+    fs::create_dir(dir.path().join("sub"))?;
+    git(dir.path(), &["mv", "file.rs", "sub/file.rs"]);
+    // Staged as a rename, then edited: git reports it twice.
+    fs::write(dir.path().join("sub/file.rs"), ten_lines("new"))?;
+    let mut session = session(&path, DiffTool::Builtin)?;
+    let dir = helix_stdx::path::canonicalize(dir.path());
+    session
+        .keys(&format!(":diff-changes {}<ret>", dir.display()))
+        .await?;
+    session
+        .until("the stats", |app| {
+            shows(app, "file.rs => sub/file.rs +1 -1")
+        })
+        .await;
+    assert_eq!(
+        pane_names(&session.app),
+        ["file.rs (HEAD)", "sub/file.rs"].map(String::from)
+    );
+    session.quit().await
+}
+
 /// Runs the event loop until `done` holds, in steps of a millisecond. Returns how long it took,
 /// and the longest step: how long the editor was busy at most, not taking keys.
 async fn time_until(
