@@ -1,12 +1,9 @@
 //! What the panels docked beside the editor share: their width and the rail beside them.
 
-use std::ops::Range;
-
-use helix_view::{
-    editor::FileTreeSide,
-    graphics::{Rect, Style},
-};
+use helix_view::{editor::FileTreeSide, graphics::Rect};
 use tui::buffer::Buffer as Surface;
+
+use crate::ui::scrollbar::{self, Bar, RailStyles};
 
 /// The narrowest and widest a panel gets, its rail included.
 pub const MIN_WIDTH: u16 = 16;
@@ -65,32 +62,24 @@ pub fn split(area: Rect, side: Side) -> (Rect, u16) {
     }
 }
 
-/// Draws the rail of a panel docked on `side` in `area`, with a thumb over the rows `thumb`.
+/// Draws the rail of a panel docked on `side` in `area`: the panel's `bar` on its half, and the
+/// bars of the splits beside it, `neighbours`, on the other.
 pub fn render_rail(
     surface: &mut Surface,
     area: Rect,
     side: Side,
-    thumb: Range<usize>,
-    base: Style,
-    track: Style,
-    thumb_style: Style,
+    bar: Bar,
+    neighbours: &[Bar],
+    styles: RailStyles,
 ) {
-    let (_, rail) = split(area, side);
-    // A half block like the scrollbars of menus, on the panel's half of the rail.
-    let thumb_symbol = match side {
-        Side::Left => "▌",
-        Side::Right => "▐",
+    let (_, column) = split(area, side);
+    let bar = [bar];
+    let (left, right) = match side {
+        Side::Left => (&bar[..], neighbours),
+        Side::Right => (neighbours, &bar[..]),
     };
-    for (i, y) in (area.top()..area.bottom()).enumerate() {
-        let (symbol, style) = if thumb.contains(&i) {
-            (thumb_symbol, thumb_style)
-        } else {
-            ("│", track)
-        };
-        let cell = &mut surface[(rail, y)];
-        cell.reset();
-        cell.set_symbol(symbol).set_style(base.patch(style));
-    }
+    let rows = area.top()..area.bottom();
+    scrollbar::render_rail(surface, column, rows, left, right, styles);
 }
 
 /// The last row of a view's `area`, which panels end above.
@@ -162,26 +151,6 @@ mod tests {
             statusline_area(Rect::new(0, 0, 60, 29), &[outer, inner]),
             Rect::new(0, 28, 100, 1)
         );
-    }
-
-    #[test]
-    fn rails_cover_what_was_drawn_before() {
-        use helix_view::graphics::{Color, Modifier};
-
-        let area = Rect::new(0, 0, 4, 3);
-        let mut surface = Surface::empty(area);
-        let text = Style::default()
-            .fg(Color::Red)
-            .bg(Color::Blue)
-            .add_modifier(Modifier::BOLD | Modifier::ITALIC);
-        surface.set_string(0, 0, "text", text);
-        let base = Style::default().bg(Color::Black);
-        let track = Style::default().fg(Color::Gray);
-        render_rail(&mut surface, area, Side::Right, 0..0, base, track, track);
-        let cell = &surface[(0, 0)];
-        assert_eq!(cell.symbol.as_str(), "│");
-        assert_eq!((cell.fg, cell.bg), (Color::Gray, Color::Black));
-        assert!(cell.modifier.is_empty());
     }
 
     #[test]

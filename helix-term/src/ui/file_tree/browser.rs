@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use helix_core::movement::Direction;
 use helix_view::{graphics::Rect, smooth_scroll::SmoothOffset, Editor};
 
 use super::{
@@ -9,6 +10,7 @@ use super::{
     tree::{NodeId, Tree},
     viewport::{self, Align},
 };
+use crate::ui::scrollbar;
 
 /// A move of the cursor, or of the rows around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,15 +238,11 @@ impl Browser {
             return;
         };
         let height = self.rows_area.height as usize;
-        let travel = height - thumb.len();
-        if travel == 0 {
-            return;
-        }
-        let offset = usize::from(row.saturating_sub(self.rows_area.top()))
-            .saturating_sub(grab)
-            .min(travel);
+        let row = usize::from(row.saturating_sub(self.rows_area.top()));
         let max_start = viewport::max_start(&self.rows, height);
-        self.start = (offset * max_start + travel / 2) / travel;
+        if let Some(start) = scrollbar::dragged_offset(row, grab, thumb.len(), height, max_start) {
+            self.start = start;
+        }
     }
 
     /// Scrolls a page towards the screen row `row` of the rail's track.
@@ -254,10 +252,10 @@ impl Browser {
         };
         let height = self.rows_area.height as usize;
         let page = viewport::capacity(&self.rows, self.start, height).max(1);
-        if row < thumb.start {
-            self.start = self.start.saturating_sub(page);
-        } else if row >= thumb.end {
-            self.start += page;
+        match scrollbar::paging_direction(row, thumb) {
+            Some(Direction::Backward) => self.start = self.start.saturating_sub(page),
+            Some(Direction::Forward) => self.start += page,
+            None => {}
         }
         self.clamp_start();
     }

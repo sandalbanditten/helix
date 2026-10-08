@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use super::rows::Rows;
-use crate::ui::scrollbar_thumb;
+use crate::ui::scrollbar;
 
 /// The rows pinned above the ordinary rows when those start at `start`, outermost first.
 pub fn pinned(rows: &Rows, start: usize, height: usize) -> Vec<usize> {
@@ -81,15 +81,12 @@ pub fn align(rows: &Rows, height: usize, target: usize, align: Align) -> usize {
 
 /// The rows of the rail that its thumb covers, if the rows do not fit.
 pub fn thumb(rows: &Rows, start: usize, height: usize) -> Option<Range<usize>> {
-    let len = rows.len();
-    let max = max_start(rows, height);
-    // Pinned rows let `start` go past `len - height`; scale it so the thumb ends at the bottom.
-    let offset = if max == 0 {
-        0
-    } else {
-        start.min(max) * len.saturating_sub(height) / max
-    };
-    scrollbar_thumb(len, height, offset)
+    let start = clamp(rows, start, height);
+    scrollbar::thumb(
+        rows.len(),
+        start..start + capacity(rows, start, height),
+        height,
+    )
 }
 
 #[cfg(test)]

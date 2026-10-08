@@ -532,6 +532,7 @@ impl DiffTree {
             edit: None,
             matches: &matches,
             stats: Some(&self.stats),
+            neighbours: &[],
         }
         .render(area, surface);
     }

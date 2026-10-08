@@ -2,48 +2,16 @@
 
 use helix_view::{
     editor::{Action as OpenAction, FileTreeSide},
-    graphics::Rect,
     input::{MouseButton, MouseEvent, MouseEventKind},
     Editor,
 };
 
 use super::{ops, tree::Kind, FileTree};
 use crate::compositor::EventResult;
-use crate::ui::dock;
-
-/// A press on the rail and the drag that may follow it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Gesture {
-    /// Pressed the thumb, `grab` rows below its top.
-    ThumbPressed {
-        column: u16,
-        row: u16,
-        grab: usize,
-    },
-    /// Pressed the track, where a release pages.
-    TrackPressed {
-        column: u16,
-        row: u16,
-    },
-    Scrolling {
-        grab: usize,
-    },
-    Resizing,
-    /// Dragging the track up or down, which does nothing.
-    Ignoring,
-}
-
-impl Gesture {
-    /// Where the rail was pressed, while the drag has not decided what it is yet.
-    fn origin(self) -> Option<(u16, u16)> {
-        match self {
-            Self::ThumbPressed { column, row, .. } | Self::TrackPressed { column, row } => {
-                Some((column, row))
-            }
-            Self::Scrolling { .. } | Self::Resizing | Self::Ignoring => None,
-        }
-    }
-}
+use crate::ui::{
+    dock,
+    scrollbar::{self, Gesture},
+};
 
 impl FileTree {
     /// Handles a mouse event over the tree. `None` leaves the event to the editor.
@@ -60,7 +28,7 @@ impl FileTree {
                 return Some(EventResult::Consumed(None));
             }
         }
-        if !contains(area, column, row) {
+        if !scrollbar::contains(area, column, row) {
             return None;
         }
         let side = editor.config().file_tree.side;
@@ -82,14 +50,7 @@ impl FileTree {
                     .workspace
                     .as_ref()
                     .and_then(|workspace| workspace.browser.thumb());
-                self.gesture = Some(match thumb {
-                    Some(thumb) if thumb.contains(&row) => Gesture::ThumbPressed {
-                        column,
-                        row,
-                        grab: usize::from(row - thumb.start),
-                    },
-                    _ => Gesture::TrackPressed { column, row },
-                });
+                self.gesture = Some(Gesture::press(column, row, thumb));
             }
             MouseEventKind::Down(MouseButton::Left) => self.click(row, editor),
             _ => {}
@@ -100,19 +61,7 @@ impl FileTree {
     fn continue_gesture(&mut self, gesture: Gesture, event: &MouseEvent, editor: &Editor) {
         let released = matches!(event.kind, MouseEventKind::Up(_));
         let (column, row) = (event.column, event.row);
-        // The first move decides between scrolling and resizing.
-        let gesture = match gesture.origin().filter(|_| !released) {
-            Some((from_column, from_row)) => {
-                let (dx, dy) = (from_column.abs_diff(column), from_row.abs_diff(row));
-                match gesture {
-                    _ if dx == dy => gesture,
-                    _ if dx > dy => Gesture::Resizing,
-                    Gesture::ThumbPressed { grab, .. } => Gesture::Scrolling { grab },
-                    _ => Gesture::Ignoring,
-                }
-            }
-            None => gesture,
-        };
+        let gesture = gesture.moved(column, row, released, true);
         match gesture {
             Gesture::Scrolling { grab } => {
                 if let Some(workspace) = &mut self.workspace {
@@ -171,8 +120,4 @@ impl FileTree {
             }
         }
     }
-}
-
-fn contains(area: Rect, column: u16, row: u16) -> bool {
-    (area.left()..area.right()).contains(&column) && (area.top()..area.bottom()).contains(&row)
 }

@@ -43,7 +43,6 @@ use self::{
     git::GitStatuses,
     keys::{Action, Lookup},
     ls_colors::LsColors,
-    mouse::Gesture,
     render::{natural_width, BufferMarks, Scene, Styles},
     search::{Candidates, Direction},
     tree::{Kind, Listing},
@@ -52,7 +51,7 @@ use self::{
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
     job,
-    ui::{dock, EditorView},
+    ui::{dock, scrollbar, EditorView},
     watch::Watcher,
 };
 
@@ -83,7 +82,7 @@ pub struct FileTree {
     /// Where the panel was laid out last.
     area: Option<Rect>,
     /// A press on the rail and the drag following it.
-    gesture: Option<Gesture>,
+    gesture: Option<scrollbar::Gesture>,
     /// The entry `y` copied or `x` cut, for `p` to paste.
     clip: Option<Clip>,
     /// Where copies still being made go.
@@ -716,6 +715,7 @@ impl FileTree {
             edit: workspace.edit_row(),
             matches: &matches,
             stats: None,
+            neighbours: &[],
         }
         .render(area, surface);
 

@@ -21,7 +21,10 @@ use super::{
     tree::{Children, Kind, LinkTarget, Node, Special, Tree},
     viewport,
 };
-use crate::ui::dock;
+use crate::ui::{
+    dock,
+    scrollbar::{Bar, RailStyles},
+};
 
 /// The lines added and removed under an entry, shown after its label like ` +12 -3`.
 pub fn stats_text(stats: Stats) -> (String, String) {
@@ -76,8 +79,7 @@ pub struct Styles {
     conflict: Style,
     added: Style,
     removed: Style,
-    track: Style,
-    thumb: Style,
+    rail: RailStyles,
     matched: Style,
 }
 
@@ -95,7 +97,6 @@ impl Styles {
         let base = theme
             .try_get_exact("ui.file-tree")
             .unwrap_or_else(|| theme.get("ui.background").patch(theme.get("ui.text")));
-        let track = theme.get("ui.window");
         let guide = scope(
             "ui.file-tree.guide",
             &["ui.virtual.indent-guide", "ui.virtual.whitespace"],
@@ -129,8 +130,7 @@ impl Styles {
             conflict: theme.get("diff.delta.conflict"),
             added: theme.get("diff.plus"),
             removed: theme.get("diff.minus"),
-            track,
-            thumb: track.fg(theme.get("ui.menu.scroll").fg.unwrap_or(Color::Reset)),
+            rail: RailStyles::new(theme, base),
             // Like the matches of the picker.
             matched: theme
                 .try_get_exact("ui.file-tree.match")
@@ -215,6 +215,8 @@ pub struct Scene<'a> {
     pub matches: &'a [(usize, Vec<usize>)],
     /// The lines added and removed under each entry, shown after its label, by its path.
     pub stats: Option<&'a HashMap<PathBuf, Stats>>,
+    /// The bars of the splits on the other side of the rail.
+    pub neighbours: &'a [Bar],
 }
 
 impl Scene<'_> {
@@ -238,15 +240,16 @@ impl Scene<'_> {
             }
         }
 
-        let thumb = viewport::thumb(self.rows, self.start, height).unwrap_or_default();
+        let thumb = viewport::thumb(self.rows, self.start, height);
+        let styles = self.styles.rail;
+        let bar = Bar::new(area.top(), height, thumb, styles.thumb);
         dock::render_rail(
             surface,
             area,
             self.side.into(),
-            thumb,
-            self.styles.base,
-            self.styles.track,
-            self.styles.thumb,
+            bar,
+            self.neighbours,
+            styles,
         );
         edit_area
     }
@@ -581,6 +584,7 @@ mod tests {
             edit: None,
             matches: &[],
             stats: None,
+            neighbours: &[],
         }
         .render(area, &mut surface);
         surface

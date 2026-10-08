@@ -14,7 +14,7 @@ use super::{
 };
 use crate::ui::{
     dock::{self, Side},
-    scrollbar_thumb,
+    scrollbar::{scrollbar_thumb, Bar, RailStyles},
 };
 
 /// The theme styles of the panel, resolved once per frame.
@@ -32,8 +32,7 @@ pub struct Styles {
     inserted: Style,
     deleted: Style,
     matched: Style,
-    pub(super) track: Style,
-    pub(super) thumb: Style,
+    pub(super) rail: RailStyles,
 }
 
 impl Styles {
@@ -58,7 +57,6 @@ impl Styles {
             .iter()
             .find_map(|scope| theme.try_get_exact(scope))
             .unwrap_or_else(|| Style::default().add_modifier(Modifier::BOLD));
-        let track = theme.get("ui.window");
         Self {
             base,
             selected,
@@ -76,8 +74,7 @@ impl Styles {
                 .iter()
                 .find_map(|scope| theme.try_get_exact(scope))
                 .unwrap_or_else(|| theme.get("special").add_modifier(Modifier::BOLD)),
-            track,
-            thumb: track.fg(theme.get("ui.menu.scroll").fg.unwrap_or(Color::Reset)),
+            rail: RailStyles::new(theme, base),
         }
     }
 }
@@ -126,6 +123,8 @@ pub struct Scene<'a> {
     pub now: SystemTime,
     /// The revisions whose changes match the search.
     pub matches: &'a [usize],
+    /// The bars of the splits on the other side of the rail.
+    pub neighbours: &'a [Bar],
 }
 
 impl Scene<'_> {
@@ -136,16 +135,10 @@ impl Scene<'_> {
             self.render_row(row, Rect::new(content.x, y, content.width, 1), surface);
         }
         let height = area.height as usize;
-        let thumb = scrollbar_thumb(self.rows.len(), height, self.start).unwrap_or_default();
-        dock::render_rail(
-            surface,
-            area,
-            Side::Right,
-            thumb,
-            self.styles.base,
-            self.styles.track,
-            self.styles.thumb,
-        );
+        let thumb = scrollbar_thumb(self.rows.len(), height, self.start);
+        let styles = self.styles.rail;
+        let bar = Bar::new(area.top(), height, thumb, styles.thumb);
+        dock::render_rail(surface, area, Side::Right, bar, self.neighbours, styles);
     }
 
     fn render_row(&self, row: usize, area: Rect, surface: &mut Surface) {
@@ -279,6 +272,7 @@ mod tests {
             start: 0,
             now,
             matches: &[],
+            neighbours: &[],
         }
         .render(area, &mut surface);
         (0..area.height)
@@ -365,6 +359,7 @@ mod tests {
                 start: rows.len() / 2,
                 now,
                 matches: &[],
+                neighbours: &[],
             }
             .render(area, &mut surface);
             eprintln!(
@@ -410,6 +405,7 @@ mod tests {
             start: 0,
             now,
             matches: &[],
+            neighbours: &[],
         }
         .render(area, &mut surface);
         // `x = 2`, inserted by revision 6 in the first row, starts at column 16.

@@ -36,6 +36,7 @@ use crate::{
     ui::{
         diff_view::inline::Line,
         dock::{self, Side},
+        scrollbar::Bar,
         search, Prompt, PromptEvent,
     },
 };
@@ -269,6 +270,7 @@ impl UndoTree {
             start,
             now,
             matches: &self.search.matches,
+            neighbours: &[],
         }
         .render(area, surface);
         match diff_area {
@@ -349,15 +351,8 @@ impl UndoTree {
         }
         self.diff
             .render(content, surface, styles.base, header, editor);
-        dock::render_rail(
-            surface,
-            area,
-            Side::Right,
-            0..0,
-            styles.base,
-            styles.track,
-            styles.thumb,
-        );
+        let bar = Bar::new(area.top(), area.height.into(), None, styles.rail.thumb);
+        dock::render_rail(surface, area, Side::Right, bar, &[], styles.rail);
     }
 
     /// Runs the editor's command `name`, `count` times, if the panel has the keys and handles the

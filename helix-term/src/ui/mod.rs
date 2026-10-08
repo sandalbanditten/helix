@@ -17,7 +17,7 @@ pub mod picker;
 pub mod popup;
 pub mod prompt;
 mod reload_question;
-mod scrollbar;
+pub(crate) mod scrollbar;
 pub(crate) mod search;
 mod select;
 mod sgr;
