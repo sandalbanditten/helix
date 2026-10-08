@@ -12,6 +12,7 @@ pub mod lsp;
 mod markdown;
 pub mod menu;
 pub mod overlay;
+mod overview;
 mod panel_keys;
 pub mod picker;
 pub mod popup;
@@ -129,6 +130,8 @@ pub fn raw_regex_prompt(
                     let view = view_mut!(cx.editor, view_id);
                     doc.set_selection(view.id, snapshot.clone());
                     doc.set_view_offset(view.id, offset_snapshot);
+                    // A search typed and given up on is no longer marked.
+                    cx.editor.live_search = None;
                 }
                 PromptEvent::Update | PromptEvent::Validate => {
                     // skip empty input

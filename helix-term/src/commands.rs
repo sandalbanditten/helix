@@ -46,7 +46,7 @@ use helix_core::{
 };
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
-    editor::{Action, Motion},
+    editor::{Action, LiveSearch, Motion},
     expansion,
     info::Info,
     input::KeyEvent,
@@ -2321,6 +2321,25 @@ fn search_impl(
     };
 }
 
+/// Marks the matches of `query`, found with `regex`, in the current document on the scrollbars
+/// while the search goes on.
+fn mark_search(editor: &mut Editor, query: &str, regex: rope::Regex) {
+    let doc = doc!(editor).id();
+    editor.live_search = Some(LiveSearch {
+        doc,
+        query: query.to_owned(),
+        regex,
+    });
+}
+
+/// Marks the matches of `query` like [`mark_search`], if it is a regex.
+fn mark_search_query(editor: &mut Editor, query: &str) {
+    let crlf = doc!(editor).line_ending == LineEnding::Crlf;
+    if let Ok(regex) = ui::search::regex(query, &editor.config().search, crlf) {
+        mark_search(editor, query, regex);
+    }
+}
+
 fn search(cx: &mut Context) {
     searcher(cx, Direction::Forward)
 }
@@ -2343,17 +2362,18 @@ fn searcher(cx: &mut Context, direction: Direction) {
     // TODO: could probably share with select_on_matches?
     let completion = ui::search::completion(cx.editor, reg);
 
-    ui::regex_prompt(
+    ui::raw_regex_prompt(
         cx,
         "search:".into(),
         Some(reg),
         completion,
-        move |cx, regex, event| {
+        move |cx, regex, query, event| {
             if event == PromptEvent::Validate {
                 cx.editor.registers.last_search_register = reg;
             } else if event != PromptEvent::Update {
                 return;
             }
+            mark_search(cx.editor, query, regex.clone());
             search_impl(
                 cx.editor,
                 &regex,
@@ -2375,9 +2395,11 @@ fn search_next_or_prev_impl(cx: &mut Context, movement: Movement, direction: Dir
     let config = cx.editor.config();
     let scrolloff = config.scrolloff;
     if let Some(query) = cx.editor.registers.first(register, cx.editor) {
+        let query = query.into_owned();
         let wrap_around = config.search.wrap_around;
         let is_crlf = doc!(cx.editor).line_ending == LineEnding::Crlf;
         if let Ok(regex) = ui::search::regex(&query, &config.search, is_crlf) {
+            mark_search(cx.editor, &query, regex.clone());
             for _ in 0..count {
                 search_impl(
                     cx.editor,
@@ -2471,6 +2493,7 @@ fn search_selection_impl(cx: &mut Context, detect_word_boundaries: bool) {
         .join("|");
 
     let msg = format!("register '{}' set to '{}'", register, &regex);
+    mark_search_query(cx.editor, &regex);
     match cx.editor.registers.push(register, regex) {
         Ok(_) => {
             cx.editor.registers.last_search_register = register;
@@ -2511,6 +2534,7 @@ fn make_search_word_bounded(cx: &mut Context) {
     }
 
     let msg = format!("register '{}' set to '{}'", register, &new_regex);
+    mark_search_query(cx.editor, &new_regex);
     match cx.editor.registers.push(register, new_regex) {
         Ok(_) => {
             cx.editor.registers.last_search_register = register;

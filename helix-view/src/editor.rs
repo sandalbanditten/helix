@@ -63,7 +63,7 @@ use helix_core::{
 };
 use helix_dap::{self as dap, registry::DebugAdapterId};
 use helix_lsp::lsp;
-use helix_stdx::path::canonicalize;
+use helix_stdx::{path::canonicalize, rope};
 
 use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -1430,11 +1430,38 @@ impl SmoothScrollConfig {
 
 /// Scrollbars on the rails beside splits: the separators between them, and a rail at the right
 /// edge of the editor or beside a panel docked there.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ScrollbarConfig {
     /// Whether splits have scrollbars. Defaults to `false`.
     pub enable: bool,
+    /// The least severe diagnostics marked, or `disable`. Defaults to `hint`.
+    pub diagnostics: DiagnosticFilter,
+    /// Whether the changes of the diff gutter are marked. Defaults to `true`.
+    pub diff: bool,
+    /// Whether the matches of a search are marked while searching. Defaults to `true`.
+    pub search: bool,
+}
+
+impl Default for ScrollbarConfig {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            diagnostics: DiagnosticFilter::Enable(Severity::Hint),
+            diff: true,
+            search: true,
+        }
+    }
+}
+
+/// The search being made, whose matches the scrollbars mark: the one typed or stepped through
+/// last, until a command other than a search runs.
+#[derive(Debug, Clone)]
+pub struct LiveSearch {
+    /// The document searched.
+    pub doc: DocumentId,
+    pub query: String,
+    pub regex: rope::Regex,
 }
 
 /// Text shown as the symbol it stands for, like `α` for `alpha`.
@@ -1817,6 +1844,8 @@ pub struct Editor {
     pub handlers: Handlers,
 
     pub mouse_down_range: Option<Range>,
+    /// The search being made, if any.
+    pub live_search: Option<LiveSearch>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
 
@@ -1945,6 +1974,7 @@ impl Editor {
             needs_redraw: false,
             handlers,
             mouse_down_range: None,
+            live_search: None,
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,

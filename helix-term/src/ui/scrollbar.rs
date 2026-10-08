@@ -64,6 +64,7 @@ pub enum Cell {
     #[default]
     Track,
     Thumb(Color),
+    Mark(Color),
 }
 
 /// The thumb and marks a pane shows on its half of a rail, on the rows it is beside.
@@ -86,6 +87,21 @@ impl Bar {
             *cell = Cell::Thumb(color);
         }
         Self { top, cells }
+    }
+
+    /// Marks the row `row` with `color`: a mark on the track, the thumb's color on the thumb.
+    pub fn mark(&mut self, row: usize, color: Color) {
+        if let Some(cell) = self.cells.get_mut(row) {
+            *cell = match cell {
+                Cell::Thumb(_) => Cell::Thumb(color),
+                Cell::Track | Cell::Mark(_) => Cell::Mark(color),
+            };
+        }
+    }
+
+    /// Whether the bar has a thumb, i.e. its pane does not show all of its content.
+    pub fn has_thumb(&self) -> bool {
+        self.cells.iter().any(|cell| matches!(cell, Cell::Thumb(_)))
     }
 
     fn cell(&self, y: u16) -> Option<Cell> {
@@ -117,7 +133,8 @@ impl RailStyles {
 
 /// Draws the rail in the column `column` over the screen rows `rows`, with the bars of the
 /// panes to its left and to its right on their halves. A thumb is a half block on its pane's
-/// half, the other half taking the color of the other pane's thumb; elsewhere the rail is a `│`.
+/// half, the other half taking the color of the other pane's thumb or mark; a mark is a heavy
+/// line in its color; elsewhere the rail is a `│`.
 pub fn render_rail(
     surface: &mut Surface,
     column: u16,
@@ -134,9 +151,13 @@ pub fn render_rail(
     let style = styles.base.patch(styles.track);
     for y in rows {
         let (symbol, style) = match (cell_at(left, y), cell_at(right, y)) {
-            (Cell::Thumb(thumb), Cell::Thumb(other)) => ("▌", style.fg(thumb).bg(other)),
+            (Cell::Thumb(thumb), Cell::Thumb(other) | Cell::Mark(other)) => {
+                ("▌", style.fg(thumb).bg(other))
+            }
             (Cell::Thumb(thumb), Cell::Track) => ("▌", style.fg(thumb)),
+            (Cell::Mark(other), Cell::Thumb(thumb)) => ("▐", style.fg(thumb).bg(other)),
             (Cell::Track, Cell::Thumb(thumb)) => ("▐", style.fg(thumb)),
+            (Cell::Mark(mark), _) | (Cell::Track, Cell::Mark(mark)) => ("┃", style.fg(mark)),
             (Cell::Track, Cell::Track) => ("│", style),
         };
         let cell = &mut surface[(column, y)];
@@ -283,9 +304,12 @@ mod tests {
     fn rails_carry_both_sides() {
         let area = Rect::new(0, 0, 1, 6);
         let mut surface = Surface::empty(area);
-        let (thumb, other) = (Color::Gray, Color::Blue);
-        // The left pane's thumb on rows 0..3, the right one's on rows 2..5.
-        let left = Bar::new(0, 6, Some(0..3), thumb);
+        let (thumb, mark, other) = (Color::Gray, Color::Red, Color::Blue);
+        // The left pane's thumb on rows 0..3, with a mark on row 1 and one on row 4.
+        let mut left = Bar::new(0, 6, Some(0..3), thumb);
+        left.mark(1, mark);
+        left.mark(4, mark);
+        // The right pane's thumb on rows 2..5.
         let right = Bar::new(0, 6, Some(2..5), other);
         let styles = RailStyles {
             base: Style::default(),
@@ -303,13 +327,31 @@ mod tests {
             cells,
             [
                 ("▌", thumb, Color::Reset),
-                ("▌", thumb, Color::Reset),
+                ("▌", mark, Color::Reset),
                 ("▌", thumb, other),
                 ("▐", other, Color::Reset),
-                ("▐", other, Color::Reset),
+                ("▐", other, mark),
                 ("│", Color::White, Color::Reset),
             ]
         );
+    }
+
+    #[test]
+    fn marks_alone_are_heavy_lines() {
+        let area = Rect::new(0, 0, 1, 2);
+        let mut surface = Surface::empty(area);
+        let mut right = Bar::new(0, 2, None, Color::Gray);
+        right.mark(0, Color::Red);
+        assert!(!right.has_thumb());
+        let styles = RailStyles {
+            base: Style::default(),
+            track: Style::default(),
+            thumb: Color::Gray,
+        };
+        render_rail(&mut surface, 0, 0..2, &[], &[right], styles);
+        assert_eq!(surface[(0, 0)].symbol.as_str(), "┃");
+        assert_eq!(surface[(0, 0)].fg, Color::Red);
+        assert_eq!(surface[(0, 1)].symbol.as_str(), "│");
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::{
         dock,
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
+        overview::{self, Overview},
         scrollbar::{self, Bar, RailStyles},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
@@ -58,6 +59,8 @@ pub struct EditorView {
     pub(crate) dired: Dired,
     pub(crate) diff_view: DiffView,
     pub(crate) reload_question: ReloadQuestion,
+    /// What the scrollbars mark.
+    overview: Overview,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +90,7 @@ impl EditorView {
             dired: Dired::default(),
             diff_view: DiffView::default(),
             reload_question: ReloadQuestion::default(),
+            overview: Overview::default(),
         }
     }
 
@@ -315,7 +319,23 @@ impl EditorView {
         let mut bar = config.scrollbar.enable.then(|| {
             let height = inner.height as usize;
             let thumb = scrollbar::thumb(text.len_lines(), first..last_line.get() + 1, height);
-            Bar::new(inner.top(), height, thumb, rail.thumb)
+            let mut bar = Bar::new(inner.top(), height, thumb, rail.thumb);
+            // Everything shows when there is no thumb, the marks in the gutter.
+            if bar.has_thumb() {
+                let colors = overview::Colors::new(theme);
+                let filter = overview::Filter::from(&config.scrollbar);
+                for (row, mark) in self
+                    .overview
+                    .rows(doc, filter, height)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if let Some(mark) = mark {
+                        bar.mark(row, colors.of(mark));
+                    }
+                }
+            }
+            bar
         });
         if viewport.right() != view.area.right() {
             let x = area.right();
@@ -1934,6 +1954,7 @@ impl Component for EditorView {
             self.bufferline = Bufferline::default();
         }
 
+        self.overview.update(cx.editor);
         // The scrollbars of the views beside a panel's rail.
         let mut bars = Vec::new();
         for (view, is_focused) in cx.editor.tree.visible_views() {

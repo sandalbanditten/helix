@@ -1,8 +1,12 @@
 use std::{io::Write, ops::Range};
 
-use helix_core::syntax::config::SoftWrap;
+use helix_core::{
+    diagnostic::{DiagnosticProvider, Severity},
+    syntax::config::SoftWrap,
+    Diagnostic, Rope,
+};
 use helix_term::application::Application;
-use helix_view::{editor::ScrollbarConfig, view};
+use helix_view::{doc, doc_mut, editor::ScrollbarConfig, graphics::Color, view};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -13,7 +17,10 @@ const TEXT_ROWS: u16 = 148;
 
 fn scrollbar_config(enable: bool) -> Config {
     let mut config = test_config();
-    config.editor.scrollbar = ScrollbarConfig { enable };
+    config.editor.scrollbar = ScrollbarConfig {
+        enable,
+        ..Default::default()
+    };
     config
 }
 
@@ -150,5 +157,111 @@ async fn panels_on_the_right_share_their_rail() -> anyhow::Result<()> {
     assert!(rail < 119);
     assert_eq!(rows_of(app, rail, "▌"), 0..37);
     assert_eq!(rows_of(app, rail, "│"), 37..TEXT_ROWS);
+    session.quit().await
+}
+
+/// The foreground of the cell at column `x`, row `y`.
+fn fg(app: &Application, x: u16, y: u16) -> Color {
+    app.screen()[(x, y)].fg
+}
+
+/// The rows of the rail in column `x` that are marked in `color`, on the track or the thumb.
+fn marked_rows(app: &Application, x: u16, color: Color) -> Vec<u16> {
+    (0..TEXT_ROWS)
+        .filter(|&y| ["┃", "▌"].contains(&app.screen()[(x, y)].symbol.as_str()))
+        .filter(|&y| fg(app, x, y) == color)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn searches_are_marked_while_searching() -> anyhow::Result<()> {
+    let text: String = (0..600)
+        .map(|i| match i {
+            100 | 500 => "needle\n".to_owned(),
+            _ => format!("line {i}\n"),
+        })
+        .collect();
+    let file = text_file(".txt", &text)?;
+    let mut session = open(&file, scrollbar_config(true))?;
+    let special = session.app.editor.theme.get("special").fg.unwrap();
+    // Lines 100 and 500 are on rows 24 (under the thumb) and 123.
+    session.keys("/needle").await?;
+    assert_eq!(marked_rows(&session.app, 119, special), [24, 123]);
+    assert_eq!(session.app.screen()[(119, 123)].symbol.as_str(), "┃");
+    session.keys("<ret>n").await?;
+    assert_eq!(marked_rows(&session.app, 119, special), [24, 123]);
+    // Any other command ends the search.
+    session.keys("j").await?;
+    assert_eq!(marked_rows(&session.app, 119, special), [0u16; 0]);
+    session.keys("n").await?;
+    assert_eq!(marked_rows(&session.app, 119, special), [24, 123]);
+    session.keys("j/needle<esc>").await?;
+    assert_eq!(marked_rows(&session.app, 119, special), [0u16; 0]);
+    // `*` searches for the selection.
+    session.keys("ggjx*").await?;
+    assert_eq!(marked_rows(&session.app, 119, special).len(), 1);
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
+    let file = text_file(".txt", &lines(600))?;
+    let mut session = open(&file, scrollbar_config(true))?;
+    let theme = &session.app.editor.theme;
+    let color = |scope| theme.get(scope).fg.unwrap();
+    let (hint, error, modified) = (color("hint"), color("error"), color("diff.delta.gutter"));
+    let doc = doc_mut!(session.app.editor);
+    let diagnostic = |line: usize, severity| {
+        let start = doc.text().line_to_char(line);
+        Diagnostic {
+            range: helix_core::diagnostic::Range {
+                start,
+                end: start + 4,
+            },
+            line,
+            message: String::new(),
+            severity: Some(severity),
+            code: None,
+            provider: DiagnosticProvider::Compilation,
+            tags: Vec::new(),
+            source: None,
+            data: None,
+            starts_at_word: false,
+            ends_at_word: false,
+            zero_width: false,
+        }
+    };
+    let diagnostics = [
+        diagnostic(300, Severity::Hint),
+        diagnostic(400, Severity::Error),
+    ];
+    doc.replace_diagnostics(diagnostics, &[], &DiagnosticProvider::Compilation);
+    // The text differs from its base on line 200.
+    let base = lines(600).replace("line 200\n", "changed\n");
+    doc.set_diff_override(Some(Rope::from(base)));
+    session
+        .until("the diff", |app| {
+            doc!(app.editor)
+                .diff_handle()
+                .is_some_and(|handle| !handle.load().is_empty())
+        })
+        .await;
+    // A key draws a frame with the diff.
+    session.keys("<esc>").await?;
+    // Lines 200, 300 and 400 are on rows 49, 73 and 98.
+    let app = &session.app;
+    assert_eq!(marked_rows(app, 119, modified), [49]);
+    assert_eq!(marked_rows(app, 119, hint), [73]);
+    assert_eq!(marked_rows(app, 119, error), [98]);
+
+    // Each `:set` applies to the config the one before made.
+    session
+        .keys(":set scrollbar.diagnostics warning<ret>")
+        .await?;
+    session.keys(":set scrollbar.diff false<ret>").await?;
+    let app = &session.app;
+    assert_eq!(marked_rows(app, 119, modified), [0u16; 0]);
+    assert_eq!(marked_rows(app, 119, hint), [0u16; 0]);
+    assert_eq!(marked_rows(app, 119, error), [98]);
     session.quit().await
 }

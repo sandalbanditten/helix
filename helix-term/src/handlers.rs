@@ -24,6 +24,7 @@ mod document_colors;
 mod document_highlight;
 mod document_links;
 mod file_tree;
+mod live_search;
 mod prompt;
 mod signature_help;
 mod snippet;
@@ -71,6 +72,7 @@ pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
     prompt::register_hooks(&handlers);
     workspace_trust::register_hooks(&handlers);
     file_tree::register_hooks(&handlers);
+    live_search::register_hooks(&handlers);
     spelling::register_hooks(&handlers);
     handlers
 }
