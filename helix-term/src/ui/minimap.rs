@@ -9,13 +9,14 @@ use helix_stdx::rope::RopeSliceExt;
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
     graphics::{Color, Rect, Style, UnderlineStyle},
-    Document, DocumentId, Editor, Theme,
+    Document, DocumentId, Editor, Theme, ViewId,
 };
 use tui::buffer::Buffer as Surface;
 
 use crate::ui::{
     document::{SyntaxHighlighter, SyntaxHighlighting},
     overview::{self, Change, Mark, Overview},
+    scrollbar,
 };
 
 /// The text columns a dot stands for. A cell is two dots wide and four lines tall.
@@ -55,10 +56,43 @@ struct Cells {
 }
 
 /// The minimaps of the splits: the cells of their documents, worked out as they are shown and
-/// kept until the documents change.
+/// kept until the documents change, and the maps drawn last.
 #[derive(Default)]
 pub struct Minimaps {
     docs: HashMap<DocumentId, Cells>,
+    drawn: Vec<Drawn>,
+}
+
+/// A minimap as drawn, for the mouse.
+#[derive(Debug, Clone)]
+pub struct Drawn {
+    pub view: ViewId,
+    pub area: Rect,
+    /// The rows of cells drawn, from the top of `area`.
+    rows: Range<usize>,
+    /// The document lines on screen, of how many.
+    pub shown: Range<usize>,
+    pub len: usize,
+}
+
+impl Drawn {
+    /// The screen rows of the cells.
+    pub fn cell_rows(&self) -> Range<u16> {
+        self.area.y..self.area.y + self.rows.len() as u16
+    }
+
+    /// The screen rows of the cells of the lines on screen.
+    pub fn shaded_rows(&self) -> Range<u16> {
+        let rows = self.rows.start.max(self.shown.start / CELL_LINES)
+            ..self.rows.end.min(self.shown.end.div_ceil(CELL_LINES));
+        let top = |row: usize| self.area.y + (row - self.rows.start) as u16;
+        top(rows.start)..top(rows.end.max(rows.start))
+    }
+
+    /// The first document line of the cells on the screen row `row`.
+    pub fn line_at(&self, row: u16) -> usize {
+        (self.rows.start + usize::from(row.saturating_sub(self.area.y))) * CELL_LINES
+    }
 }
 
 /// The theme styles of a minimap, resolved once per frame.
@@ -90,19 +124,33 @@ impl Styles {
 }
 
 impl Minimaps {
-    /// Forgets the documents no longer open.
-    pub fn retain(&mut self, editor: &Editor) {
+    /// Forgets the maps drawn and the documents no longer open, before a frame.
+    pub fn start_frame(&mut self, editor: &Editor) {
         self.docs
             .retain(|doc, _| editor.documents.contains_key(doc));
+        self.drawn.clear();
     }
 
-    /// Draws the minimap of `doc` into `area`, the document lines `shown` being on screen and
-    /// the one of the cursor `cursor_line`.
+    /// The map drawn last at the screen cell `column`, `row`.
+    pub fn at(&self, column: u16, row: u16) -> Option<&Drawn> {
+        self.drawn
+            .iter()
+            .find(|map| scrollbar::contains(map.area, column, row))
+    }
+
+    /// The map of `view` drawn last.
+    pub fn of(&self, view: ViewId) -> Option<&Drawn> {
+        self.drawn.iter().find(|map| map.view == view)
+    }
+
+    /// Draws the minimap of `view` showing `doc` into `area`, the document lines `shown` being on
+    /// screen and the one of the cursor `cursor_line`.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         area: Rect,
         surface: &mut Surface,
+        view: ViewId,
         doc: &Document,
         shown: Range<usize>,
         cursor_line: usize,
@@ -123,6 +171,13 @@ impl Minimaps {
         let height = usize::from(area.height);
         let first = first_row(groups, height, len, &shown);
         let rows = first..(first + height).min(groups);
+        self.drawn.push(Drawn {
+            view,
+            area,
+            rows: rows.clone(),
+            shown: shown.clone(),
+            len,
+        });
 
         let key = Key {
             version: doc.version(),

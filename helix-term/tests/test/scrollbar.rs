@@ -300,6 +300,18 @@ mod mouse {
         session.keys("").await
     }
 
+    /// Presses and releases the left button at `column`, `row`.
+    async fn click(session: &mut Session, column: u16, row: u16) -> anyhow::Result<()> {
+        send(
+            session,
+            MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+        )?;
+        send(session, MouseEventKind::Up(MouseButton::Left), column, row)?;
+        session.keys("").await
+    }
+
     /// The first document line the view shows, and the line of its cursor.
     fn lines_shown(app: &Application) -> (usize, usize) {
         let (view, doc) = current_ref!(app.editor);
@@ -332,9 +344,9 @@ mod mouse {
         let file = text_file(".txt", &lines(600))?;
         let mut session = open(&file, scrollbar_config(true))?;
         session.keys("").await?;
-        drag(&mut session, (119, 100), (119, 100)).await?;
+        click(&mut session, 119, 100).await?;
         assert_eq!(lines_shown(&session.app), (148, 153));
-        drag(&mut session, (119, 0), (119, 0)).await?;
+        click(&mut session, 119, 0).await?;
         assert_eq!(lines_shown(&session.app).0, 0);
         send(&session, MouseEventKind::ScrollDown, 119, 50)?;
         session.keys("").await?;
@@ -349,10 +361,36 @@ mod mouse {
         session.keys("<space>U").await?;
         let rail = view!(session.app.editor).area.right();
         // A press beside the thumb is the undo tree's.
-        drag(&mut session, (rail, 100), (rail, 100)).await?;
+        click(&mut session, rail, 100).await?;
         assert_eq!(lines_shown(&session.app).0, 0);
         drag(&mut session, (rail, 10), (rail, 147)).await?;
         assert_eq!(lines_shown(&session.app).0, 453);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn minimaps_jump_and_drag() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(2000))?;
+        let mut config = test_config();
+        config.editor.minimap.enable = true;
+        let mut session = open(&file, config)?;
+        session.keys("").await?;
+        // Row 100 of the map stands for lines 400..404: the view centers on them.
+        click(&mut session, 110, 100).await?;
+        assert_eq!(lines_shown(&session.app).0, 400 - 148 / 2);
+        // The map slid along: the shaded part is elsewhere now. Held there, it stays, and dragged
+        // past the bottom it shows the end.
+        let shaded = (0..TEXT_ROWS)
+            .find(|&y| session.app.screen()[(110, y)].bg != session.app.screen()[(110, 0)].bg)
+            .unwrap();
+        assert!(shaded < 100, "{shaded}");
+        drag(&mut session, (110, shaded + 1), (110, shaded + 1)).await?;
+        assert_eq!(lines_shown(&session.app).0, 400 - 148 / 2);
+        drag(&mut session, (110, shaded + 1), (110, TEXT_ROWS + 20)).await?;
+        assert_eq!(lines_shown(&session.app).0, 2001 - 148);
+        send(&session, MouseEventKind::ScrollUp, 110, 50)?;
+        session.keys("").await?;
+        assert_eq!(lines_shown(&session.app).0, 2001 - 148 - 3);
         session.quit().await
     }
 }

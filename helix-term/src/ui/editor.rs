@@ -71,9 +71,27 @@ pub struct EditorView {
     overview: Overview,
     /// The cells of the minimaps, worked out while drawing them.
     minimaps: RefCell<Minimaps>,
-    /// The rails of the views as last drawn, and a press on one with the drag that may follow.
+    /// The rails of the views as last drawn.
     rails: Vec<Rail>,
-    rail_gesture: Option<(ViewId, Gesture)>,
+    /// A press on the rail or the minimap of a view, and the drag that may follow.
+    scroll_gesture: Option<ScrollGesture>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScrollGesture {
+    view: ViewId,
+    gesture: Gesture,
+    /// For a press on the view's minimap: the row pressed and the first line on screen then,
+    /// which a drag moves from.
+    map: Option<(u16, usize)>,
+}
+
+/// What dragging a view's thumb, or the shaded part of its minimap, moves over: a thumb over the
+/// screen rows `thumb` of a track over `rows`, for first lines up to `last`.
+struct Track {
+    rows: ops::Range<u16>,
+    thumb: ops::Range<u16>,
+    last: usize,
 }
 
 /// The rail of a view as drawn, for the mouse.
@@ -118,7 +136,7 @@ impl EditorView {
             overview: Overview::default(),
             minimaps: RefCell::default(),
             rails: Vec::new(),
-            rail_gesture: None,
+            scroll_gesture: None,
         }
     }
 
@@ -348,6 +366,7 @@ impl EditorView {
             self.minimaps.borrow_mut().render(
                 minimap_area,
                 surface,
+                view.id,
                 doc,
                 shown.clone(),
                 text.char_to_line(cursor),
@@ -1378,9 +1397,11 @@ impl EditorView {
         self.pseudo_pending.clear();
     }
 
-    /// Handles the mouse on the rails of views: a press on a thumb drags it, a press on the track
-    /// pages towards it, and the wheel scrolls. On a panel's rail only the thumbs are the views'.
-    fn handle_rail_mouse(
+    /// Handles the mouse on the rails and minimaps of views: a press on a thumb, or the shaded
+    /// part of a minimap, drags it, a press on the track pages towards it, a press elsewhere on
+    /// a minimap centers the view there, and the wheel scrolls. On a panel's rail only the thumbs
+    /// are the views'.
+    fn handle_scrollbar_mouse(
         &mut self,
         event: &MouseEvent,
         editor: &mut Editor,
@@ -1388,40 +1409,54 @@ impl EditorView {
         let MouseEvent {
             kind, column, row, ..
         } = *event;
-        if let Some((view, gesture)) = self.rail_gesture.take() {
+        if let Some(mut scroll) = self.scroll_gesture.take() {
             if let MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) =
                 kind
             {
                 let released = matches!(kind, MouseEventKind::Up(_));
-                let gesture = gesture.moved(column, row, released, false);
-                match gesture {
-                    Gesture::Scrolling { grab } => self.drag_thumb(view, row, grab, editor),
+                scroll.gesture = scroll.gesture.moved(column, row, released, false);
+                match scroll.gesture {
+                    Gesture::Scrolling { grab } => self.drag_thumb(scroll, row, grab, editor),
                     Gesture::TrackPressed { row, .. } if released => {
-                        self.page_towards(view, row, editor)
+                        self.page_towards(scroll.view, row, editor)
                     }
                     _ => {}
                 }
                 if !released {
-                    self.rail_gesture = Some((view, gesture));
+                    self.scroll_gesture = Some(scroll);
                 }
                 return Some(EventResult::Consumed(None));
             }
         }
 
-        let rail = self.rails.iter().find(|rail| {
-            rail.column == column
-                && rail.bar.rows().contains(&row)
-                && editor.tree.contains(rail.view)
-        })?;
-        let thumb = rail.bar.thumb();
         let pressed = kind == MouseEventKind::Down(MouseButton::Left);
-        if rail.shared && !(pressed && thumb.as_ref().is_some_and(|thumb| thumb.contains(&row))) {
-            return None;
-        }
-        let view = rail.view;
+        let (view, gesture, map) = if let Some(map) = self.minimaps.get_mut().at(column, row) {
+            let (view, mut line) = (map.view, map.shown.start);
+            if pressed && !map.shaded_rows().contains(&row) {
+                // Like VS Code: the view centers on the lines pressed, and a drag goes on from
+                // there.
+                line = map.line_at(row).saturating_sub(map.shown.len() / 2);
+                scroll_view(editor, view, |view, doc, movement, scrolloff| {
+                    view.scroll_to_line(doc, line, movement, scrolloff)
+                });
+            }
+            (view, Gesture::Scrolling { grab: 0 }, Some((row, line)))
+        } else {
+            let rail = self.rails.iter().find(|rail| {
+                rail.column == column
+                    && rail.bar.rows().contains(&row)
+                    && editor.tree.contains(rail.view)
+            })?;
+            let thumb = rail.bar.thumb();
+            let on_thumb = thumb.as_ref().is_some_and(|thumb| thumb.contains(&row));
+            if rail.shared && !(pressed && on_thumb) {
+                return None;
+            }
+            (rail.view, Gesture::press(column, row, thumb), None)
+        };
         match kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                self.rail_gesture = Some((view, Gesture::press(column, row, thumb)));
+                self.scroll_gesture = Some(ScrollGesture { view, gesture, map });
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let direction = if kind == MouseEventKind::ScrollUp {
@@ -1439,24 +1474,52 @@ impl EditorView {
         Some(EventResult::Consumed(None))
     }
 
-    /// Scrolls `view` so that its thumb, held `grab` rows below its top, is at the screen row
-    /// `row`.
-    fn drag_thumb(&self, view: ViewId, row: u16, grab: usize, editor: &mut Editor) {
-        let Some(rail) = self.rails.iter().find(|rail| rail.view == view) else {
-            return;
-        };
-        let Some(thumb) = rail.bar.thumb() else {
-            return;
-        };
-        let rows = rail.bar.rows();
-        // The last lines show from this one on.
-        let last = rail.len.saturating_sub(rail.shown.len());
-        let row = usize::from(row.saturating_sub(rows.start));
-        if let Some(line) = scrollbar::dragged_offset(row, grab, thumb.len(), rows.len(), last) {
-            scroll_view(editor, view, |view, doc, movement, scrolloff| {
-                view.scroll_to_line(doc, line, movement, scrolloff)
-            });
+    /// The track and thumb of `view`'s rail, or of its minimap.
+    fn track(&mut self, view: ViewId, on_map: bool) -> Option<Track> {
+        if on_map {
+            let map = self.minimaps.get_mut().of(view)?;
+            Some(Track {
+                rows: map.cell_rows(),
+                thumb: map.shaded_rows(),
+                last: map.len.saturating_sub(map.shown.len()),
+            })
+        } else {
+            let rail = self.rails.iter().find(|rail| rail.view == view)?;
+            Some(Track {
+                rows: rail.bar.rows(),
+                thumb: rail.bar.thumb()?,
+                // The last lines show from this one on.
+                last: rail.len.saturating_sub(rail.shown.len()),
+            })
         }
+    }
+
+    /// Scrolls the view along with the pointer at the screen row `row`: so that the thumb of its
+    /// rail, held `grab` rows below its top, is there, or as far as the pointer moved over its
+    /// minimap since the press, the shaded part moving like a thumb.
+    fn drag_thumb(&mut self, scroll: ScrollGesture, row: u16, grab: usize, editor: &mut Editor) {
+        let Some(Track { rows, thumb, last }) = self.track(scroll.view, scroll.map.is_some())
+        else {
+            return;
+        };
+        let line = match scroll.map {
+            Some((from_row, from_line)) => {
+                let travel = rows.len().saturating_sub(thumb.len()).max(1) as isize;
+                let moved = (row as isize - from_row as isize) * last as isize / travel;
+                (from_line as isize + moved).clamp(0, last as isize) as usize
+            }
+            None => {
+                let row = usize::from(row.saturating_sub(rows.start));
+                let line = scrollbar::dragged_offset(row, grab, thumb.len(), rows.len(), last);
+                let Some(line) = line else {
+                    return;
+                };
+                line
+            }
+        };
+        scroll_view(editor, scroll.view, |view, doc, movement, scrolloff| {
+            view.scroll_to_line(doc, line, movement, scrolloff)
+        });
     }
 
     /// Scrolls `view` a page towards the screen row `row` of its rail's track.
@@ -1493,8 +1556,8 @@ impl EditorView {
         let drawn_focused =
             |editor: &Editor, view_id| editor.tree.focus == view_id && !file_tree_focused;
 
-        // The thumbs of views come first, also on a panel's rail.
-        if let Some(result) = self.handle_rail_mouse(event, cxt.editor) {
+        // The scrollbars and minimaps of views come first, also on a panel's rail.
+        if let Some(result) = self.handle_scrollbar_mouse(event, cxt.editor) {
             self.file_tree.unfocus();
             self.undo_tree.unfocus(cxt.editor);
             self.diff_view.unfocus_tree();
@@ -2131,7 +2194,7 @@ impl Component for EditorView {
         }
 
         self.overview.update(cx.editor);
-        self.minimaps.get_mut().retain(cx.editor);
+        self.minimaps.get_mut().start_frame(cx.editor);
         let mut rails = Vec::new();
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
