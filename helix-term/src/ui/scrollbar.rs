@@ -104,6 +104,25 @@ impl Bar {
         self.cells.iter().any(|cell| matches!(cell, Cell::Thumb(_)))
     }
 
+    /// The screen rows of the thumb, if any.
+    pub fn thumb(&self) -> Option<Range<u16>> {
+        let start = self
+            .cells
+            .iter()
+            .position(|cell| matches!(cell, Cell::Thumb(_)))?;
+        let len = self.cells[start..]
+            .iter()
+            .take_while(|cell| matches!(cell, Cell::Thumb(_)))
+            .count();
+        let start = self.top + start as u16;
+        Some(start..start + len as u16)
+    }
+
+    /// The screen rows the bar is beside.
+    pub fn rows(&self) -> Range<u16> {
+        self.top..self.top + self.cells.len() as u16
+    }
+
     fn cell(&self, y: u16) -> Option<Cell> {
         self.cells
             .get(usize::from(y.checked_sub(self.top)?))
@@ -375,5 +394,14 @@ mod tests {
         assert_eq!(cell.symbol.as_str(), "│");
         assert_eq!((cell.fg, cell.bg), (Color::Gray, Color::Black));
         assert!(cell.modifier.is_empty());
+    }
+
+    #[test]
+    fn bars_know_their_thumb() {
+        let mut bar = Bar::new(5, 4, Some(1..3), Color::Gray);
+        bar.mark(2, Color::Red);
+        assert_eq!(bar.thumb(), Some(6..8));
+        assert_eq!(bar.rows(), 5..9);
+        assert_eq!(Bar::new(5, 4, None, Color::Gray).thumb(), None);
     }
 }

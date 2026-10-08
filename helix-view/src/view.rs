@@ -437,10 +437,66 @@ impl View {
             return;
         }
 
+        self.push_primary_into_view(doc, view_offset, direction, movement, scrolloff);
+    }
+
+    /// Scrolls the view to show the document line `line` at its top. The primary cursor stays
+    /// within the `scrolloff` margin, as with [`scroll`](Self::scroll).
+    pub fn scroll_to_line(
+        &mut self,
+        doc: &mut Document,
+        line: usize,
+        movement: Movement,
+        scrolloff: usize,
+    ) {
+        let text = doc.text().slice(..);
+        let line = line.min(text.len_lines().saturating_sub(1));
+        let mut view_offset = doc.view_offset(self.id);
+        let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
+        if line == first {
+            return;
+        }
+        let direction = if line < first {
+            Direction::Backward
+        } else {
+            Direction::Forward
+        };
+
+        if doc.config.load().smooth_scroll.is_enabled() {
+            let motion = SelectionMotion::Pushed {
+                direction,
+                movement,
+            };
+            let drawn = self.render_selection(doc).clone();
+            self.smooth_scroll.hint(drawn, motion, doc, self.id);
+        }
+
+        let text_fmt = doc.text_format(self.inner_area(doc).width, None);
+        (view_offset.anchor, view_offset.vertical_offset) = anchor_at_visual_offset(
+            text,
+            text.line_to_char(line),
+            0,
+            &text_fmt,
+            &self.text_annotations(doc, None),
+        );
+        doc.set_view_offset(self.id, view_offset);
+        self.push_primary_into_view(doc, view_offset, direction, movement, scrolloff);
+    }
+
+    /// Moves the primary cursor into the `scrolloff` margin of the view scrolled to `offset` in
+    /// `direction`, if it is not within it.
+    fn push_primary_into_view(
+        &self,
+        doc: &mut Document,
+        offset: ViewPosition,
+        direction: Direction,
+        movement: Movement,
+        scrolloff: usize,
+    ) {
         let selection = doc.selection(self.id);
         if let Some(primary) = self.push_cursor_into_view(
             doc,
-            view_offset,
+            offset,
             selection.primary(),
             direction,
             movement,

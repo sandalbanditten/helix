@@ -265,3 +265,89 @@ async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
     assert_eq!(marked_rows(app, 119, error), [98]);
     session.quit().await
 }
+
+#[cfg(not(windows))]
+mod mouse {
+    use helix_view::current_ref;
+    use termina::event::{Event, Modifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    use super::*;
+
+    fn send(session: &Session, kind: MouseEventKind, column: u16, row: u16) -> anyhow::Result<()> {
+        session.send_event(Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: Modifiers::NONE,
+        }))
+    }
+
+    /// Drags the mouse from `from` to `to`, both columns and rows, with the left button.
+    async fn drag(session: &mut Session, from: (u16, u16), to: (u16, u16)) -> anyhow::Result<()> {
+        send(
+            session,
+            MouseEventKind::Down(MouseButton::Left),
+            from.0,
+            from.1,
+        )?;
+        send(session, MouseEventKind::Drag(MouseButton::Left), to.0, to.1)?;
+        send(session, MouseEventKind::Up(MouseButton::Left), to.0, to.1)?;
+        session.keys("").await
+    }
+
+    /// The first document line the view shows, and the line of its cursor.
+    fn lines_shown(app: &Application) -> (usize, usize) {
+        let (view, doc) = current_ref!(app.editor);
+        let text = doc.text().slice(..);
+        let cursor = doc.selection(view.id).primary().cursor(text);
+        let first = text.char_to_line(doc.view_offset(view.id).anchor);
+        (first, text.char_to_line(cursor))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dragging_a_thumb_scrolls_its_split() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, scrollbar_config(true))?;
+        session.keys("").await?;
+        // The thumb, rows 0..37, held by its row 10 and dragged to the bottom.
+        drag(&mut session, (119, 10), (119, 147)).await?;
+        // The last 148 of 601 lines show, the cursor in view below the scrolloff margin.
+        assert_eq!(lines_shown(&session.app), (453, 458));
+        assert_eq!(rows_of(&session.app, 119, "▌"), 111..TEXT_ROWS);
+        // And back up half way.
+        drag(&mut session, (119, 120), (119, 64)).await?;
+        let (first, cursor) = lines_shown(&session.app);
+        assert!((220..235).contains(&first), "{first}");
+        assert!(cursor < first + 148, "{cursor}");
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pressing_a_track_pages_and_the_wheel_scrolls() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, scrollbar_config(true))?;
+        session.keys("").await?;
+        drag(&mut session, (119, 100), (119, 100)).await?;
+        assert_eq!(lines_shown(&session.app), (148, 153));
+        drag(&mut session, (119, 0), (119, 0)).await?;
+        assert_eq!(lines_shown(&session.app).0, 0);
+        send(&session, MouseEventKind::ScrollDown, 119, 50)?;
+        session.keys("").await?;
+        assert_eq!(lines_shown(&session.app).0, 3);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thumbs_on_a_panels_rail_are_the_splits() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, scrollbar_config(true))?;
+        session.keys("<space>U").await?;
+        let rail = view!(session.app.editor).area.right();
+        // A press beside the thumb is the undo tree's.
+        drag(&mut session, (rail, 100), (rail, 100)).await?;
+        assert_eq!(lines_shown(&session.app).0, 0);
+        drag(&mut session, (rail, 10), (rail, 147)).await?;
+        assert_eq!(lines_shown(&session.app).0, 453);
+        session.quit().await
+    }
+}

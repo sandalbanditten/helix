@@ -13,7 +13,7 @@ use crate::{
         document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
         overview::{self, Overview},
-        scrollbar::{self, Bar, RailStyles},
+        scrollbar::{self, Bar, Gesture, RailStyles},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         undo_tree::UndoTree,
@@ -25,7 +25,7 @@ use helix_core::{
     diagnostic::NumberOrString,
     fold::{self, Fold},
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
-    movement::Direction,
+    movement::{Direction, Movement},
     syntax::{self, OverlayHighlights},
     text_annotations::TextAnnotations,
     unicode::width::UnicodeWidthStr,
@@ -38,7 +38,7 @@ use helix_view::{
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
-    Document, Editor, Theme, View,
+    Document, Editor, Theme, View, ViewId,
 };
 use std::{borrow::Cow, cell::Cell, mem::take, num::NonZeroUsize, ops, rc::Rc};
 
@@ -61,6 +61,21 @@ pub struct EditorView {
     pub(crate) reload_question: ReloadQuestion,
     /// What the scrollbars mark.
     overview: Overview,
+    /// The rails of the views as last drawn, and a press on one with the drag that may follow.
+    rails: Vec<Rail>,
+    rail_gesture: Option<(ViewId, Gesture)>,
+}
+
+/// The rail of a view as drawn, for the mouse.
+pub struct Rail {
+    view: ViewId,
+    column: u16,
+    bar: Bar,
+    /// The document lines shown, of how many.
+    shown: ops::Range<usize>,
+    len: usize,
+    /// Whether the rail is a panel's, which the view shares.
+    shared: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +106,8 @@ impl EditorView {
             diff_view: DiffView::default(),
             reload_question: ReloadQuestion::default(),
             overview: Overview::default(),
+            rails: Vec::new(),
+            rail_gesture: None,
         }
     }
 
@@ -115,7 +132,7 @@ impl EditorView {
     }
 
     /// Draws `view`, whose statusline goes to `statusline_area`. `viewport` is the area of all
-    /// views. Returns the view's scrollbar when the rail to its right is a panel's, which draws
+    /// views. Returns the view's rail, if it has a scrollbar; a panel docked beside the view draws
     /// it.
     #[allow(clippy::too_many_arguments)]
     pub fn render_view(
@@ -127,7 +144,7 @@ impl EditorView {
         statusline_area: Rect,
         surface: &mut Surface,
         is_focused: bool,
-    ) -> Option<Bar> {
+    ) -> Option<Rail> {
         // While a panel has the keys, the text is drawn as unfocused; the statusline still shows
         // the view's focus and mode.
         let statusline_focused = is_focused;
@@ -316,9 +333,10 @@ impl EditorView {
         // The rail to the right: a separator, or the one at the edge of the views. A panel docked
         // beside the view draws its own.
         let rail = RailStyles::new(theme, theme.get("ui.background"));
-        let mut bar = config.scrollbar.enable.then(|| {
+        let shown = first..last_line.get() + 1;
+        let bar = config.scrollbar.enable.then(|| {
             let height = inner.height as usize;
-            let thumb = scrollbar::thumb(text.len_lines(), first..last_line.get() + 1, height);
+            let thumb = scrollbar::thumb(text.len_lines(), shown.clone(), height);
             let mut bar = Bar::new(inner.top(), height, thumb, rail.thumb);
             // Everything shows when there is no thumb, the marks in the gutter.
             if bar.has_thumb() {
@@ -344,8 +362,7 @@ impl EditorView {
             if statusline_area.right() > x {
                 rows.end -= 1;
             }
-            let bars = bar.take();
-            scrollbar::render_rail(surface, x, rows, bars.as_slice(), &[], rail);
+            scrollbar::render_rail(surface, x, rows, bar.as_slice(), &[], rail);
         }
 
         if config.inline_diagnostics.disabled()
@@ -358,7 +375,14 @@ impl EditorView {
             statusline::RenderContext::new(editor, doc, view, statusline_focused, &self.spinners);
 
         statusline::render(&mut context, statusline_area, surface);
-        bar
+        bar.map(|bar| Rail {
+            view: view.id,
+            column: area.right(),
+            bar,
+            shown,
+            len: text.len_lines(),
+            shared: viewport.right() == area.right(),
+        })
     }
 
     pub fn render_rulers(
@@ -1328,6 +1352,105 @@ impl EditorView {
         self.pseudo_pending.clear();
     }
 
+    /// Handles the mouse on the rails of views: a press on a thumb drags it, a press on the track
+    /// pages towards it, and the wheel scrolls. On a panel's rail only the thumbs are the views'.
+    fn handle_rail_mouse(
+        &mut self,
+        event: &MouseEvent,
+        editor: &mut Editor,
+    ) -> Option<EventResult> {
+        let MouseEvent {
+            kind, column, row, ..
+        } = *event;
+        if let Some((view, gesture)) = self.rail_gesture.take() {
+            if let MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) =
+                kind
+            {
+                let released = matches!(kind, MouseEventKind::Up(_));
+                let gesture = gesture.moved(column, row, released, false);
+                match gesture {
+                    Gesture::Scrolling { grab } => self.drag_thumb(view, row, grab, editor),
+                    Gesture::TrackPressed { row, .. } if released => {
+                        self.page_towards(view, row, editor)
+                    }
+                    _ => {}
+                }
+                if !released {
+                    self.rail_gesture = Some((view, gesture));
+                }
+                return Some(EventResult::Consumed(None));
+            }
+        }
+
+        let rail = self.rails.iter().find(|rail| {
+            rail.column == column
+                && rail.bar.rows().contains(&row)
+                && editor.tree.contains(rail.view)
+        })?;
+        let thumb = rail.bar.thumb();
+        let pressed = kind == MouseEventKind::Down(MouseButton::Left);
+        if rail.shared && !(pressed && thumb.as_ref().is_some_and(|thumb| thumb.contains(&row))) {
+            return None;
+        }
+        let view = rail.view;
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.rail_gesture = Some((view, Gesture::press(column, row, thumb)));
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let direction = if kind == MouseEventKind::ScrollUp {
+                    Direction::Backward
+                } else {
+                    Direction::Forward
+                };
+                let lines = editor.config().scroll_lines.unsigned_abs();
+                scroll_view(editor, view, |view, doc, movement, scrolloff| {
+                    view.scroll(doc, lines, direction, false, movement, scrolloff)
+                });
+            }
+            _ => return None,
+        }
+        Some(EventResult::Consumed(None))
+    }
+
+    /// Scrolls `view` so that its thumb, held `grab` rows below its top, is at the screen row
+    /// `row`.
+    fn drag_thumb(&self, view: ViewId, row: u16, grab: usize, editor: &mut Editor) {
+        let Some(rail) = self.rails.iter().find(|rail| rail.view == view) else {
+            return;
+        };
+        let Some(thumb) = rail.bar.thumb() else {
+            return;
+        };
+        let rows = rail.bar.rows();
+        // The last lines show from this one on.
+        let last = rail.len.saturating_sub(rail.shown.len());
+        let row = usize::from(row.saturating_sub(rows.start));
+        if let Some(line) = scrollbar::dragged_offset(row, grab, thumb.len(), rows.len(), last) {
+            scroll_view(editor, view, |view, doc, movement, scrolloff| {
+                view.scroll_to_line(doc, line, movement, scrolloff)
+            });
+        }
+    }
+
+    /// Scrolls `view` a page towards the screen row `row` of its rail's track.
+    fn page_towards(&self, view: ViewId, row: u16, editor: &mut Editor) {
+        let Some(thumb) = self
+            .rails
+            .iter()
+            .find(|rail| rail.view == view)
+            .and_then(|rail| rail.bar.thumb())
+        else {
+            return;
+        };
+        if let Some(direction) = scrollbar::paging_direction(row, thumb) {
+            scroll_view(editor, view, |view, doc, movement, scrolloff| {
+                let page = view.inner_height();
+                view.scroll(doc, page, direction, false, movement, scrolloff)
+            });
+        }
+    }
+
     fn handle_mouse_event(
         &mut self,
         event: &MouseEvent,
@@ -1344,6 +1467,13 @@ impl EditorView {
         let drawn_focused =
             |editor: &Editor, view_id| editor.tree.focus == view_id && !file_tree_focused;
 
+        // The thumbs of views come first, also on a panel's rail.
+        if let Some(result) = self.handle_rail_mouse(event, cxt.editor) {
+            self.file_tree.unfocus();
+            self.undo_tree.unfocus(cxt.editor);
+            self.diff_view.unfocus_tree();
+            return result;
+        }
         if let Some(result) = self.diff_view.handle_tree_mouse(event, cxt.editor) {
             self.file_tree.unfocus();
             self.undo_tree.unfocus(cxt.editor);
@@ -1610,6 +1740,26 @@ impl EditorView {
             false
         }
     }
+}
+
+/// Scrolls the view `view` with `scroll`, moving its cursor along as scrolling does.
+fn scroll_view(
+    editor: &mut Editor,
+    view: ViewId,
+    scroll: impl FnOnce(&mut View, &mut Document, Movement, usize),
+) {
+    if !editor.tree.contains(view) {
+        return;
+    }
+    let scrolloff = editor.config().scrolloff;
+    let movement = if editor.mode == Mode::Select {
+        Movement::Extend
+    } else {
+        Movement::Move
+    };
+    let view = view_mut!(editor, view);
+    let doc = doc_mut!(editor, &view.doc);
+    scroll(view, doc, movement, scrolloff);
 }
 
 impl Component for EditorView {
@@ -1955,12 +2105,11 @@ impl Component for EditorView {
         }
 
         self.overview.update(cx.editor);
-        // The scrollbars of the views beside a panel's rail.
-        let mut bars = Vec::new();
+        let mut rails = Vec::new();
         for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
             let statusline_area = dock::statusline_area(view.area, &docks);
-            bars.extend(self.render_view(
+            rails.extend(self.render_view(
                 cx.editor,
                 doc,
                 view,
@@ -1970,6 +2119,13 @@ impl Component for EditorView {
                 is_focused,
             ));
         }
+        // The scrollbars of the views beside a panel's rail.
+        let bars: Vec<_> = rails
+            .iter()
+            .filter(|rail| rail.shared)
+            .map(|rail| rail.bar.clone())
+            .collect();
+        self.rails = rails;
         let neighbours = |area: Rect| {
             if is_beside_views(area) {
                 &bars[..]
