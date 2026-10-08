@@ -16,7 +16,7 @@ use helix_view::{
 };
 use tui::buffer::Buffer as Surface;
 
-use super::set::{self, DiffSet};
+use super::set::{self, DiffSet, FileDiff};
 use crate::{
     compositor::{Component, Context, Event, EventResult},
     ctrl, key,
@@ -28,7 +28,7 @@ use crate::{
             git::GitStatuses,
             render::{natural_width, stats_width, BufferMarks, Scene, Styles},
             search::{Candidates, Direction, Matching},
-            tree::{Kind, Tree},
+            tree::{Kind, Leaf, Tree},
             Palette,
         },
         panel_keys::{self, bind, Bindings},
@@ -145,7 +145,7 @@ const BINDINGS: Bindings<Action> = Bindings(&[
 /// What a key or a click asks of the diff view.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
-    /// Show the diff of the file at this path, relative to the root.
+    /// Show the diff of the file whose row has this path, relative to the root.
     Show(PathBuf),
     None,
 }
@@ -185,15 +185,28 @@ pub struct DiffTree {
 
 impl DiffTree {
     pub fn new(set: &DiffSet, config: &FileTreeConfig) -> Self {
-        let paths = set.files.iter().map(|file| file.path.as_path());
-        let tree = Tree::from_paths(set.name.clone().into(), paths, config.sort);
+        let entries: Vec<_> = set.files.iter().map(FileDiff::entry).collect();
+        let leaves = set
+            .files
+            .iter()
+            .zip(&entries)
+            .map(|(file, (dir, name))| Leaf {
+                dir,
+                name,
+                file_name: file
+                    .path
+                    .file_name()
+                    .filter(|_| file.renamed_from.is_some()),
+            });
+        let tree = Tree::from_files(set.name.clone().into(), leaves, config.sort);
         let changes = set.files.iter().map(|file| file.change(&set.root));
-        let paths = set.files.iter().map(|file| file.path.clone()).collect();
+        // In the order of the files, which is the tree's.
+        let keys = entries.iter().map(|(dir, name)| dir.join(name)).collect();
         Self {
             browser: Browser::new(tree, config.flatten_dirs),
             git: GitStatuses::new(&set.root, changes),
             stats: HashMap::new(),
-            candidates: Arc::new(Candidates::new(paths, config.sort)),
+            candidates: Arc::new(Candidates::in_order(keys)),
             palette: Palette::default(),
             shown: true,
             focused: false,
@@ -206,7 +219,7 @@ impl DiffTree {
         }
     }
 
-    /// Takes the lines added and removed of each file, by its path.
+    /// Takes the lines added and removed of each file, by the path of its row.
     pub fn set_stats(&mut self, stats: impl IntoIterator<Item = (PathBuf, Stats)>) {
         let files: Vec<_> = stats.into_iter().collect();
         let sums = set::sums(files.iter().map(|(path, stats)| (path.as_path(), *stats)));
@@ -596,7 +609,7 @@ impl DiffTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::diff_view::set::{FileDiff, Text};
+    use crate::ui::diff_view::set::Text;
 
     fn tree(paths: &[&str]) -> DiffTree {
         let set = DiffSet {
@@ -607,6 +620,7 @@ mod tests {
                 .iter()
                 .map(|path| FileDiff {
                     path: path.into(),
+                    renamed_from: None,
                     old: Text::Missing,
                     new: Text::Missing,
                 })
@@ -668,6 +682,48 @@ mod tests {
             }
         );
         assert!(tree.fitted_width(false) > narrow);
+    }
+
+    #[test]
+    fn renamed_files_read_like_git_stat() {
+        let set = DiffSet {
+            root: "/repo".into(),
+            name: "repo".into(),
+            sides: [None, None],
+            files: vec![
+                FileDiff {
+                    path: "src/ui/b.rs".into(),
+                    renamed_from: None,
+                    old: Text::Missing,
+                    new: Text::Missing,
+                },
+                FileDiff {
+                    path: "src/ui/a.rs".into(),
+                    renamed_from: Some("src/a.rs".into()),
+                    old: Text::Missing,
+                    new: Text::Missing,
+                },
+            ],
+        };
+        let mut tree = DiffTree::new(&set, &FileTreeConfig::default());
+        assert_eq!(
+            labels(&tree),
+            ["repo", "src", "ui", "b.rs", "{ => ui}/a.rs"]
+        );
+        tree.browser.navigate(Motion::Last);
+        let key = PathBuf::from("src/{ => ui}/a.rs");
+        assert_eq!(tree.open_cursor(), Request::Show(key.clone()));
+
+        let stats = Stats {
+            added: 1,
+            removed: 1,
+        };
+        tree.set_stats([(key, stats)]);
+        assert_eq!(tree.stats[Path::new("src")], stats);
+        assert!(
+            !tree.stats.contains_key(Path::new("src/ui")),
+            "not below the directory it moved to"
+        );
     }
 
     /// Times building the diff tree of 2000 files and taking their stats. Run it with

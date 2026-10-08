@@ -79,6 +79,15 @@ pub struct Node {
     stale: bool,
     /// Whether git ignores the entry.
     pub ignored: bool,
+    /// The file name of a leaf of [`Tree::from_files`] whose name isn't one.
+    file_name: Option<OsString>,
+}
+
+impl Node {
+    /// The file name the entry's icon and color go by.
+    pub fn file_name(&self) -> &OsStr {
+        self.file_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// One entry of a directory listing.
@@ -102,6 +111,16 @@ impl Entry {
             only_child: None,
         }
     }
+}
+
+/// A file of a tree made by [`Tree::from_files`].
+pub struct Leaf<'a> {
+    /// The directory holding it, relative to the root.
+    pub dir: &'a Path,
+    /// Its name, which may span several components, like a rename's `{a => b}/c.rs`.
+    pub name: &'a OsStr,
+    /// The name of the file it is, if `name` isn't one.
+    pub file_name: Option<&'a OsStr>,
 }
 
 /// The entries of a directory, or `None` if it could not be read.
@@ -128,6 +147,7 @@ impl Tree {
             listed: false,
             stale: false,
             ignored: false,
+            file_name: None,
         });
         Self {
             nodes,
@@ -137,51 +157,49 @@ impl Tree {
         }
     }
 
-    /// A tree of the files at `paths`, relative to the root named `root_name`, with every
-    /// directory expanded.
-    pub fn from_paths<'a>(
+    /// A tree of the files `leaves`, with every directory expanded.
+    pub fn from_files<'a>(
         root_name: OsString,
-        paths: impl IntoIterator<Item = &'a Path>,
+        leaves: impl IntoIterator<Item = Leaf<'a>>,
         sort: FileTreeSort,
     ) -> Self {
         let mut tree = Self::new(root_name, sort);
-        let mut dirs: BTreeMap<PathBuf, BTreeMap<OsString, Kind>> =
+        let mut dirs: BTreeMap<PathBuf, BTreeMap<&OsStr, (Kind, Option<&OsStr>)>> =
             BTreeMap::from([(PathBuf::new(), BTreeMap::new())]);
-        for path in paths {
-            let names: Vec<_> = path
-                .components()
-                .filter_map(|component| match component {
-                    Component::Normal(name) => Some(name),
-                    _ => None,
-                })
-                .collect();
+        for leaf in leaves {
             let mut dir = PathBuf::new();
-            for (i, name) in names.iter().enumerate() {
-                let kind = if i + 1 == names.len() {
-                    Kind::File { executable: false }
-                } else {
-                    Kind::Directory
+            for component in leaf.dir.components() {
+                let Component::Normal(name) = component else {
+                    continue;
                 };
                 dirs.entry(dir.clone())
                     .or_default()
-                    .insert(name.to_os_string(), kind);
+                    .insert(name, (Kind::Directory, None));
                 dir.push(name);
             }
+            let file = (Kind::File { executable: false }, leaf.file_name);
+            dirs.entry(dir).or_default().insert(leaf.name, file);
         }
         // A directory sorts before the ones in it, so its node exists when they are listed.
         for (dir, entries) in dirs {
             let id = tree.find(&dir).expect("listed with its parent");
             tree.nodes[id].expanded = true;
             let listing = entries
-                .into_iter()
-                .map(|(name, kind)| Entry {
-                    name,
-                    kind,
+                .iter()
+                .map(|(name, (kind, _))| Entry {
+                    name: name.to_os_string(),
+                    kind: *kind,
                     ignored: false,
                     only_child: None,
                 })
                 .collect();
             tree.apply_listing(id, Some(listing));
+            for (name, (_, file_name)) in entries {
+                if let Some(file_name) = file_name {
+                    let child = tree.child_named(id, name).expect("just listed");
+                    tree.nodes[child].file_name = Some(file_name.to_os_string());
+                }
+            }
         }
         tree.listing_requests.clear();
         tree
@@ -230,11 +248,19 @@ impl Tree {
     /// The node at `path`, relative to the root.
     pub fn find(&self, path: &Path) -> Option<NodeId> {
         let mut current = self.root;
-        for component in path.components() {
+        let mut rest = path;
+        while let Some(component) = rest.components().next() {
             let Component::Normal(name) = component else {
                 return None;
             };
-            current = self.child_named(current, name)?;
+            current = self.child_named(current, name).or_else(|| {
+                // A name spanning several components, like a rename's `{a => b}/c.rs`.
+                self.children(current)
+                    .iter()
+                    .copied()
+                    .find(|&child| rest.starts_with(&self.nodes[child].name))
+            })?;
+            rest = rest.strip_prefix(&self.nodes[current].name).ok()?;
         }
         Some(current)
     }
@@ -372,6 +398,7 @@ impl Tree {
             listed: false,
             stale: false,
             ignored: entry.ignored,
+            file_name: None,
         })
     }
 
@@ -692,6 +719,31 @@ pub(super) mod tests {
         assert_eq!(tree.reveal("new.txt".as_ref()), Reveal::Unlisted(root));
         tree.apply_listing(root, Some(vec![file("anchor.txt"), file("new.txt")]));
         assert!(matches!(tree.reveal("new.txt".as_ref()), Reveal::Found(_)));
+    }
+
+    #[test]
+    fn leaves_may_span_components() {
+        let leaf = |dir: &'static str, name: &'static str, file_name| Leaf {
+            dir: Path::new(dir),
+            name: OsStr::new(name),
+            file_name,
+        };
+        let tree = Tree::from_files(
+            "repo".into(),
+            [
+                leaf("src", "{ => ui}/a.rs", Some(OsStr::new("a.rs"))),
+                leaf("src/ui", "b.rs", None),
+                leaf("src", "c.rs", None),
+            ],
+            FileTreeSort::DirectoriesFirst,
+        );
+        let src = tree.find("src".as_ref()).unwrap();
+        assert_eq!(names(&tree, src), ["ui", "c.rs", "{ => ui}/a.rs"]);
+        let renamed = tree.find("src/{ => ui}/a.rs".as_ref()).unwrap();
+        assert_eq!(tree.node(renamed).file_name(), "a.rs");
+        assert_eq!(tree.path(renamed), Path::new("src/{ => ui}/a.rs"));
+        let b = tree.find("src/ui/b.rs".as_ref()).unwrap();
+        assert_eq!(tree.node(b).file_name(), "b.rs");
     }
 
     #[test]

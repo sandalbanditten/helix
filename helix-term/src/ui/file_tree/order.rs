@@ -2,6 +2,7 @@
 
 use std::{
     cmp::Ordering,
+    ffi::OsStr,
     path::{Component, Path},
 };
 
@@ -33,8 +34,26 @@ pub fn path_cmp(
     b: &Path,
     b_is_dir: bool,
 ) -> Ordering {
-    let mut a = a.components().peekable();
-    let mut b = b.components().peekable();
+    names_cmp(
+        sort,
+        a.components().map(Component::as_os_str),
+        a_is_dir,
+        b.components().map(Component::as_os_str),
+        b_is_dir,
+    )
+}
+
+/// Orders two entries the way the tree lists them, each given by the names of the entries leading
+/// to it from the root. A name may span several components, like a rename's `{a => b}/c.rs`.
+pub fn names_cmp<'a>(
+    sort: FileTreeSort,
+    a: impl IntoIterator<Item = &'a OsStr>,
+    a_is_dir: bool,
+    b: impl IntoIterator<Item = &'a OsStr>,
+    b_is_dir: bool,
+) -> Ordering {
+    let mut a = a.into_iter().peekable();
+    let mut b = b.into_iter().peekable();
     loop {
         match (a.next(), b.next()) {
             (None, None) => return Ordering::Equal,
@@ -53,16 +72,12 @@ pub fn path_cmp(
                 let y_group = group(b.peek().is_some() || b_is_dir);
                 return entry_cmp(
                     sort,
-                    (&component_name(x), x_group),
-                    (&component_name(y), y_group),
+                    (&x.to_string_lossy(), x_group),
+                    (&y.to_string_lossy(), y_group),
                 );
             }
         }
     }
-}
-
-fn component_name(component: Component<'_>) -> std::borrow::Cow<'_, str> {
-    component.as_os_str().to_string_lossy()
 }
 
 /// Compares names ignoring case, with runs of digits compared by their value, so `file2` comes
@@ -208,6 +223,35 @@ mod tests {
                 false
             ),
             Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn names_spanning_components_sort_as_one() {
+        let sort = FileTreeSort::DirectoriesFirst;
+        let cmp = |a: &[&str], b: &[&str]| {
+            let (a, b) = (a.iter().map(OsStr::new), b.iter().map(OsStr::new));
+            names_cmp(sort, a, false, b, false)
+        };
+        // A rename's `{ => ui}/a.rs` is a file, which comes after `src`'s directories.
+        assert_eq!(
+            cmp(&["src", "{ => ui}/a.rs"], &["src", "ui", "b.rs"]),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp(&["src", "{ => ui}/a.rs"], &["src", "b.rs"]),
+            Ordering::Greater
+        );
+        assert_eq!(
+            path_cmp(
+                sort,
+                "src/{ => ui}/a.rs".as_ref(),
+                false,
+                "src/b.rs".as_ref(),
+                false
+            ),
+            Ordering::Less,
+            "as a path, it is in a directory"
         );
     }
 }

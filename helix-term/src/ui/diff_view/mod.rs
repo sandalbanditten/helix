@@ -511,7 +511,7 @@ impl DiffView {
                     old,
                     new,
                     versions_of,
-                } => DiffSet::of_directories(old, new, versions_of.as_deref(), sort),
+                } => DiffSet::of_directories(old, new, versions_of.as_deref(), &providers, sort),
                 Many::Changes(dir) => DiffSet::of_changes(dir, &providers, reader.trust, sort),
             },
             move |editor, compositor, set| {
@@ -690,9 +690,7 @@ impl DiffView {
         if files.tree.is_focused() {
             files.tree.unfocus();
         } else {
-            let current = files
-                .current
-                .map(|index| files.set.files[index].path.clone());
+            let current = files.current.map(|index| files.set.files[index].key());
             files.tree.focus(current.as_deref());
         }
     }
@@ -716,10 +714,8 @@ impl DiffView {
 
     pub fn render_tree(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         if let Some(files) = &mut self.files {
-            let current = files
-                .current
-                .map(|index| files.set.files[index].path.as_path());
-            files.tree.render(area, surface, current, cx);
+            let current = files.current.map(|index| files.set.files[index].key());
+            files.tree.render(area, surface, current.as_deref(), cx);
         }
     }
 
@@ -769,7 +765,7 @@ impl DiffView {
         let Some(files) = &self.files else {
             return;
         };
-        let index = files.set.files.iter().position(|file| file.path == path);
+        let index = files.set.files.iter().position(|file| file.key() == path);
         // The file shown last shows again once its panes closed.
         if let Some(index) =
             index.filter(|&index| self.pair.is_none() || files.current != Some(index))

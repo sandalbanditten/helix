@@ -445,9 +445,9 @@ impl Scene<'_> {
             Kind::Special(Special::BlockDevice) => (EntryType::BlockDevice, None),
             Kind::Special(Special::CharDevice) => (EntryType::CharDevice, None),
         };
-        let palette = self
-            .palette
-            .and_then(|palette| palette.style(&node.name.to_string_lossy(), entry_type, target));
+        let palette = self.palette.and_then(|palette| {
+            palette.style(&node.file_name().to_string_lossy(), entry_type, target)
+        });
         let mut style = match palette {
             Some(palette) => row_style.patch(palette),
             None if matches!(entry_type, EntryType::Directory)
@@ -477,7 +477,7 @@ impl Scene<'_> {
         if root {
             return icons::ROOT;
         }
-        let name = node.name.to_string_lossy();
+        let name = node.file_name().to_string_lossy();
         match node.kind {
             Kind::Directory => icons::directory(&name, node.expanded),
             Kind::Link(LinkTarget::Directory) => icons::directory(&name, false),

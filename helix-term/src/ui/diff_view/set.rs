@@ -3,9 +3,10 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
+    ffi::{OsStr, OsString},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{bail, Context as _};
@@ -29,24 +30,89 @@ pub enum Text {
     Missing,
 }
 
-/// One file of the diff, by its path relative to the root.
+/// One file of the diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDiff {
+    /// The path of the file relative to the root: its new one, or its old one if it is gone.
     pub path: PathBuf,
+    /// The path the file had on the old side, relative to the root, if it was renamed.
+    pub renamed_from: Option<PathBuf>,
     pub old: Text,
     pub new: Text,
 }
 
 impl FileDiff {
+    /// The directory the tree lists the file in, and its name there. A renamed file is listed
+    /// below the directory its paths share, named like `git diff --stat` shows the rest, as in
+    /// `{ => ui}/a.rs`.
+    pub fn entry(&self) -> (PathBuf, OsString) {
+        match &self.renamed_from {
+            Some(from) => rename_entry(from, &self.path),
+            None => (
+                self.path.parent().unwrap_or(Path::new("")).to_path_buf(),
+                self.path.file_name().unwrap_or_default().to_os_string(),
+            ),
+        }
+    }
+
+    /// The path of the file's row in the tree, relative to the root.
+    pub fn key(&self) -> PathBuf {
+        let (dir, name) = self.entry();
+        dir.join(name)
+    }
+
     /// The change the file tree's git column shows for it, at `root`.
     pub fn change(&self, root: &Path) -> FileChange {
-        let path = root.join(&self.path);
+        let path = root.join(self.key());
         match (&self.old, &self.new) {
             (Text::Missing, _) => FileChange::Untracked { path },
             (_, Text::Missing) => FileChange::Deleted { path },
             _ => FileChange::Modified { path },
         }
     }
+}
+
+/// Where the tree lists a file renamed from `from` to `to`: the directory both paths share, and
+/// the rest as `git diff --stat` shows it. `src/a.rs` renamed to `src/ui/a.rs` is
+/// `{ => ui}/a.rs` in `src`.
+fn rename_entry(from: &Path, to: &Path) -> (PathBuf, OsString) {
+    const SEPARATOR: char = std::path::MAIN_SEPARATOR;
+    let (a, b) = (from.to_string_lossy(), to.to_string_lossy());
+    // Like git's `pprint_rename`, the common prefix ends with a separator and the common suffix
+    // starts with one, which may be the prefix's last.
+    let prefix = a
+        .char_indices()
+        .zip(b.chars())
+        .take_while(|((_, x), y)| x == y)
+        .filter(|((_, x), _)| *x == SEPARATOR)
+        .last()
+        .map_or(0, |((index, _), _)| index + 1);
+    let start = prefix.saturating_sub(1);
+    let common: usize = a[start..]
+        .chars()
+        .rev()
+        .zip(b[start..].chars().rev())
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x.len_utf8())
+        .sum();
+    let suffix = a[a.len() - common..]
+        .find(SEPARATOR)
+        .map_or(0, |separator| common - separator);
+    let middle = |path: &str| {
+        let end = path.len() - suffix;
+        path[prefix.min(end)..end].to_owned()
+    };
+    let rest = if prefix + suffix == 0 {
+        format!("{a} => {b}")
+    } else {
+        format!(
+            "{{{} => {}}}{}",
+            middle(&a),
+            middle(&b),
+            &a[a.len() - suffix..]
+        )
+    };
+    (PathBuf::from(&a[..start]), rest.into())
 }
 
 /// The files of a diff of many.
@@ -69,25 +135,49 @@ impl DiffSet {
         old: &Path,
         new: &Path,
         versions_of: Option<&Path>,
+        providers: &DiffProviderRegistry,
         sort: FileTreeSort,
     ) -> anyhow::Result<Self> {
         let (old_files, new_files) = (walk(old)?, walk(new)?);
+        let only = |files: &BTreeMap<PathBuf, PathBuf>, other: &BTreeMap<PathBuf, PathBuf>| {
+            let only = files.keys().filter(|path| !other.contains_key(*path));
+            only.cloned().collect::<Vec<_>>()
+        };
+        let (deleted, added) = (only(&old_files, &new_files), only(&new_files, &old_files));
+        // By their new path.
+        let renames: HashMap<PathBuf, PathBuf> = providers
+            .renames(old, new, &deleted, &added)
+            .into_iter()
+            .map(|(from, to)| (to, from))
+            .collect();
+        let renamed: HashSet<&PathBuf> = renames.values().collect();
         let mut paths: Vec<_> = old_files.keys().chain(new_files.keys()).collect();
         paths.sort();
         paths.dedup();
         let mut files = Vec::new();
         for path in paths {
-            let text = |files: &BTreeMap<PathBuf, PathBuf>| {
-                files.get(path).cloned().map_or(Text::Missing, Text::File)
-            };
-            let (old, new) = (text(&old_files), text(&new_files));
-            if let (Text::File(old), Text::File(new)) = (&old, &new) {
+            // Listed with the file it was renamed to.
+            if renamed.contains(path) {
+                continue;
+            }
+            let renamed_from = renames.get(path).cloned();
+            let old_path = renamed_from.as_ref().unwrap_or(path);
+            let old = old_files
+                .get(old_path)
+                .cloned()
+                .map_or(Text::Missing, Text::File);
+            let new = new_files
+                .get(path)
+                .cloned()
+                .map_or(Text::Missing, Text::File);
+            if let (Text::File(old), Text::File(new), None) = (&old, &new, &renamed_from) {
                 if same_contents(old, new) {
                     continue;
                 }
             }
             files.push(FileDiff {
                 path: path.clone(),
+                renamed_from,
                 old,
                 new,
             });
@@ -129,45 +219,35 @@ impl DiffSet {
             }
             true
         })?;
-        // A path changed in the index and in the working tree is reported twice.
-        let mut paths: BTreeMap<PathBuf, (PathBuf, PathBuf, usize)> = BTreeMap::new();
-        for change in changes.into_inner() {
-            let (from, to) = match change {
-                FileChange::Renamed { from_path, to_path } => (Some(from_path), to_path),
-                FileChange::Conflict { path }
-                | FileChange::Modified { path }
-                | FileChange::Untracked { path }
-                | FileChange::Added { path }
-                | FileChange::Deleted { path } => (None, path),
-            };
-            let Ok(path) = to.strip_prefix(dir) else {
-                continue;
-            };
-            let from = from.unwrap_or_else(|| to.clone());
-            paths.entry(path.to_path_buf()).or_insert((from, to, 0)).2 += 1;
-        }
-        let froms: Vec<PathBuf> = paths.values().map(|(from, ..)| from.clone()).collect();
+        let paths = changed_files(dir, changes.into_inner());
+        let froms: Vec<PathBuf> = paths.values().map(|file| file.from.clone()).collect();
         // Whether each has a committed version, which only a path reported twice keeps, for
         // comparing with its file.
         let mut committed = Vec::with_capacity(froms.len());
-        let mut reported = paths.values().map(|(.., reports)| *reports);
+        let mut reported = paths.values().map(|file| file.reports);
         providers.for_each_diff_base(dir, &froms, trust, |_, base| {
             let twice = reported.next().is_some_and(|reports| reports >= 2);
             committed.push(base.map(|base| twice.then_some(base)));
             true
         });
         let mut files = Vec::new();
-        for ((path, (from, to, _)), committed) in paths.into_iter().zip(committed) {
+        for ((path, ChangedFile { from, to, .. }), committed) in paths.into_iter().zip(committed) {
             // New files have no committed version, deleted ones no file.
             let exists = to.is_file();
-            // A change staged and then undone in the working tree is none.
-            if let (Some(Some(committed)), true) = (&committed, exists) {
+            // A change staged and then undone in the working tree is none, unless it moved.
+            if let (Some(Some(committed)), true, true) = (&committed, exists, from == to) {
                 if read(&to).ok() == decode(committed).ok() {
                     continue;
                 }
             }
+            let renamed_from = from
+                .strip_prefix(dir)
+                .ok()
+                .filter(|_| from != to)
+                .map(Path::to_path_buf);
             files.push(FileDiff {
                 path,
+                renamed_from,
                 old: committed.map_or(Text::Missing, |_| Text::Head(from)),
                 new: if exists {
                     Text::File(to)
@@ -187,12 +267,70 @@ impl DiffSet {
 
     /// The names of the panes of `file`, old and new.
     pub fn names(&self, file: &FileDiff) -> [String; 2] {
-        let path = file.path.display();
-        self.sides.clone().map(|side| match side {
-            Some(side) => format!("{path} ({side})"),
-            None => path.to_string(),
+        let old = file.renamed_from.as_ref().unwrap_or(&file.path);
+        let mut sides = self.sides.clone().into_iter();
+        [old, &file.path].map(|path| match sides.next().flatten() {
+            Some(side) => format!("{} ({side})", path.display()),
+            None => path.display().to_string(),
         })
     }
+}
+
+/// A file changed since HEAD.
+#[derive(Debug, PartialEq, Eq)]
+struct ChangedFile {
+    /// Its path at HEAD.
+    from: PathBuf,
+    /// Its path now.
+    to: PathBuf,
+    /// How many times git reported it: once for its staged change, once for its unstaged one.
+    reports: usize,
+}
+
+/// The files below `dir` that `changes` report, by their path now relative to it.
+fn changed_files(dir: &Path, changes: Vec<FileChange>) -> BTreeMap<PathBuf, ChangedFile> {
+    // Where each file renamed was renamed from, by where it was renamed to.
+    let renames: HashMap<PathBuf, PathBuf> = changes
+        .iter()
+        .filter_map(|change| match change {
+            FileChange::Renamed { from_path, to_path } => {
+                Some((to_path.clone(), from_path.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let sources: HashSet<&Path> = renames.values().map(PathBuf::as_path).collect();
+    let mut files: BTreeMap<PathBuf, ChangedFile> = BTreeMap::new();
+    for change in &changes {
+        let to = change.path();
+        let from = match change {
+            FileChange::Renamed { from_path, .. } => Some(from_path),
+            _ => None,
+        };
+        // Renamed in the index and again in the working tree: gone from in between.
+        if sources.contains(to) {
+            continue;
+        }
+        let Ok(path) = to.strip_prefix(dir) else {
+            continue;
+        };
+        let file = files
+            .entry(path.to_path_buf())
+            .or_insert_with(|| ChangedFile {
+                from: to.to_path_buf(),
+                to: to.to_path_buf(),
+                reports: 0,
+            });
+        file.reports += 1;
+        // The index and the working tree come in any order; a rename tells where it was at HEAD.
+        if let Some(from) = from {
+            file.from = match renames.get(from) {
+                Some(earlier) if earlier != to => earlier.clone(),
+                _ => from.clone(),
+            };
+        }
+    }
+    files
 }
 
 /// Reads the texts of a diff's files.
@@ -224,8 +362,8 @@ impl Reader {
         Some(builtin::stats(old.slice(..), new.slice(..)))
     }
 
-    /// Calls `f` with the lines added and removed in each of `files` whose texts can be read, until it
-    /// returns `false`.
+    /// Calls `f` with the path of the row and the lines added and removed of each of `files` whose
+    /// texts can be read, until it returns `false`.
     pub fn each_stats(
         &self,
         root: &Path,
@@ -237,7 +375,7 @@ impl Reader {
             if let Text::Head(from) = &file.old {
                 committed.push((from.clone(), file));
             } else if let Some(stats) = self.stats(&file) {
-                if !f(file.path, stats) {
+                if !f(file.key(), stats) {
                     return;
                 }
             }
@@ -252,7 +390,7 @@ impl Reader {
                 let old = base.and_then(|base| decode(&base).ok());
                 match (old, self.read(&file.new).ok()) {
                     (Some(old), Some(new)) => {
-                        f(file.path, builtin::stats(old.slice(..), new.slice(..)))
+                        f(file.key(), builtin::stats(old.slice(..), new.slice(..)))
                     }
                     _ => true,
                 }
@@ -322,13 +460,36 @@ fn same_contents(a: &Path, b: &Path) -> bool {
     size(a) == size(b) && fs::read(a).ok() == fs::read(b).ok()
 }
 
-fn sort_files(files: &mut [FileDiff], sort: FileTreeSort) {
-    files.sort_by(|a, b| order::path_cmp(sort, &a.path, false, &b.path, false));
+/// Puts `files` in the order the tree lists them.
+fn sort_files(files: &mut Vec<FileDiff>, sort: FileTreeSort) {
+    /// The names leading to an entry: its directory's, then its own.
+    fn names<'a>(dir: &'a Path, name: &'a OsStr) -> impl Iterator<Item = &'a OsStr> {
+        let dirs = dir.components().map(Component::as_os_str);
+        dirs.chain(std::iter::once(name))
+    }
+    let mut entries: Vec<_> = std::mem::take(files)
+        .into_iter()
+        .map(|file| (file.entry(), file))
+        .collect();
+    entries.sort_by(|((a_dir, a_name), _), ((b_dir, b_name), _)| {
+        order::names_cmp(
+            sort,
+            names(a_dir, a_name),
+            false,
+            names(b_dir, b_name),
+            false,
+        )
+    });
+    files.extend(entries.into_iter().map(|(_, file)| file));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn providers() -> DiffProviderRegistry {
+        DiffProviderRegistry::default()
+    }
 
     #[test]
     fn directories_differ_by_the_files_that_differ() {
@@ -342,11 +503,12 @@ mod tests {
         write(new.path(), "same.rs", "a\n");
         write(old.path(), "src/changed.rs", "a\n");
         write(new.path(), "src/changed.rs", "b\n");
-        write(old.path(), "gone.rs", "a\n");
-        write(new.path(), "src/new.rs", "a\n");
+        write(old.path(), "gone.rs", "g\n");
+        write(new.path(), "src/new.rs", "n\n");
         write(new.path(), ".git/HEAD", "ref\n");
         let sort = FileTreeSort::DirectoriesFirst;
-        let set = DiffSet::of_directories(old.path(), new.path(), None, sort).unwrap();
+        let set =
+            DiffSet::of_directories(old.path(), new.path(), None, &providers(), sort).unwrap();
         let paths: Vec<_> = set.files.iter().map(|file| file.path.as_path()).collect();
         assert_eq!(
             paths,
@@ -359,6 +521,108 @@ mod tests {
     }
 
     #[test]
+    fn renames_read_like_git_stat() {
+        // As `git diff --stat` shows them.
+        let shown = |from: &str, to: &str| {
+            let (dir, name) = rename_entry(from.as_ref(), to.as_ref());
+            dir.join(name).to_string_lossy().into_owned()
+        };
+        assert_eq!(
+            shown(
+                "src/main/java/foo/Poisson.java",
+                "src/main/java/foo/bar/Poisson.java"
+            ),
+            "src/main/java/foo/{ => bar}/Poisson.java"
+        );
+        assert_eq!(
+            shown(
+                "src/main/java/foo/deep/Up.java",
+                "src/main/java/foo/Up.java"
+            ),
+            "src/main/java/foo/{deep => }/Up.java"
+        );
+        assert_eq!(
+            shown(
+                "src/main/java/foo/Fish.java",
+                "src/main/java/foo/Trout.java"
+            ),
+            "src/main/java/foo/{Fish.java => Trout.java}"
+        );
+        assert_eq!(
+            shown("lib/a/b/x.rs", "lib/c/y.rs"),
+            "lib/{a/b/x.rs => c/y.rs}"
+        );
+        assert_eq!(shown("a/x.rs", "b/x.rs"), "{a => b}/x.rs");
+        assert_eq!(shown("README.md", "docs.md"), "README.md => docs.md");
+        assert_eq!(
+            shown("a/xä", "b/xĤ"),
+            "a/xä => b/xĤ",
+            "characters sharing bytes"
+        );
+        assert_eq!(
+            rename_entry("src/a.rs".as_ref(), "src/ui/a.rs".as_ref()),
+            ("src".into(), "{ => ui}/a.rs".into()),
+            "listed below the directory both paths share"
+        );
+    }
+
+    #[test]
+    fn renamed_files_are_listed_once() {
+        let (old, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let lines = |last: &str| format!("{}{last}\n", "line\n".repeat(9));
+        for (dir, path, text) in [
+            (old.path(), "src/a.rs", lines("old")),
+            (new.path(), "src/ui/a.rs", lines("new")),
+            (old.path(), "src/b.rs", "b\n".into()),
+            (new.path(), "src/b.rs", "B\n".into()),
+        ] {
+            let path = dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        let sort = FileTreeSort::DirectoriesFirst;
+        let set =
+            DiffSet::of_directories(old.path(), new.path(), None, &providers(), sort).unwrap();
+        let keys: Vec<_> = set.files.iter().map(FileDiff::key).collect();
+        assert_eq!(
+            keys,
+            ["src/b.rs", "src/{ => ui}/a.rs"].map(PathBuf::from),
+            "a file among files, by its name"
+        );
+        let renamed = &set.files[1];
+        assert_eq!(renamed.path, Path::new("src/ui/a.rs"));
+        assert_eq!(renamed.old, Text::File(old.path().join("src/a.rs")));
+        let [old_name, new_name] = set.names(renamed);
+        assert!(old_name.starts_with("src/a.rs ("), "{old_name}");
+        assert!(new_name.starts_with("src/ui/a.rs ("), "{new_name}");
+    }
+
+    #[test]
+    fn renames_tell_where_files_were_at_head() {
+        let path = |path: &str| PathBuf::from("/repo").join(path);
+        let renamed = |from: &str, to: &str| FileChange::Renamed {
+            from_path: path(from),
+            to_path: path(to),
+        };
+        let changed = |changes| -> Vec<(PathBuf, PathBuf, usize)> {
+            changed_files(Path::new("/repo"), changes)
+                .into_values()
+                .map(|file| (file.from, file.to, file.reports))
+                .collect()
+        };
+        // Staged as a rename and edited since, reported in either order.
+        let modified = || FileChange::Modified { path: path("b.rs") };
+        let expected = [(path("a.rs"), path("b.rs"), 2)];
+        assert_eq!(changed(vec![renamed("a.rs", "b.rs"), modified()]), expected);
+        assert_eq!(changed(vec![modified(), renamed("a.rs", "b.rs")]), expected);
+        // Renamed in the index, then again in the working tree.
+        assert_eq!(
+            changed(vec![renamed("a.rs", "b.rs"), renamed("b.rs", "c.rs")]),
+            [(path("a.rs"), path("c.rs"), 1)]
+        );
+    }
+
+    #[test]
     fn directory_diffs_are_named_after_what_they_compare() {
         let parent = tempfile::tempdir().unwrap();
         let dir = |path: &str| {
@@ -368,12 +632,12 @@ mod tests {
         };
         let (old, new) = (dir("v1.0"), dir("v1.1"));
         let sort = FileTreeSort::DirectoriesFirst;
-        let set = DiffSet::of_directories(&old, &new, None, sort).unwrap();
+        let set = DiffSet::of_directories(&old, &new, None, &providers(), sort).unwrap();
         assert_eq!(set.name, "v1.0 → v1.1");
         assert_eq!(set.sides, [Some("v1.0".into()), Some("v1.1".into())]);
 
         let (old, new) = (dir("a/src"), dir("b/src"));
-        let set = DiffSet::of_directories(&old, &new, None, sort).unwrap();
+        let set = DiffSet::of_directories(&old, &new, None, &providers(), sort).unwrap();
         assert_eq!(set.name, "src");
         assert_eq!(
             set.sides,
@@ -383,8 +647,14 @@ mod tests {
 
         // As `git difftool -d` hands over versions of the work tree.
         let (old, new) = (dir("git-difftool.X/left"), dir("git-difftool.X/right"));
-        let set =
-            DiffSet::of_directories(&old, &new, Some(Path::new("/src/hotstone")), sort).unwrap();
+        let set = DiffSet::of_directories(
+            &old,
+            &new,
+            Some(Path::new("/src/hotstone")),
+            &providers(),
+            sort,
+        )
+        .unwrap();
         assert_eq!(set.name, "hotstone");
         assert_eq!(set.sides, [Some("old".into()), Some("new".into())]);
         assert_eq!(set.root, new, "the files are the new directory's");
@@ -414,6 +684,7 @@ mod tests {
         };
         let file = FileDiff {
             path: "src/a.rs".into(),
+            renamed_from: None,
             old: Text::Missing,
             new: Text::Missing,
         };
@@ -494,9 +765,14 @@ mod tests {
             }
         }
         let start = Instant::now();
-        let set =
-            DiffSet::of_directories(old.path(), new.path(), None, FileTreeSort::DirectoriesFirst)
-                .unwrap();
+        let set = DiffSet::of_directories(
+            old.path(),
+            new.path(),
+            None,
+            &reader.providers,
+            FileTreeSort::DirectoriesFirst,
+        )
+        .unwrap();
         eprintln!(
             "10000 identical files in two directories: {} differ, found in {:?}",
             set.files.len(),
