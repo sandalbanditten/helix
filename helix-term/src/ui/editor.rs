@@ -1357,6 +1357,10 @@ impl EditorView {
 
     pub fn handle_idle_timeout(&mut self, cx: &mut commands::Context) -> EventResult {
         commands::compute_inlay_hints_for_all_views(cx.editor, cx.jobs);
+        // Typing paused: the minimaps catch up with the colors edits changed.
+        if self.minimaps.get_mut().refresh() {
+            cx.editor.needs_redraw = true;
+        }
 
         EventResult::Ignored(None)
     }

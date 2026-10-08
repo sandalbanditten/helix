@@ -4,7 +4,7 @@
 
 use std::{borrow::Cow, collections::HashMap, ops::Range};
 
-use helix_core::{diagnostic::Severity, graphemes::Grapheme, syntax::Loader};
+use helix_core::{diagnostic::Severity, graphemes::Grapheme, syntax::Loader, Rope};
 use helix_stdx::rope::RopeSliceExt;
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
@@ -42,17 +42,21 @@ impl Cell {
 /// What the cells of a document depend on besides its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Key {
-    version: i32,
     language: Option<String>,
     theme: String,
     tab_width: usize,
     width: usize,
 }
 
-/// The rows of cells of a document worked out so far, each standing for four lines.
+/// The rows of cells of a document worked out so far, each standing for four lines, and the
+/// version of its text they are for.
 struct Cells {
     key: Key,
+    version: i32,
+    text: Rope,
     rows: HashMap<usize, Box<[Cell]>>,
+    /// Whether rows kept over an edit may have colors the edit changed.
+    stale: bool,
 }
 
 /// The minimaps of the splits: the cells of their documents, worked out as they are shown and
@@ -131,6 +135,17 @@ impl Minimaps {
         self.drawn.clear();
     }
 
+    /// Forgets the rows kept over edits, to work them out again. Returns whether there were any.
+    pub fn refresh(&mut self) -> bool {
+        let mut refreshed = false;
+        for cells in self.docs.values_mut().filter(|cells| cells.stale) {
+            cells.rows.clear();
+            cells.stale = false;
+            refreshed = true;
+        }
+        refreshed
+    }
+
     /// The map drawn last at the screen cell `column`, `row`.
     pub fn at(&self, column: u16, row: u16) -> Option<&Drawn> {
         self.drawn
@@ -180,21 +195,23 @@ impl Minimaps {
         });
 
         let key = Key {
-            version: doc.version(),
             language: doc.language_name().map(ToOwned::to_owned),
             theme: theme.name().to_owned(),
             tab_width: doc.tab_width(),
             width,
         };
-        let cells = self.docs.entry(doc.id()).or_insert_with(|| Cells {
+        let new = || Cells {
             key: key.clone(),
+            version: doc.version(),
+            text: doc.text().clone(),
             rows: HashMap::new(),
-        });
+            stale: false,
+        };
+        let cells = self.docs.entry(doc.id()).or_insert_with(new);
         if cells.key != key {
-            *cells = Cells {
-                key,
-                rows: HashMap::new(),
-            };
+            *cells = new();
+        } else if cells.version != doc.version() {
+            cells.follow_edit(doc, &rows);
         }
         cells.fill(rows.clone(), doc, styles.text, theme, loader);
 
@@ -251,6 +268,30 @@ impl Minimaps {
 }
 
 impl Cells {
+    /// Keeps what `doc`'s last edits left as it was: while the lines stay the same in number, the
+    /// rows among `rows` none of whose lines changed. They may be colored as they were until a
+    /// [refresh](Minimaps::refresh).
+    fn follow_edit(&mut self, doc: &Document, rows: &Range<usize>) {
+        let (old, new) = (self.text.slice(..), doc.text().slice(..));
+        if old.len_lines() == new.len_lines() {
+            let len = new.len_lines();
+            let changed = |row: usize| {
+                let lines = row * CELL_LINES..((row + 1) * CELL_LINES).min(len);
+                lines
+                    .into_iter()
+                    .any(|line| old.line(line) != new.line(line))
+            };
+            self.rows
+                .retain(|&row, _| rows.contains(&row) && !changed(row));
+            self.stale = true;
+        } else {
+            self.rows.clear();
+            self.stale = false;
+        }
+        self.version = doc.version();
+        self.text = doc.text().clone();
+    }
+
     /// Works out the rows among `rows` not known yet, in one pass of the highlighter.
     fn fill(
         &mut self,
