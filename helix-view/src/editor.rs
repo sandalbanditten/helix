@@ -1439,8 +1439,6 @@ pub struct ScrollbarConfig {
     pub enable: bool,
     /// The least severe diagnostics marked, or `disable`. Defaults to `hint`.
     pub diagnostics: DiagnosticFilter,
-    /// Whether the changes of the diff gutter are marked. Defaults to `true`.
-    pub diff: bool,
     /// Whether the matches of a search are marked while searching. Defaults to `true`.
     pub search: bool,
 }
@@ -1450,7 +1448,6 @@ impl Default for ScrollbarConfig {
         Self {
             enable: false,
             diagnostics: DiagnosticFilter::Enable(Severity::Hint),
-            diff: true,
             search: true,
         }
     }

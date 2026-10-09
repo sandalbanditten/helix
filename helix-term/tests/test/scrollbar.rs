@@ -208,42 +208,41 @@ async fn searches_are_marked_while_searching() -> anyhow::Result<()> {
     session.quit().await
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
-    let file = text_file(".txt", &lines(600))?;
-    let mut session = open(&file, scrollbar_config(true))?;
-    let theme = &session.app.editor.theme;
-    let color = |scope| theme.get(scope).fg.unwrap();
-    let (hint, error, modified) = (color("hint"), color("error"), color("diff.delta.gutter"));
+/// A diagnostic of `severity` at the start of the line `line` of `text`, as from a compilation.
+fn diagnostic(text: &Rope, line: usize, severity: Severity) -> Diagnostic {
+    let start = text.line_to_char(line);
+    Diagnostic {
+        range: helix_core::diagnostic::Range {
+            start,
+            end: start + 4,
+        },
+        line,
+        message: String::new(),
+        severity: Some(severity),
+        code: None,
+        provider: DiagnosticProvider::Compilation,
+        tags: Vec::new(),
+        source: None,
+        data: None,
+        starts_at_word: false,
+        ends_at_word: false,
+        zero_width: false,
+    }
+}
+
+/// Gives the current document diagnostics, each a line and its severity.
+fn set_diagnostics(session: &mut Session, diagnostics: &[(usize, Severity)]) {
     let doc = doc_mut!(session.app.editor);
-    let diagnostic = |line: usize, severity| {
-        let start = doc.text().line_to_char(line);
-        Diagnostic {
-            range: helix_core::diagnostic::Range {
-                start,
-                end: start + 4,
-            },
-            line,
-            message: String::new(),
-            severity: Some(severity),
-            code: None,
-            provider: DiagnosticProvider::Compilation,
-            tags: Vec::new(),
-            source: None,
-            data: None,
-            starts_at_word: false,
-            ends_at_word: false,
-            zero_width: false,
-        }
-    };
-    let diagnostics = [
-        diagnostic(300, Severity::Hint),
-        diagnostic(400, Severity::Error),
-    ];
+    let diagnostics: Vec<_> = diagnostics
+        .iter()
+        .map(|&(line, severity)| diagnostic(doc.text(), line, severity))
+        .collect();
     doc.replace_diagnostics(diagnostics, &[], &DiagnosticProvider::Compilation);
-    // The text differs from its base on line 200.
-    let base = lines(600).replace("line 200\n", "changed\n");
-    doc.set_diff_override(Some(Rope::from(base)));
+}
+
+/// Sets the base the current document's text is diffed against to `base`, and waits for the diff.
+async fn set_diff_base(session: &mut Session, base: &str) {
+    doc_mut!(session.app.editor).set_diff_override(Some(Rope::from(base)));
     session
         .until("the diff", |app| {
             doc!(app.editor)
@@ -251,21 +250,33 @@ async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
                 .is_some_and(|handle| !handle.load().is_empty())
         })
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diagnostics_are_marked_but_not_changes() -> anyhow::Result<()> {
+    let file = text_file(".txt", &lines(600))?;
+    let mut session = open(&file, scrollbar_config(true))?;
+    let theme = &session.app.editor.theme;
+    let color = |scope| theme.get(scope).fg.unwrap();
+    let (hint, error, modified) = (color("hint"), color("error"), color("diff.delta.gutter"));
+    set_diagnostics(
+        &mut session,
+        &[(300, Severity::Hint), (400, Severity::Error)],
+    );
+    // The text differs from its base on line 200, which only minimaps mark.
+    set_diff_base(&mut session, &lines(600).replace("line 200\n", "changed\n")).await;
     // A key draws a frame with the diff.
     session.keys("<esc>").await?;
-    // Lines 200, 300 and 400 are on rows 49, 73 and 98.
+    // Lines 300 and 400 are on rows 73 and 98.
     let app = &session.app;
-    assert_eq!(marked_rows(app, 119, modified), [49]);
+    assert_eq!(marked_rows(app, 119, modified), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, hint), [73]);
     assert_eq!(marked_rows(app, 119, error), [98]);
 
-    // Each `:set` applies to the config the one before made.
     session
         .keys(":set scrollbar.diagnostics warning<ret>")
         .await?;
-    session.keys(":set scrollbar.diff false<ret>").await?;
     let app = &session.app;
-    assert_eq!(marked_rows(app, 119, modified), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, hint), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, error), [98]);
     session.quit().await

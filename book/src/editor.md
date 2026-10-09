@@ -590,17 +590,16 @@ duration = 200
 
 Options for scrollbars on the separators between splits. A split's thumb is a half block on its
 side of the separator to its right, which is a separator at the right edge too, or the one of a
-panel docked there. The thumb spans the lines on screen; marks show where diagnostics, changes
-and the matches of a search are.
+panel docked there. The thumb spans the lines on screen; marks show where diagnostics and the
+matches of a search are.
 
 | Key | Description | Default |
 | --- | --- | --- |
 | `enable` | Whether splits have scrollbars | `false` |
 | `diagnostics` | Minimum severity of diagnostics to mark, or `"disable"` | `"hint"` |
-| `diff` | Whether to mark the changes of the [diff gutter](#editorguttersdiff-section) | `true` |
 | `search` | Whether to mark the matches of a search while searching: typing it and repeating it with `n`, `N` or `*`, until another command | `true` |
 
-Marks have the colors of the diagnostics and diff gutters; matches are highlighted with
+Marks have the colors of the diagnostics gutter; matches are highlighted with
 `ui.scrollbar.search`. With the [mouse](#editor-section), dragging a thumb scrolls its split,
 pressing a separator above or below it scrolls a page, and the wheel scrolls.
 
