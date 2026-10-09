@@ -1,5 +1,5 @@
-//! What the scrollbars of splits mark besides their thumbs: diagnostics, changes and the matches
-//! of the search being made, by the document lines they are on.
+//! What the scrollbars and minimaps of splits mark: diagnostics, the matches of the search being
+//! made and, on minimaps, changes, by the document lines they are on.
 
 use std::ops::Range;
 
@@ -33,6 +33,7 @@ pub enum Change {
 pub struct Filter {
     /// The least severe diagnostics marked.
     pub diagnostics: DiagnosticFilter,
+    /// Whether changes are marked, which only minimaps do.
     pub changes: bool,
     pub search: bool,
 }
@@ -41,7 +42,7 @@ impl From<&ScrollbarConfig> for Filter {
     fn from(config: &ScrollbarConfig) -> Self {
         Self {
             diagnostics: config.diagnostics,
-            changes: config.diff,
+            changes: false,
             search: config.search,
         }
     }

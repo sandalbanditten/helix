@@ -208,42 +208,41 @@ async fn searches_are_marked_while_searching() -> anyhow::Result<()> {
     session.quit().await
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
-    let file = text_file(".txt", &lines(600))?;
-    let mut session = open(&file, scrollbar_config(true))?;
-    let theme = &session.app.editor.theme;
-    let color = |scope| theme.get(scope).fg.unwrap();
-    let (hint, error, modified) = (color("hint"), color("error"), color("diff.delta.gutter"));
+/// A diagnostic of `severity` at the start of the line `line` of `text`, as from a compilation.
+fn diagnostic(text: &Rope, line: usize, severity: Severity) -> Diagnostic {
+    let start = text.line_to_char(line);
+    Diagnostic {
+        range: helix_core::diagnostic::Range {
+            start,
+            end: start + 4,
+        },
+        line,
+        message: String::new(),
+        severity: Some(severity),
+        code: None,
+        provider: DiagnosticProvider::Compilation,
+        tags: Vec::new(),
+        source: None,
+        data: None,
+        starts_at_word: false,
+        ends_at_word: false,
+        zero_width: false,
+    }
+}
+
+/// Gives the current document diagnostics, each a line and its severity.
+fn set_diagnostics(session: &mut Session, diagnostics: &[(usize, Severity)]) {
     let doc = doc_mut!(session.app.editor);
-    let diagnostic = |line: usize, severity| {
-        let start = doc.text().line_to_char(line);
-        Diagnostic {
-            range: helix_core::diagnostic::Range {
-                start,
-                end: start + 4,
-            },
-            line,
-            message: String::new(),
-            severity: Some(severity),
-            code: None,
-            provider: DiagnosticProvider::Compilation,
-            tags: Vec::new(),
-            source: None,
-            data: None,
-            starts_at_word: false,
-            ends_at_word: false,
-            zero_width: false,
-        }
-    };
-    let diagnostics = [
-        diagnostic(300, Severity::Hint),
-        diagnostic(400, Severity::Error),
-    ];
+    let diagnostics: Vec<_> = diagnostics
+        .iter()
+        .map(|&(line, severity)| diagnostic(doc.text(), line, severity))
+        .collect();
     doc.replace_diagnostics(diagnostics, &[], &DiagnosticProvider::Compilation);
-    // The text differs from its base on line 200.
-    let base = lines(600).replace("line 200\n", "changed\n");
-    doc.set_diff_override(Some(Rope::from(base)));
+}
+
+/// Sets the base the current document's text is diffed against to `base`, and waits for the diff.
+async fn set_diff_base(session: &mut Session, base: &str) {
+    doc_mut!(session.app.editor).set_diff_override(Some(Rope::from(base)));
     session
         .until("the diff", |app| {
             doc!(app.editor)
@@ -251,21 +250,33 @@ async fn diagnostics_and_changes_are_marked() -> anyhow::Result<()> {
                 .is_some_and(|handle| !handle.load().is_empty())
         })
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diagnostics_are_marked_but_not_changes() -> anyhow::Result<()> {
+    let file = text_file(".txt", &lines(600))?;
+    let mut session = open(&file, scrollbar_config(true))?;
+    let theme = &session.app.editor.theme;
+    let color = |scope| theme.get(scope).fg.unwrap();
+    let (hint, error, modified) = (color("hint"), color("error"), color("diff.delta.gutter"));
+    set_diagnostics(
+        &mut session,
+        &[(300, Severity::Hint), (400, Severity::Error)],
+    );
+    // The text differs from its base on line 200, which only minimaps mark.
+    set_diff_base(&mut session, &lines(600).replace("line 200\n", "changed\n")).await;
     // A key draws a frame with the diff.
     session.keys("<esc>").await?;
-    // Lines 200, 300 and 400 are on rows 49, 73 and 98.
+    // Lines 300 and 400 are on rows 73 and 98.
     let app = &session.app;
-    assert_eq!(marked_rows(app, 119, modified), [49]);
+    assert_eq!(marked_rows(app, 119, modified), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, hint), [73]);
     assert_eq!(marked_rows(app, 119, error), [98]);
 
-    // Each `:set` applies to the config the one before made.
     session
         .keys(":set scrollbar.diagnostics warning<ret>")
         .await?;
-    session.keys(":set scrollbar.diff false<ret>").await?;
     let app = &session.app;
-    assert_eq!(marked_rows(app, 119, modified), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, hint), [0u16; 0]);
     assert_eq!(marked_rows(app, 119, error), [98]);
     session.quit().await
@@ -373,6 +384,7 @@ mod mouse {
         let file = text_file(".txt", &lines(2000))?;
         let mut config = test_config();
         config.editor.minimap.enable = true;
+        config.editor.minimap.lines_per_dot = std::num::NonZeroU8::MIN;
         let mut session = open(&file, config)?;
         session.keys("").await?;
         // Row 100 of the map stands for lines 400..404: the view centers on them.
@@ -396,17 +408,70 @@ mod mouse {
 }
 
 mod minimap {
-    use helix_view::{current_ref, editor::MinimapConfig};
+    use std::num::NonZeroU8;
+
+    use helix_view::{current_ref, editor::MinimapConfig, graphics::UnderlineStyle};
 
     use super::*;
 
+    /// Minimaps at a line a dot: a cell for 4 lines.
     fn minimap_config() -> Config {
         let mut config = test_config();
         config.editor.minimap = MinimapConfig {
             enable: true,
+            lines_per_dot: NonZeroU8::MIN,
             ..Default::default()
         };
         config
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maps_take_two_lines_a_dot_by_default() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(300))?;
+        let mut config = test_config();
+        config.editor.minimap.enable = true;
+        let mut session = open(&file, config)?;
+        session.keys("").await?;
+        // 301 lines in 38 rows of cells, 8 lines each; the last has lines 296..=300, and the map
+        // ends there.
+        let app = &session.app;
+        let column: Vec<_> = (0..40).map(|y| symbols(app, 108, y, 1)).collect();
+        assert!(column[..37].iter().all(|cell| cell == "⣿"), "{column:?}");
+        assert_eq!(column[37..], ["⠛", " ", " "]);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cursors_errors_and_warnings_underline_their_rows() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, minimap_config())?;
+        let theme = &session.app.editor.theme;
+        let color = |scope| theme.get(scope).fg.unwrap();
+        let (error, warning) = (color("error"), color("warning"));
+        set_diagnostics(
+            &mut session,
+            &[
+                (20, Severity::Error),
+                (40, Severity::Warning),
+                (60, Severity::Hint),
+            ],
+        );
+        session.keys("<esc>").await?;
+        let underline = |app: &Application, y| {
+            let cell = &app.screen()[(108, y)];
+            (cell.underline_style == UnderlineStyle::Line).then_some(cell.underline_color)
+        };
+        // The cursor's row in gray, the error's and the warning's in theirs; hints only tint.
+        let app = &session.app;
+        assert_eq!(underline(app, 0), Some(Color::Gray));
+        assert_eq!(underline(app, 5), Some(error));
+        assert_eq!(underline(app, 10), Some(warning));
+        assert_eq!(underline(app, 15), None);
+        // On the cursor's row, the error's line wins.
+        session.keys("21gg").await?;
+        assert_eq!(underline(&session.app, 5), Some(error));
+        assert_eq!(underline(&session.app, 0), None);
+        session.quit().await
     }
 
     /// The symbols of the screen row `y` from the column `x` on, `count` of them.

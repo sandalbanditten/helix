@@ -1439,8 +1439,6 @@ pub struct ScrollbarConfig {
     pub enable: bool,
     /// The least severe diagnostics marked, or `disable`. Defaults to `hint`.
     pub diagnostics: DiagnosticFilter,
-    /// Whether the changes of the diff gutter are marked. Defaults to `true`.
-    pub diff: bool,
     /// Whether the matches of a search are marked while searching. Defaults to `true`.
     pub search: bool,
 }
@@ -1450,7 +1448,6 @@ impl Default for ScrollbarConfig {
         Self {
             enable: false,
             diagnostics: DiagnosticFilter::Enable(Severity::Hint),
-            diff: true,
             search: true,
         }
     }
@@ -1463,8 +1460,10 @@ impl Default for ScrollbarConfig {
 pub struct MinimapConfig {
     /// Whether splits show minimaps. Defaults to `false`.
     pub enable: bool,
-    /// The braille cells of a row, each for 8 columns of 4 lines. Defaults to `12`.
+    /// The braille cells of a row, each 8 columns wide. Defaults to `12`.
     pub width: u16,
+    /// The lines a row of dots stands for; a cell has four rows. Defaults to `2`.
+    pub lines_per_dot: NonZeroU8,
 }
 
 impl Default for MinimapConfig {
@@ -1472,6 +1471,7 @@ impl Default for MinimapConfig {
         Self {
             enable: false,
             width: 12,
+            lines_per_dot: NonZeroU8::new(2).unwrap(),
         }
     }
 }

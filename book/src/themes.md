@@ -365,6 +365,7 @@ These scopes are used for theming the editor interface:
 | `ui.minimap`                      | Minimaps (see the [`editor.minimap` config][editor-section])                                   |
 | `ui.minimap.viewport`             | `bg` shades the lines on screen in a minimap                                                   |
 | `ui.minimap.search`               | Matches of a search in minimaps                                                                |
+| `ui.minimap.cursor`               | Underline of the cursor's lines in a minimap, gray if unset                                    |
 | `ui.file-tree`                    | The [file tree](./file-tree.md)                                                                |
 | `ui.file-tree.selected`           | The file tree's cursor row                                                                     |
 | `ui.file-tree.active`             | The file tree's row of the current file                                                        |
