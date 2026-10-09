@@ -23,6 +23,7 @@
   - [Auto-reload](./auto-reload.md)
   - [Undo tree](./undo-tree.md)
   - [Diff view](./diff-view.md)
+  - [Pager](./pager.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)
