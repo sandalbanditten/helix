@@ -19,5 +19,17 @@ export MANPAGER='hx -p'
 git config --global core.pager 'hx -p'
 ```
 
+Man pages, which start with their title at both ends of the first line, get colors for their
+parts too, like `bat` gives them:
+
+| Part | Theme scope |
+| --- | --- |
+| Title, footer and headings | `markup.heading` |
+| Options, like `-a` and `--all` | `constant` |
+| Arguments, the text man underlines or italicizes | `variable.parameter` |
+| References, like `stat(2)` | `function`, and `constant.numeric` for the section |
+| Links | `markup.link.url` |
+| Environment variables, like `$HOME` | `variable.builtin` |
+
 Man pages are formatted to the width of the terminal. Set `MANWIDTH` to a smaller width, like `80`,
 to fit them beside the gutter.
