@@ -14,6 +14,7 @@ pub mod menu;
 mod minimap;
 pub mod overlay;
 mod overview;
+mod pager;
 mod panel_keys;
 pub mod picker;
 pub mod popup;

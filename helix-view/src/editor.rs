@@ -2722,6 +2722,10 @@ impl Editor {
                 self.syn_loader.clone(),
             );
             doc.page();
+            // Shown by `man`, the page can be formatted again to fit the view.
+            if let Some(page) = doc.page.as_mut().filter(|page| !page.man.is_empty()) {
+                page.man_page = crate::pager::ManPage::from_env();
+            }
             return Ok(self.new_file_from_document(action, doc));
         }
         let doc = Document::from(
@@ -2740,6 +2744,42 @@ impl Editor {
         doc.apply(&transaction, view.id);
         doc.append_changes_to_history(view);
         Ok(doc_id)
+    }
+
+    /// Shows `output` in place of the text of the pager document `doc_id`, the way
+    /// [`Document::page`] does, with the views showing it at the same share of the text.
+    pub fn repage(&mut self, doc_id: DocumentId, output: &str) {
+        let Some(doc) = self.documents.get_mut(&doc_id) else {
+            return;
+        };
+        let text = doc.text().slice(..);
+        let len = text.len_lines();
+        let lines: Vec<_> = self
+            .tree
+            .views()
+            .filter(|(view, _)| view.doc == doc_id)
+            .map(|(view, _)| {
+                let first =
+                    text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars()));
+                let cursor = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+                (view.id, first, cursor)
+            })
+            .collect();
+        doc.repage(output);
+        self.reset_history(doc_id);
+        let doc = doc_mut!(self, &doc_id);
+        let text = doc.text().clone();
+        let at = |line: usize| text.line_to_char(line * text.len_lines() / len.max(1));
+        for (view, first, cursor) in lines {
+            doc.set_selection(view, Selection::point(at(cursor)));
+            doc.set_view_offset(
+                view,
+                crate::view::ViewPosition {
+                    anchor: at(first),
+                    ..crate::view::ViewPosition::default()
+                },
+            );
+        }
     }
 
     pub fn document_id_by_path(&self, path: &Path) -> Option<DocumentId> {

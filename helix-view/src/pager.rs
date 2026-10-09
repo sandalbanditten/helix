@@ -18,6 +18,48 @@ pub struct Page {
     pub styles: Vec<(Range<usize>, Style)>,
     /// The parts of a man page with colors of their own, in order and apart, if the text is one.
     pub man: Vec<(Range<usize>, ManPart)>,
+    /// The man page `man` showed in the pager, which is formatted again to fit the view.
+    pub man_page: Option<ManPage>,
+}
+
+/// A man page `man` showed in the pager, formatted for the width of the view showing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManPage {
+    /// The page, as `man` names it to its pager in `MAN_PN`: like `ls(1)`, or a file.
+    pub name: String,
+    /// The width the text is formatted for, once the view's is known.
+    pub width: Option<u16>,
+    /// The width the text is being formatted for.
+    pub formatting: Option<u16>,
+}
+
+impl ManPage {
+    /// The page `man` is showing in the pager it started, if any.
+    pub fn from_env() -> Option<Self> {
+        let name = std::env::var("MAN_PN")
+            .ok()
+            .filter(|name| !name.is_empty())?;
+        Some(Self {
+            name,
+            width: None,
+            formatting: None,
+        })
+    }
+
+    /// The arguments for `man` to show the page.
+    pub fn args(&self) -> Vec<String> {
+        let name = &self.name;
+        if name.contains('/') {
+            return vec!["-l".to_owned(), name.clone()];
+        }
+        match name
+            .strip_suffix(')')
+            .and_then(|name| name.rsplit_once('('))
+        {
+            Some((page, section)) => vec![section.to_owned(), page.to_owned()],
+            None => vec![name.clone()],
+        }
+    }
 }
 
 /// A part of a man page with a color of its own.
@@ -231,7 +273,7 @@ pub fn format(output: &str) -> (String, Page) {
     }
     let page = Page {
         styles: text.styles,
-        man: Vec::new(),
+        ..Page::default()
     };
     (text.text, page)
 }
@@ -354,5 +396,18 @@ mod tests {
             .collect();
         assert_eq!(parts, expected);
         assert!(!is_man_page("commit 74c2ff7\nAuthor: someone\n"));
+    }
+
+    #[test]
+    fn man_pages_name_their_arguments() {
+        let page = |name: &str| ManPage {
+            name: name.to_owned(),
+            width: None,
+            formatting: None,
+        };
+        assert_eq!(page("ls(1)").args(), ["1", "ls"]);
+        assert_eq!(page("git-log(1)").args(), ["1", "git-log"]);
+        assert_eq!(page("./ls.1").args(), ["-l", "./ls.1"]);
+        assert_eq!(page("ls").args(), ["ls"]);
     }
 }

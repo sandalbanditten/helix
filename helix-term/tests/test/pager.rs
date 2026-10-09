@@ -119,3 +119,30 @@ async fn man_pages_have_colors_for_their_parts() -> anyhow::Result<()> {
     assert_eq!(cell_of(app, "stat").fg, color("function"));
     session.quit().await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
+    let page = |lines: usize| -> String {
+        let mut page = String::from("LS(1)        User Commands        LS(1)\n");
+        page.extend((1..lines).map(|i| format!("       line {i}\n")));
+        page
+    };
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile_in(env!("CARGO_TARGET_TMPDIR"))?;
+    file.write_all(page(200).as_bytes())?;
+    let mut session = pager(&file)?;
+    // The cursor halfway, then the page formatted narrower, in twice the lines.
+    session.keys("100gg").await?;
+    let doc = doc!(session.app.editor).id();
+    session.app.editor.repage(doc, &page(400));
+    session.keys("").await?;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    let text = doc.text().slice(..);
+    assert_eq!(text.len_lines(), 401);
+    let cursor = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+    assert!((195..=202).contains(&cursor), "{cursor}");
+    assert!(!doc.is_modified());
+    assert!(!doc.page.as_ref().unwrap().man.is_empty());
+    session.quit().await
+}

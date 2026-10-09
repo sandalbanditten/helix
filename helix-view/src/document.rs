@@ -2145,6 +2145,24 @@ impl Document {
         self.page = Some(Box::new(page));
     }
 
+    /// Shows `output` in place of the text of a document in a pager, as [`page`](Self::page)
+    /// does, keeping its man page. The selections of views are left for the caller to set.
+    pub(crate) fn repage(&mut self, output: &str) {
+        let man_page = self.page.as_mut().and_then(|page| page.man_page.take());
+        self.text = Rope::from(output);
+        if !crate::pager::is_formatted(output) {
+            // Formatting takes the syntax tree along, plain text doesn't.
+            let loader = self.syn_loader.load();
+            self.set_language(self.language.clone(), &loader);
+        }
+        self.page();
+        if let Some(page) = &mut self.page {
+            page.man_page = man_page;
+        }
+        // Frames drawn of the text before are not of this one.
+        self.version += 1;
+    }
+
     pub fn is_modified(&self) -> bool {
         if self.compilation.is_some() {
             return false;

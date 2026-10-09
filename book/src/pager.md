@@ -31,5 +31,6 @@ parts too, like `bat` gives them:
 | Links | `markup.link.url` |
 | Environment variables, like `$HOME` | `variable.builtin` |
 
-Man pages are formatted to the width of the terminal. Set `MANWIDTH` to a smaller width, like `80`,
-to fit them beside the gutter.
+A man page that `man` shows in `hx -p` is formatted again to fit the text of the view, the way
+Neovim's `:Man` does: when it opens, and whenever the view gets wider or narrower. `MANWIDTH`, if
+set, is the widest it gets. This needs `man-db`, which tells the pager the page it shows.

@@ -2210,6 +2210,7 @@ impl Component for EditorView {
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
         super::compilation::follow_size(cx.editor);
+        super::pager::fit_man_pages(cx.editor);
         self.diff_view.follow_size(cx.editor);
         cx.editor.update_smooth_scroll();
         self.diff_view.follow_frame(cx.editor);
