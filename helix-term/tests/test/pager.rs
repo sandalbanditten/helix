@@ -146,3 +146,32 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     assert!(!doc.page.as_ref().unwrap().man.is_empty());
     session.quit().await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn man_keys_of_themes_win_over_their_fallbacks() -> anyhow::Result<()> {
+    let page =
+        "LS(1)        User Commands        LS(1)\n\nNAME\n       -\x08--\x08-a\x08al\x08ll\x08l\n";
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile_in(env!("CARGO_TARGET_TMPDIR"))?;
+    file.write_all(page.as_bytes())?;
+    let mut session = pager(&file)?;
+    let theme: toml::Value = toml::from_str(
+        r##"
+        "constant" = "green"
+        "man.option" = "red"
+        "markup.heading" = "blue"
+        "ui.selection" = { bg = "gray" }
+        "##,
+    )?;
+    session
+        .app
+        .editor
+        .set_theme(helix_view::Theme::from(theme))?;
+    session.keys("").await?;
+    let app = &session.app;
+    assert_eq!(cell_of(app, "--all").fg, Color::Red);
+    // Without a key of their own, headings take `markup.heading`.
+    assert_eq!(cell_of(app, "NAME").fg, Color::Blue);
+    session.quit().await
+}

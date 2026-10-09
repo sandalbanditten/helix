@@ -65,7 +65,9 @@ impl ManPage {
 /// A part of a man page with a color of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManPart {
-    /// The title and footer lines, and the headings of sections.
+    /// The title and footer lines.
+    Title,
+    /// The heading of a section.
     Heading,
     /// A command-line option, like `-a` or `--all`.
     Option,
@@ -81,10 +83,24 @@ pub enum ManPart {
 }
 
 impl ManPart {
-    /// The theme scope the part is highlighted with.
+    /// The theme key of the part, like `man.heading`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Title => "man.title",
+            Self::Heading => "man.heading",
+            Self::Option => "man.option",
+            Self::Argument => "man.argument",
+            Self::Reference => "man.reference",
+            Self::Section => "man.section",
+            Self::Url => "man.link",
+            Self::Variable => "man.variable",
+        }
+    }
+
+    /// The theme scope the part falls back to without a [key](Self::key) in the theme.
     pub fn scope(self) -> &'static str {
         match self {
-            Self::Heading => "markup.heading",
+            Self::Title | Self::Heading => "markup.heading",
             Self::Option => "constant",
             Self::Argument => "variable.parameter",
             Self::Reference => "function",
@@ -141,7 +157,12 @@ pub fn man_parts(text: &str, styles: &[(Range<usize>, Style)]) -> Vec<(Range<usi
         let indent = content.chars().take_while(|c| c.is_whitespace()).count();
         if !content.is_empty() && (is_title_line || indent == 0 || indent == 3) {
             let heading = start + indent..start + content.chars().count();
-            parts.push((heading, ManPart::Heading));
+            let part = if is_title_line {
+                ManPart::Title
+            } else {
+                ManPart::Heading
+            };
+            parts.push((heading, part));
         } else {
             parts.extend(line_parts(line, start, styles));
         }
@@ -373,7 +394,7 @@ mod tests {
             })
             .collect();
         let expected = [
-            ("LS(1)       User Commands       LS(1)", ManPart::Heading),
+            ("LS(1)       User Commands       LS(1)", ManPart::Title),
             ("NAME", ManPart::Heading),
             ("SYNOPSIS", ManPart::Heading),
             ("OPT", ManPart::Argument),
@@ -385,10 +406,7 @@ mod tests {
             ("https://gnu.org/ls", ManPart::Url),
             ("$LS_COLORS", ManPart::Variable),
             ("Exit status:", ManPart::Heading),
-            (
-                "GNU coreutils 9.5     2024-03-28     LS(1)",
-                ManPart::Heading,
-            ),
+            ("GNU coreutils 9.5     2024-03-28     LS(1)", ManPart::Title),
         ];
         let expected: Vec<_> = expected
             .into_iter()

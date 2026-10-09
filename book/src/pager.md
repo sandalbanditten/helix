@@ -22,14 +22,16 @@ git config --global core.pager 'hx -p'
 Man pages, which start with their title at both ends of the first line, get colors for their
 parts too, like `bat` gives them:
 
-| Part | Theme scope |
-| --- | --- |
-| Title, footer and headings | `markup.heading` |
-| Options, like `-a` and `--all` | `constant` |
-| Arguments, the text man underlines or italicizes | `variable.parameter` |
-| References, like `stat(2)` | `function`, and `constant.numeric` for the section |
-| Links | `markup.link.url` |
-| Environment variables, like `$HOME` | `variable.builtin` |
+| Part | Theme key | Falls back to |
+| --- | --- | --- |
+| Title and footer | `man.title` | `markup.heading` |
+| Headings | `man.heading` | `markup.heading` |
+| Options, like `-a` and `--all` | `man.option` | `constant` |
+| Arguments, the text man underlines or italicizes | `man.argument` | `variable.parameter` |
+| References, like `stat(2)` | `man.reference` | `function` |
+| The section of a reference | `man.section` | `constant.numeric` |
+| Links | `man.link` | `markup.link.url` |
+| Environment variables, like `$HOME` | `man.variable` | `variable.builtin` |
 
 A man page that `man` shows in `hx -p` is formatted again to fit the text of the view, the way
 Neovim's `:Man` does: when it opens, and whenever the view gets wider or narrower. `MANWIDTH`, if

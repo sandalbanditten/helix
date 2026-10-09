@@ -426,6 +426,14 @@ These scopes are used for theming the editor interface:
 | `diff.minus.line`                 | Removed lines in the diff view                                                                 |
 | `diff.minus.text`                 | The text that changed within removed lines                                                     |
 | `diff.filler`                     | Filler rows in the diff view; `fg` colors the filler character                                 |
+| `man.title`                       | The title and footer of a man page in the [pager](./pager.md)                                  |
+| `man.heading`                     | Headings of a man page                                                                         |
+| `man.option`                      | Options in a man page, like `-a` and `--all`                                                   |
+| `man.argument`                    | Arguments in a man page, the text it underlines                                                |
+| `man.reference`                   | References to man pages, like `stat` of `stat(2)`                                              |
+| `man.section`                     | The section of a reference, like `2` of `stat(2)`                                              |
+| `man.link`                        | Links in a man page                                                                            |
+| `man.variable`                    | Environment variables in a man page, like `$HOME`                                              |
 
 [editor-section]: ./configuration.md#editor-section
 [#2380]: https://github.com/helix-editor/helix/issues/2380

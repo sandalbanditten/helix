@@ -714,7 +714,8 @@ impl EditorView {
         })
     }
 
-    /// The colors of the parts of a man page shown in a pager, among the chars `shown`.
+    /// The colors of the parts of a man page shown in a pager, among the chars `shown`: those of
+    /// their `man.*` keys in the theme, or of the scopes they fall back to.
     pub fn doc_man_highlights(
         doc: &Document,
         shown: ops::Range<usize>,
@@ -725,7 +726,12 @@ impl EditorView {
             ..parts.partition_point(|(range, _)| range.start < shown.end)];
         let highlights: Vec<_> = parts
             .iter()
-            .filter_map(|(range, part)| Some((theme.find_highlight(part.scope())?, range.clone())))
+            .filter_map(|(range, part)| {
+                let highlight = theme
+                    .find_highlight(part.key())
+                    .or_else(|| theme.find_highlight(part.scope()))?;
+                Some((highlight, range.clone()))
+            })
             .collect();
         (!highlights.is_empty()).then_some(OverlayHighlights::Heterogenous { highlights })
     }
