@@ -98,3 +98,24 @@ async fn every_file_of_a_pager_session_is_paged() -> anyhow::Result<()> {
     assert!(!doc.is_modifiable());
     session.quit().await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn man_pages_have_colors_for_their_parts() -> anyhow::Result<()> {
+    let page = "LS(1)        User Commands        LS(1)\n\nN\x08NA\x08AM\x08ME\x08E\n       ls - list\n\n       -\x08--\x08-a\x08al\x08ll\x08l\n              see stat(2)\n";
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile_in(env!("CARGO_TARGET_TMPDIR"))?;
+    file.write_all(page.as_bytes())?;
+    let mut session = pager(&file)?;
+    session.keys("").await?;
+    let app = &session.app;
+    let color = |scope| app.editor.theme.get(scope).fg.unwrap();
+    assert_eq!(cell_of(app, "NAME").fg, color("markup.heading"));
+    let option = cell_of(app, "--all");
+    assert_eq!(option.fg, color("constant"));
+    assert!(option
+        .modifier
+        .contains(helix_view::graphics::Modifier::BOLD));
+    assert_eq!(cell_of(app, "stat").fg, color("function"));
+    session.quit().await
+}

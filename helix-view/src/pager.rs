@@ -1,7 +1,10 @@
 //! Documents shown as a pager shows terminal output, like `less -R`: their escape sequences and
-//! overstrikes become styles, and nothing edits them.
+//! overstrikes become styles, and nothing edits them. Man pages get colors for their parts too,
+//! like bat and Neovim give them.
 
-use std::ops::Range;
+use std::{ops::Range, sync::LazyLock};
+
+use helix_core::regex::Regex;
 
 use crate::{
     graphics::{Modifier, Style, UnderlineStyle},
@@ -13,6 +16,152 @@ use crate::{
 pub struct Page {
     /// The styles of char ranges of the text, in order and apart; other chars have none.
     pub styles: Vec<(Range<usize>, Style)>,
+    /// The parts of a man page with colors of their own, in order and apart, if the text is one.
+    pub man: Vec<(Range<usize>, ManPart)>,
+}
+
+/// A part of a man page with a color of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManPart {
+    /// The title and footer lines, and the headings of sections.
+    Heading,
+    /// A command-line option, like `-a` or `--all`.
+    Option,
+    /// What to write in place of a word: the text man underlines or italicizes.
+    Argument,
+    /// The page a reference like `stat(2)` names.
+    Reference,
+    /// The section of a reference.
+    Section,
+    Url,
+    /// An environment variable, like `$HOME`.
+    Variable,
+}
+
+impl ManPart {
+    /// The theme scope the part is highlighted with.
+    pub fn scope(self) -> &'static str {
+        match self {
+            Self::Heading => "markup.heading",
+            Self::Option => "constant",
+            Self::Argument => "variable.parameter",
+            Self::Reference => "function",
+            Self::Section => "constant.numeric",
+            Self::Url => "markup.link.url",
+            Self::Variable => "variable.builtin",
+        }
+    }
+}
+
+/// The title of a man page, like `LS(1)`, at both ends of its first line.
+static TITLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(\S+\([^)\s]+\))\s.*\s(\S+\([^)\s]+\))\s*$").unwrap());
+static URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s<>()\[\]]+[^\s<>()\[\].,;:]").unwrap());
+static REFERENCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Za-z0-9_][A-Za-z0-9_.:+-]*)\((\d[a-z]*)\)").unwrap());
+static OPTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[\s\[|,(])(--?[A-Za-z0-9][A-Za-z0-9_-]*)").unwrap());
+static VARIABLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?").unwrap());
+
+/// Whether `text` is a man page: whether its first line has its title at both ends.
+pub fn is_man_page(text: &str) -> bool {
+    let first = text.lines().find(|line| !line.trim().is_empty());
+    first
+        .and_then(|line| TITLE.captures(line))
+        .is_some_and(|title| title[1] == title[2])
+}
+
+/// The parts of the man page `text` with colors of their own. Arguments are the text that
+/// `styles` underlines or italicizes, as man writes them.
+pub fn man_parts(text: &str, styles: &[(Range<usize>, Style)]) -> Vec<(Range<usize>, ManPart)> {
+    let title = text
+        .lines()
+        .find_map(|line| TITLE.captures(line))
+        .map(|title| title[1].to_owned());
+    let last = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, _)| index)
+        .last();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (index, line) in text.lines().enumerate() {
+        let chars = line.chars().count();
+        let content = line.trim_end();
+        let is_title_line = parts.is_empty() && TITLE.is_match(content)
+            || Some(index) == last
+                && title
+                    .as_deref()
+                    .is_some_and(|title| content.ends_with(title));
+        let indent = content.chars().take_while(|c| c.is_whitespace()).count();
+        if !content.is_empty() && (is_title_line || indent == 0 || indent == 3) {
+            let heading = start + indent..start + content.chars().count();
+            parts.push((heading, ManPart::Heading));
+        } else {
+            parts.extend(line_parts(line, start, styles));
+        }
+        // The line break, which `lines` leaves out.
+        start += chars + 1;
+    }
+    parts
+}
+
+/// The parts of the line `line` of a man page, which starts at the char `start`.
+fn line_parts(
+    line: &str,
+    start: usize,
+    styles: &[(Range<usize>, Style)],
+) -> Vec<(Range<usize>, ManPart)> {
+    let char_at = |byte: usize| start + line[..byte].chars().count();
+    let mut found = Vec::new();
+    // In order of precedence, where they overlap.
+    found.extend(URL.find_iter(line).map(|url| (url.range(), ManPart::Url)));
+    for reference in REFERENCE.captures_iter(line) {
+        let (name, section) = (reference.get(1).unwrap(), reference.get(2).unwrap());
+        found.push((name.range(), ManPart::Reference));
+        found.push((section.range(), ManPart::Section));
+    }
+    found.extend(
+        OPTION
+            .captures_iter(line)
+            .map(|option| (option.get(1).unwrap().range(), ManPart::Option)),
+    );
+    found.extend(
+        VARIABLE
+            .find_iter(line)
+            .map(|variable| (variable.range(), ManPart::Variable)),
+    );
+    let mut parts: Vec<(Range<usize>, ManPart)> = Vec::new();
+    for (bytes, part) in found {
+        let range = char_at(bytes.start)..char_at(bytes.end);
+        if !parts.iter().any(|(kept, _)| overlap(kept, &range)) {
+            parts.push((range, part));
+        }
+    }
+    // Underlined or italic text, as far as the other parts leave it.
+    let end = start + line.chars().count();
+    let arguments = styles
+        .iter()
+        .skip_while(|(range, _)| range.end <= start)
+        .take_while(|(range, _)| range.start < end)
+        .filter(|(_, style)| {
+            style.underline_style.is_some() || style.add_modifier.contains(Modifier::ITALIC)
+        })
+        .map(|(range, _)| range.start.max(start)..range.end.min(end));
+    for range in arguments {
+        if !parts.iter().any(|(kept, _)| overlap(kept, &range)) {
+            parts.push((range, ManPart::Argument));
+        }
+    }
+    parts.sort_by_key(|(range, _)| range.start);
+    parts
+}
+
+fn overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
 }
 
 /// Whether `output` has formatting for [`format`] to take out.
@@ -82,6 +231,7 @@ pub fn format(output: &str) -> (String, Page) {
     }
     let page = Page {
         styles: text.styles,
+        man: Vec::new(),
     };
     (text.text, page)
 }
@@ -166,5 +316,43 @@ mod tests {
         assert_eq!(format("\x1b(Bplain\x1b=").0, "plain");
         assert!(!is_formatted("plain\ttext\n"));
         assert!(is_formatted("a\x08a"));
+    }
+
+    #[test]
+    fn man_pages_have_parts() {
+        let output = "LS(1)       User Commands       LS(1)\n\nNAME\n       ls - list directory contents\n\nSYNOPSIS\n       ls [_\x08O_\x08P_\x08T]... [_\x08F]...\n\n       -a, --all\n              see stat(2), https://gnu.org/ls, or $LS_COLORS.\n   Exit status:\n       0      if OK,\n\nGNU coreutils 9.5     2024-03-28     LS(1)\n";
+        let (text, page) = format(output);
+        assert!(is_man_page(&text));
+        let parts: Vec<_> = man_parts(&text, &page.styles)
+            .into_iter()
+            .map(|(range, part)| {
+                let part_text: String = text.chars().skip(range.start).take(range.len()).collect();
+                (part_text, part)
+            })
+            .collect();
+        let expected = [
+            ("LS(1)       User Commands       LS(1)", ManPart::Heading),
+            ("NAME", ManPart::Heading),
+            ("SYNOPSIS", ManPart::Heading),
+            ("OPT", ManPart::Argument),
+            ("F", ManPart::Argument),
+            ("-a", ManPart::Option),
+            ("--all", ManPart::Option),
+            ("stat", ManPart::Reference),
+            ("2", ManPart::Section),
+            ("https://gnu.org/ls", ManPart::Url),
+            ("$LS_COLORS", ManPart::Variable),
+            ("Exit status:", ManPart::Heading),
+            (
+                "GNU coreutils 9.5     2024-03-28     LS(1)",
+                ManPart::Heading,
+            ),
+        ];
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(text, part)| (text.to_owned(), part))
+            .collect();
+        assert_eq!(parts, expected);
+        assert!(!is_man_page("commit 74c2ff7\nAuthor: someone\n"));
     }
 }

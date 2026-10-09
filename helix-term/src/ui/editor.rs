@@ -278,6 +278,11 @@ impl EditorView {
         if let Some(overlay) = Self::doc_document_link_highlights(doc, theme) {
             overlays.push(overlay);
         }
+        let shown = view_offset.anchor
+            ..text.line_to_char((first + inner.height as usize + 1).min(text.len_lines()));
+        if let Some(overlay) = Self::doc_man_highlights(doc, shown, theme) {
+            overlays.push(overlay);
+        }
 
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
@@ -707,6 +712,22 @@ impl EditorView {
             highlight,
             ranges: ranges.to_vec(),
         })
+    }
+
+    /// The colors of the parts of a man page shown in a pager, among the chars `shown`.
+    pub fn doc_man_highlights(
+        doc: &Document,
+        shown: ops::Range<usize>,
+        theme: &Theme,
+    ) -> Option<OverlayHighlights> {
+        let parts = &doc.page.as_ref()?.man;
+        let parts = &parts[parts.partition_point(|(range, _)| range.end <= shown.start)
+            ..parts.partition_point(|(range, _)| range.start < shown.end)];
+        let highlights: Vec<_> = parts
+            .iter()
+            .filter_map(|(range, part)| Some((theme.find_highlight(part.scope())?, range.clone())))
+            .collect();
+        (!highlights.is_empty()).then_some(OverlayHighlights::Heterogenous { highlights })
     }
 
     pub fn doc_document_link_highlights(

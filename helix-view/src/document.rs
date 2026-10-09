@@ -2126,17 +2126,20 @@ impl Document {
     }
 
     /// Shows the document as a pager does: the formatting of terminal output in its text, like
-    /// colors and overstrikes, as styles, and no edits. For a document no view shows yet.
+    /// colors and overstrikes, as styles, the parts of a man page in colors of their own, and no
+    /// edits. For a document no view shows yet.
     pub fn page(&mut self) {
         let mut page = crate::pager::Page::default();
-        let output = self.text.to_string();
-        if crate::pager::is_formatted(&output) {
-            let text;
-            (text, page) = crate::pager::format(&output);
-            self.text = Rope::from(text);
+        let mut text = self.text.to_string();
+        if crate::pager::is_formatted(&text) {
+            (text, page) = crate::pager::format(&text);
+            self.text = Rope::from(text.as_str());
             // The syntax tree was of the formatted text.
             let loader = self.syn_loader.load();
             self.set_language(self.language.clone(), &loader);
+        }
+        if crate::pager::is_man_page(&text) {
+            page.man = crate::pager::man_parts(&text, &page.styles);
         }
         self.reset_history();
         self.page = Some(Box::new(page));
