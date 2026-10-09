@@ -1,6 +1,7 @@
 //! The minimap of a split: its document in braille beside the text, a dot for every four columns
-//! of a line, colored like the text. The lines on screen are shaded, changes are marked in a
-//! column of their own, and diagnostics and the matches of a search tint their dots.
+//! of a few lines, colored like the text. The lines on screen are shaded and the cursor's are
+//! underlined, changes are marked in a column of their own, diagnostics and the matches of a
+//! search tint their dots, and errors and warnings underline them.
 
 use std::{borrow::Cow, collections::HashMap, ops::Range};
 
@@ -19,12 +20,12 @@ use crate::ui::{
     scrollbar,
 };
 
-/// The text columns a dot stands for. A cell is two dots wide and four lines tall.
+/// The text columns a dot stands for. A cell is two dots wide and four tall.
 const DOT_COLUMNS: usize = 4;
-const CELL_LINES: usize = 4;
+const DOT_ROWS: usize = 4;
 
-/// The braille dot of each row of a cell's lines, in its left and its right column.
-const DOTS: [[u8; 2]; CELL_LINES] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+/// The braille dot of each row of a cell, in its left and its right column.
+const DOTS: [[u8; 2]; DOT_ROWS] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 /// A cell: its dots and the color most of their text has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,10 +47,19 @@ struct Key {
     theme: String,
     tab_width: usize,
     width: usize,
+    /// The lines a row of dots stands for.
+    lines_per_dot: usize,
 }
 
-/// The rows of cells of a document worked out so far, each standing for four lines, and the
-/// version of its text they are for.
+impl Key {
+    /// The lines a row of cells stands for.
+    fn cell_lines(&self) -> usize {
+        DOT_ROWS * self.lines_per_dot
+    }
+}
+
+/// The rows of cells of a document worked out so far, and the version of its text they are
+/// for.
 struct Cells {
     key: Key,
     version: i32,
@@ -74,6 +84,8 @@ pub struct Drawn {
     pub area: Rect,
     /// The rows of cells drawn, from the top of `area`.
     rows: Range<usize>,
+    /// The lines a row of cells stands for.
+    cell_lines: usize,
     /// The document lines on screen, of how many.
     pub shown: Range<usize>,
     pub len: usize,
@@ -87,15 +99,15 @@ impl Drawn {
 
     /// The screen rows of the cells of the lines on screen.
     pub fn shaded_rows(&self) -> Range<u16> {
-        let rows = self.rows.start.max(self.shown.start / CELL_LINES)
-            ..self.rows.end.min(self.shown.end.div_ceil(CELL_LINES));
+        let rows = self.rows.start.max(self.shown.start / self.cell_lines)
+            ..self.rows.end.min(self.shown.end.div_ceil(self.cell_lines));
         let top = |row: usize| self.area.y + (row - self.rows.start) as u16;
         top(rows.start)..top(rows.end.max(rows.start))
     }
 
     /// The first document line of the cells on the screen row `row`.
     pub fn line_at(&self, row: u16) -> usize {
-        (self.rows.start + usize::from(row.saturating_sub(self.area.y))) * CELL_LINES
+        (self.rows.start + usize::from(row.saturating_sub(self.area.y))) * self.cell_lines
     }
 }
 
@@ -105,6 +117,8 @@ struct Styles {
     text: Color,
     /// The background of the lines on screen.
     viewport: Option<Color>,
+    /// The underline of the cursor's lines.
+    cursor: Color,
     marks: overview::Colors,
 }
 
@@ -118,10 +132,15 @@ impl Styles {
             .and_then(|style| style.bg)
             .or_else(|| theme.get("ui.cursorline.primary").bg)
             .or_else(|| theme.get("ui.selection").bg);
+        let cursor = theme
+            .try_get_exact("ui.minimap.cursor")
+            .and_then(|style| style.underline_color.or(style.fg))
+            .unwrap_or(Color::Gray);
         Self {
             base,
             text: theme.get("ui.text").fg.unwrap_or(Color::Reset),
             viewport,
+            cursor,
             marks: overview::Colors::new(theme, &["ui.minimap.search", "ui.scrollbar.search"]),
         }
     }
@@ -180,9 +199,17 @@ impl Minimaps {
         if width == 0 {
             return;
         }
+        let key = Key {
+            language: doc.language_name().map(ToOwned::to_owned),
+            theme: theme.name().to_owned(),
+            tab_width: doc.tab_width(),
+            width,
+            lines_per_dot: doc.config.load().minimap.lines_per_dot.get().into(),
+        };
+        let cell_lines = key.cell_lines();
         let text = doc.text().slice(..);
         let len = text.len_lines();
-        let groups = len.div_ceil(CELL_LINES);
+        let groups = len.div_ceil(cell_lines);
         let height = usize::from(area.height);
         let first = first_row(groups, height, len, &shown);
         let rows = first..(first + height).min(groups);
@@ -190,16 +217,11 @@ impl Minimaps {
             view,
             area,
             rows: rows.clone(),
+            cell_lines,
             shown: shown.clone(),
             len,
         });
 
-        let key = Key {
-            language: doc.language_name().map(ToOwned::to_owned),
-            theme: theme.name().to_owned(),
-            tab_width: doc.tab_width(),
-            width,
-        };
         let new = || Cells {
             key: key.clone(),
             version: doc.version(),
@@ -215,27 +237,33 @@ impl Minimaps {
         }
         cells.fill(rows.clone(), doc, styles.text, theme, loader);
 
-        // The marks of each row: changes in the column, the others on the dots.
+        // The marks of each row: changes in the column, the others on the dots, and errors and
+        // warnings underline them too.
         let mut changes = vec![None; rows.len()];
         let mut tints = vec![None; rows.len()];
+        let mut lines = vec![None; rows.len()];
         let filter = overview::Filter {
             diagnostics: DiagnosticFilter::Enable(Severity::Hint),
             changes: true,
             search: true,
         };
-        overview.marks(doc, filter, |lines, mark| {
-            let groups = lines.start / CELL_LINES..(lines.end - 1) / CELL_LINES + 1;
+        overview.marks(doc, filter, |marked, mark| {
+            let groups = marked.start / cell_lines..(marked.end - 1) / cell_lines + 1;
             let groups = groups.start.max(rows.start)..groups.end.min(rows.end);
             for group in groups {
                 let row = group - rows.start;
                 match mark {
                     Mark::Change(change) => changes[row] = changes[row].max(Some(change)),
+                    Mark::Diagnostic(severity) if severity >= Severity::Warning => {
+                        tints[row] = tints[row].max(Some(mark));
+                        lines[row] = lines[row].max(Some(mark));
+                    }
                     _ => tints[row] = tints[row].max(Some(mark)),
                 }
             }
         });
 
-        let cursor_group = cursor_line / CELL_LINES;
+        let cursor_group = cursor_line / cell_lines;
         for (i, group) in rows.enumerate() {
             let y = area.y + i as u16;
             if let Some(change) = changes[i] {
@@ -245,12 +273,18 @@ impl Minimaps {
                     .set_style(styles.base.fg(color));
             }
             let mut style = styles.base;
-            let lines = group * CELL_LINES..(group + 1) * CELL_LINES;
-            if let Some(viewport) = styles.viewport.filter(|_| overlaps(&lines, &shown)) {
+            let group_lines = group * cell_lines..(group + 1) * cell_lines;
+            if let Some(viewport) = styles.viewport.filter(|_| overlaps(&group_lines, &shown)) {
                 style = style.bg(viewport);
             }
-            if group == cursor_group {
-                style = style.underline_style(UnderlineStyle::Line);
+            // An error's or warning's line goes over the cursor's.
+            let line = lines[i]
+                .map(|mark| styles.marks.of(mark))
+                .or((group == cursor_group).then_some(styles.cursor));
+            if let Some(color) = line {
+                style = style
+                    .underline_style(UnderlineStyle::Line)
+                    .underline_color(color);
             }
             let tint = tints[i].map(|mark| styles.marks.of(mark));
             let row = cells.rows.get(&group).map_or(&[][..], |row| &row[..]);
@@ -274,9 +308,9 @@ impl Cells {
     fn follow_edit(&mut self, doc: &Document, rows: &Range<usize>) {
         let (old, new) = (self.text.slice(..), doc.text().slice(..));
         if old.len_lines() == new.len_lines() {
-            let len = new.len_lines();
+            let (len, cell_lines) = (new.len_lines(), self.key.cell_lines());
             let changed = |row: usize| {
-                let lines = row * CELL_LINES..((row + 1) * CELL_LINES).min(len);
+                let lines = row * cell_lines..((row + 1) * cell_lines).min(len);
                 lines
                     .into_iter()
                     .any(|line| old.line(line) != new.line(line))
@@ -306,25 +340,23 @@ impl Cells {
             return;
         };
         let end = missing.next_back().unwrap_or(start) + 1;
-        let width = self.key.width;
-        let tab_width = self.key.tab_width as u16;
-        let computed = cells(doc, start..end, width, tab_width, text_color, theme, loader);
+        let computed = cells(doc, start..end, &self.key, text_color, theme, loader);
         self.rows.extend((start..end).zip(computed));
     }
 }
 
-/// The cells of the rows `rows` of `doc`, `width` cells each.
+/// The cells of the rows `rows` of `doc`, as `key` says.
 fn cells(
     doc: &Document,
     rows: Range<usize>,
-    width: usize,
-    tab_width: u16,
+    key: &Key,
     text_color: Color,
     theme: &Theme,
     loader: &Loader,
 ) -> Vec<Box<[Cell]>> {
+    let (width, tab_width, cell_lines) = (key.width, key.tab_width as u16, key.cell_lines());
     let text = doc.text().slice(..);
-    let lines = rows.start * CELL_LINES..(rows.end * CELL_LINES).min(text.len_lines());
+    let lines = rows.start * cell_lines..(rows.end * cell_lines).min(text.len_lines());
     let (start, end) = (text.line_to_char(lines.start), text.line_to_char(lines.end));
     let highlighting = doc.syntax().map(|syntax| SyntaxHighlighting {
         syntax,
@@ -339,8 +371,8 @@ fn cells(
     // The columns of each color in each cell.
     let mut colors: Vec<Vec<Vec<(Color, usize)>>> = vec![vec![Vec::new(); width]; rows.len()];
     for line in lines {
-        let row = line / CELL_LINES - rows.start;
-        let line_dots = DOTS[line % CELL_LINES];
+        let row = line / cell_lines - rows.start;
+        let line_dots = DOTS[line % cell_lines / key.lines_per_dot];
         let mut char_idx = text.line_to_char(line);
         let mut column = 0;
         for slice in text.line(line).graphemes() {
@@ -386,9 +418,9 @@ fn cells(
         .collect()
 }
 
-/// The first row of a map `height` rows tall showing rows of cells for `groups` four lines
-/// each. When they don't fit, the map slides along with the lines `shown` of `len`: from its
-/// first rows at the start of the document to its last rows at the end.
+/// The first row of a map `height` rows tall showing `groups` rows of cells. When they don't
+/// fit, the map slides along with the lines `shown` of `len`: from its first rows at the start
+/// of the document to its last rows at the end.
 fn first_row(groups: usize, height: usize, len: usize, shown: &Range<usize>) -> usize {
     let hidden = groups.saturating_sub(height);
     let scrollable = len.saturating_sub(shown.len()).max(1);

@@ -614,14 +614,16 @@ diagnostics = "warning"
 ### `[editor.minimap]` Section
 
 Options for minimaps, which show the document of a split in braille beside its text: a dot for
-four columns of a line, colored like the text. The lines on screen are shaded, changes are marked
-beside the map, and lines with diagnostics or the matches of a search take their colors. Splits
-narrower than 80 columns have no minimap.
+four columns of a few lines, colored like the text. The lines on screen are shaded and the
+cursor's are underlined, changes are marked beside the map, lines with diagnostics or the matches
+of a search take their colors, and errors and warnings underline them. Splits narrower than 80
+columns have no minimap.
 
 | Key | Description | Default |
 | --- | --- | --- |
 | `enable` | Whether splits show minimaps | `false` |
-| `width` | The width of the map in braille characters, each for 8 columns of 4 lines | `12` |
+| `width` | The width of the map in braille characters, each 8 columns wide | `12` |
+| `lines-per-dot` | The lines a dot stands for, 4 dots tall in a braille character | `2` |
 
 With the [mouse](#editor-section), pressing a minimap centers its split on the lines pressed,
 dragging it scrolls the split, and the wheel scrolls.
@@ -632,6 +634,7 @@ Example:
 [editor.minimap]
 enable = true
 width = 16
+lines-per-dot = 1
 ```
 
 ### `[editor.folding]` Section

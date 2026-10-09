@@ -384,6 +384,7 @@ mod mouse {
         let file = text_file(".txt", &lines(2000))?;
         let mut config = test_config();
         config.editor.minimap.enable = true;
+        config.editor.minimap.lines_per_dot = std::num::NonZeroU8::MIN;
         let mut session = open(&file, config)?;
         session.keys("").await?;
         // Row 100 of the map stands for lines 400..404: the view centers on them.
@@ -407,17 +408,70 @@ mod mouse {
 }
 
 mod minimap {
-    use helix_view::{current_ref, editor::MinimapConfig};
+    use std::num::NonZeroU8;
+
+    use helix_view::{current_ref, editor::MinimapConfig, graphics::UnderlineStyle};
 
     use super::*;
 
+    /// Minimaps at a line a dot: a cell for 4 lines.
     fn minimap_config() -> Config {
         let mut config = test_config();
         config.editor.minimap = MinimapConfig {
             enable: true,
+            lines_per_dot: NonZeroU8::MIN,
             ..Default::default()
         };
         config
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn maps_take_two_lines_a_dot_by_default() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(300))?;
+        let mut config = test_config();
+        config.editor.minimap.enable = true;
+        let mut session = open(&file, config)?;
+        session.keys("").await?;
+        // 301 lines in 38 rows of cells, 8 lines each; the last has lines 296..=300, and the map
+        // ends there.
+        let app = &session.app;
+        let column: Vec<_> = (0..40).map(|y| symbols(app, 108, y, 1)).collect();
+        assert!(column[..37].iter().all(|cell| cell == "⣿"), "{column:?}");
+        assert_eq!(column[37..], ["⠛", " ", " "]);
+        session.quit().await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cursors_errors_and_warnings_underline_their_rows() -> anyhow::Result<()> {
+        let file = text_file(".txt", &lines(600))?;
+        let mut session = open(&file, minimap_config())?;
+        let theme = &session.app.editor.theme;
+        let color = |scope| theme.get(scope).fg.unwrap();
+        let (error, warning) = (color("error"), color("warning"));
+        set_diagnostics(
+            &mut session,
+            &[
+                (20, Severity::Error),
+                (40, Severity::Warning),
+                (60, Severity::Hint),
+            ],
+        );
+        session.keys("<esc>").await?;
+        let underline = |app: &Application, y| {
+            let cell = &app.screen()[(108, y)];
+            (cell.underline_style == UnderlineStyle::Line).then_some(cell.underline_color)
+        };
+        // The cursor's row in gray, the error's and the warning's in theirs; hints only tint.
+        let app = &session.app;
+        assert_eq!(underline(app, 0), Some(Color::Gray));
+        assert_eq!(underline(app, 5), Some(error));
+        assert_eq!(underline(app, 10), Some(warning));
+        assert_eq!(underline(app, 15), None);
+        // On the cursor's row, the error's line wins.
+        session.keys("21gg").await?;
+        assert_eq!(underline(&session.app, 5), Some(error));
+        assert_eq!(underline(&session.app, 0), None);
+        session.quit().await
     }
 
     /// The symbols of the screen row `y` from the column `x` on, `count` of them.
