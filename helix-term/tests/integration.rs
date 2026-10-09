@@ -25,6 +25,7 @@ mod test {
     mod folding;
     mod inlay_hints;
     mod movement;
+    mod pager;
     mod scrollbar;
     mod smooth_scroll;
     mod spelling;

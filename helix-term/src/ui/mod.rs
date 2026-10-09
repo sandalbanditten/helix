@@ -22,7 +22,6 @@ mod reload_question;
 pub(crate) mod scrollbar;
 pub(crate) mod search;
 mod select;
-mod sgr;
 mod spinner;
 mod statusline;
 mod text;

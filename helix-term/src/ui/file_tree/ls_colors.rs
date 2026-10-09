@@ -172,7 +172,7 @@ pub fn eza_environment() -> Option<String> {
 
 /// Parses SGR parameters like `01;38;2;255;0;0`, keeping the foreground and the safe modifiers.
 pub fn parse_style(value: &str) -> Style {
-    let style = crate::ui::sgr::apply(Style::default(), value);
+    let style = helix_view::sgr::apply(Style::default(), value);
     let unsafe_modifiers =
         Modifier::REVERSED | Modifier::HIDDEN | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
     Style {

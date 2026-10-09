@@ -448,6 +448,12 @@ impl AppBuilder {
         self
     }
 
+    /// Starts like `hx --pager` with the files given.
+    pub fn with_pager(mut self) -> Self {
+        self.args.pager = true;
+        self
+    }
+
     pub fn with_input_text<S: Into<String>>(mut self, input_text: S) -> Self {
         self.input = Some(test::print(&input_text.into()));
         self

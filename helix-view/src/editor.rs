@@ -1867,6 +1867,8 @@ pub struct Editor {
     pub handlers: Handlers,
 
     pub mouse_down_range: Option<Range>,
+    /// Whether documents open as in a pager: read-only, with their formatting as styles.
+    pub pager: bool,
     /// The search being made, if any.
     pub live_search: Option<LiveSearch>,
     pub cursor_cache: CursorCache,
@@ -1997,6 +1999,7 @@ impl Editor {
             needs_redraw: false,
             handlers,
             mouse_down_range: None,
+            pager: false,
             live_search: None,
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
@@ -2711,6 +2714,16 @@ impl Editor {
 
     pub fn new_file_from_stdin(&mut self, action: Action) -> Result<DocumentId, Error> {
         let (stdin, encoding, has_bom) = crate::document::read_to_string(&mut stdin(), None)?;
+        if self.pager {
+            let mut doc = Document::from(
+                helix_core::Rope::from(stdin),
+                Some((encoding, has_bom)),
+                self.config.clone(),
+                self.syn_loader.clone(),
+            );
+            doc.page();
+            return Ok(self.new_file_from_document(action, doc));
+        }
         let doc = Document::from(
             helix_core::Rope::default(),
             Some((encoding, has_bom)),
@@ -2748,7 +2761,11 @@ impl Editor {
                 self.config.clone(),
                 self.syn_loader.clone(),
             )?;
-            doc.restore_undo_file();
+            if self.pager {
+                doc.page();
+            } else {
+                doc.restore_undo_file();
+            }
 
             let diagnostics =
                 Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, &doc);

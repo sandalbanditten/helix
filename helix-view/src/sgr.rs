@@ -1,6 +1,6 @@
 //! Select Graphic Rendition parameters, like the `01;31` of `ESC [ 01;31 m`, as styles.
 
-use helix_view::graphics::{Color, Modifier, Style, UnderlineStyle};
+use crate::graphics::{Color, Modifier, Style, UnderlineStyle};
 
 /// Applies the SGR parameters `params` to `style`, as a terminal does.
 pub fn apply(mut style: Style, params: &str) -> Style {

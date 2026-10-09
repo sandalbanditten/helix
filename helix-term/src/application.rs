@@ -132,6 +132,7 @@ impl Application {
             workspace_trust,
         );
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
+        editor.pager = args.pager;
 
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
             &config.keys

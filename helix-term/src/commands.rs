@@ -3105,8 +3105,13 @@ fn ensure_selections_forward(cx: &mut Context) {
 }
 
 fn enter_insert_mode(cx: &mut Context) {
-    if doc!(cx.editor).diff_view.is_some() {
+    let doc = doc!(cx.editor);
+    if doc.diff_view.is_some() {
         cx.editor.set_error("The diff view is read-only");
+        return;
+    }
+    if !doc.is_modifiable() {
+        cx.editor.set_error("The buffer is read-only");
         return;
     }
     cx.editor.mode = Mode::Insert;

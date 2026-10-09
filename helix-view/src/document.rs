@@ -269,6 +269,9 @@ pub struct Document {
     /// The side of a diff this document shows, if it is a pane of the diff view.
     pub diff_view: Option<Box<crate::diff_view::Pane>>,
 
+    /// The formatting of the text, if the document is shown in a pager.
+    pub page: Option<Box<crate::pager::Page>>,
+
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -830,6 +833,7 @@ impl Document {
             dired: None,
             compilation: None,
             diff_view: None,
+            page: None,
             jump_labels: HashMap::new(),
             conceal_cache: RefCell::default(),
             document_highlights: HashMap::new(),
@@ -1076,6 +1080,9 @@ impl Document {
             "submitting save of doc '{:?}'",
             self.path().map(|path| path.to_string_lossy())
         );
+        if self.page.is_some() {
+            bail!("The buffer is read-only");
+        }
 
         // we clone and move text + path into the future so that we asynchronously save the current
         // state without blocking any further edits.
@@ -1899,7 +1906,7 @@ impl Document {
         view_id: ViewId,
         emit_lsp_notification: bool,
     ) -> bool {
-        if self.diff_view.is_some() && !transaction.changes().is_empty() {
+        if !self.is_modifiable() && !transaction.changes().is_empty() {
             return false;
         }
         // store the state just before any changes are made. This allows us to undo to the
@@ -2113,6 +2120,28 @@ impl Document {
     }
 
     /// If there are unsaved modifications.
+    /// Whether edits change the document: they don't in a pager or a pane of the diff view.
+    pub fn is_modifiable(&self) -> bool {
+        self.diff_view.is_none() && self.page.is_none()
+    }
+
+    /// Shows the document as a pager does: the formatting of terminal output in its text, like
+    /// colors and overstrikes, as styles, and no edits. For a document no view shows yet.
+    pub fn page(&mut self) {
+        let mut page = crate::pager::Page::default();
+        let output = self.text.to_string();
+        if crate::pager::is_formatted(&output) {
+            let text;
+            (text, page) = crate::pager::format(&output);
+            self.text = Rope::from(text);
+            // The syntax tree was of the formatted text.
+            let loader = self.syn_loader.load();
+            self.set_language(self.language.clone(), &loader);
+        }
+        self.reset_history();
+        self.page = Some(Box::new(page));
+    }
+
     pub fn is_modified(&self) -> bool {
         if self.compilation.is_some() {
             return false;

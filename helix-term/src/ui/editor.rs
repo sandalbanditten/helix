@@ -235,10 +235,14 @@ impl EditorView {
         } else if let Some(pane) = &doc.diff_view {
             let lines = first..first + inner.height as usize;
             Cow::Owned(diff_view::changed_text(doc, pane, lines, theme))
-        } else if let Some(compilation) = &doc.compilation {
-            // The colors of the output on the lines shown.
+        } else if let Some(styles) = doc
+            .compilation
+            .as_ref()
+            .map(|compilation| &compilation.styles)
+            .or(doc.page.as_ref().map(|page| &page.styles))
+        {
+            // The colors of the output or the pager's text on the lines shown.
             let end = text.line_to_char((first + inner.height as usize + 1).min(text.len_lines()));
-            let styles = &compilation.styles;
             let shown = styles.partition_point(|(range, _)| range.end <= view_offset.anchor)
                 ..styles.partition_point(|(range, _)| range.start < end);
             Cow::Borrowed(&styles[shown])

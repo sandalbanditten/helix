@@ -48,6 +48,7 @@ FLAGS:
     --strict                       Bail on error for commands that can fail.
     --tutor                        Load the tutorial
     -d, --diff                     Diff two files or directories, or the changes since HEAD
+    -p, --pager                    Show files and piped text read-only, with their colors
     --health [CATEGORY]            Check for potential errors in editor setup
                                    CATEGORY can be a language or one of 'clipboard', 'languages',
                                    'all-languages' or 'all'. 'languages' is filtered according to

@@ -9,7 +9,7 @@ use helix_core::unicode::width::UnicodeWidthChar;
 use helix_view::graphics::{Modifier, Style};
 
 use super::output::Shown;
-use crate::ui::sgr;
+use helix_view::sgr;
 
 /// What a cell of the screen shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
