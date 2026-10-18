@@ -36,6 +36,8 @@ Normal mode is the default mode when you launch helix. You can return to it from
 
 > NOTE: Unlike Vim, `f`, `F`, `t` and `T` are not confined to the current line.
 
+> NOTE: With a count, `j` and `k` move by lines rather than by rows of soft-wrapped text.
+
 > Hereafter, `<n>` represents an integer by typing a sequence of digits.
 
 | Key                   | Description                                        | Command                     |

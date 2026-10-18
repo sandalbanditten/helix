@@ -842,3 +842,44 @@ async fn tree_sitter_motions_work_across_injections() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn counted_vertical_moves_skip_wrapped_rows() -> anyhow::Result<()> {
+    let config = Config {
+        editor: helix_view::editor::Config {
+            soft_wrap: helix_core::syntax::config::SoftWrap {
+                enable: Some(true),
+                ..Default::default()
+            },
+            ..test_editor_config()
+        },
+        ..test_config()
+    };
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text(format!("#[a|]#\n{}\nb\nc\nd\n", "word ".repeat(100)))
+        .build()?;
+    let on_line = |line: usize| {
+        move |app: &helix_term::application::Application| {
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            let text = doc.text().slice(..);
+            let cursor = doc.selection(view.id).primary().cursor(text);
+            assert_eq!(text.char_to_line(cursor), line);
+        }
+    };
+    test_key_sequences(
+        &mut app,
+        vec![
+            // without a count the rows of the wrapped line are passed one by one
+            (Some("jj"), Some(&on_line(1))),
+            (Some("gg3j"), Some(&on_line(3))),
+            (Some("k"), Some(&on_line(2))),
+            (Some("3k"), Some(&on_line(0))),
+            // a count extends the selection by lines too
+            (Some("v2j"), Some(&on_line(2))),
+            (Some("<esc>gg2jk"), Some(&on_line(1))),
+        ],
+        false,
+    )
+    .await
+}

@@ -780,22 +780,21 @@ fn move_line_down(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Forward, Movement::Move)
 }
 
+/// Moves by rows, or by lines with a count, which the relative line numbers count.
+fn rows_or_lines(cx: &Context) -> MoveFn {
+    if cx.count.is_some() {
+        move_vertically
+    } else {
+        move_vertically_visual
+    }
+}
+
 fn move_visual_line_up(cx: &mut Context) {
-    move_impl(
-        cx,
-        move_vertically_visual,
-        Direction::Backward,
-        Movement::Move,
-    )
+    move_impl(cx, rows_or_lines(cx), Direction::Backward, Movement::Move)
 }
 
 fn move_visual_line_down(cx: &mut Context) {
-    move_impl(
-        cx,
-        move_vertically_visual,
-        Direction::Forward,
-        Movement::Move,
-    )
+    move_impl(cx, rows_or_lines(cx), Direction::Forward, Movement::Move)
 }
 
 fn extend_char_left(cx: &mut Context) {
@@ -815,21 +814,11 @@ fn extend_line_down(cx: &mut Context) {
 }
 
 fn extend_visual_line_up(cx: &mut Context) {
-    move_impl(
-        cx,
-        move_vertically_visual,
-        Direction::Backward,
-        Movement::Extend,
-    )
+    move_impl(cx, rows_or_lines(cx), Direction::Backward, Movement::Extend)
 }
 
 fn extend_visual_line_down(cx: &mut Context) {
-    move_impl(
-        cx,
-        move_vertically_visual,
-        Direction::Forward,
-        Movement::Extend,
-    )
+    move_impl(cx, rows_or_lines(cx), Direction::Forward, Movement::Extend)
 }
 
 fn goto_line_end_impl(view: &mut View, doc: &mut Document, movement: Movement) {
