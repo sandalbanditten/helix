@@ -35,3 +35,22 @@
 ((group ["(" ")"] @conceal)
   (#any-of? @conceal "[|" "|]")
   (#set! conceal.symbols "typst-shorthand"))
+
+; Obsidian-style wikilinks, like `[[Note\#Heading|alias]]`, without their brackets and the
+; backslashes of their escapes
+(_
+  (text) @conceal @open .
+  (text) @conceal @open.second .
+  (text) @conceal .
+  (text) @conceal @close .
+  (text) @conceal @close.second
+  (#eq? @open "[")
+  (#eq? @open.second "[")
+  (#eq? @close "]")
+  (#eq? @close.second "]")
+  (#set! conceal.symbols "typst-wikilink"))
+
+; Lines across the page, `#line(length: 100%)`, as a rule filling the row
+((_ "#" @conceal . (call . (ident) @function) @conceal)
+  (#eq? @function "line")
+  (#set! conceal.symbols "typst-rule"))

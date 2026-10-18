@@ -23,8 +23,11 @@ use crate::syntax::{merge_regions, Loader, Syntax};
 use crate::text_annotations::{Conceal, ConcealSource, Replacement};
 use crate::{RopeSlice, Selection};
 
-/// The longest text, in bytes, that is looked up in a [`SymbolTable`].
+/// The longest text, in bytes, that is looked up in a [`SymbolTable`] of symbols.
 const MAX_CONCEALED_BYTES: usize = 64;
+
+/// The longest wikilink, in bytes, that is concealed.
+const MAX_WIKILINK_BYTES: usize = 512;
 
 /// The most lines whose conceals are computed at once.
 const FETCHED_LINES: usize = 128;
@@ -41,6 +44,11 @@ pub enum SymbolTable {
     TypstCode,
     /// Typst's shorthands of more than one character, like `->` or `--`.
     TypstShorthand,
+    /// Obsidian-style wikilinks in Typst markup, like `[[Note\#Heading|alias]]`, shown without
+    /// their brackets and the backslashes of their escapes.
+    TypstWikilink,
+    /// Lines across the page, `#line(length: 100%)`, shown as a rule filling the row.
+    TypstRule,
 }
 
 impl SymbolTable {
@@ -50,6 +58,16 @@ impl SymbolTable {
             Self::TypstMath => typst::math_symbol(text).map(Replacement::from),
             Self::TypstCode => typst::code_symbol(text).map(Replacement::from),
             Self::TypstShorthand => typst::shorthand(text).map(Replacement::from),
+            Self::TypstWikilink => typst::wikilink(text).map(Replacement::from),
+            Self::TypstRule => typst::is_full_width_line(text).then_some(Replacement::Fill("─")),
+        }
+    }
+
+    /// The longest text, in bytes, that is looked up in the table.
+    fn max_bytes(self) -> usize {
+        match self {
+            Self::TypstWikilink => MAX_WIKILINK_BYTES,
+            _ => MAX_CONCEALED_BYTES,
         }
     }
 }
@@ -62,6 +80,8 @@ impl FromStr for SymbolTable {
             "typst-math" => Ok(Self::TypstMath),
             "typst-code" => Ok(Self::TypstCode),
             "typst-shorthand" => Ok(Self::TypstShorthand),
+            "typst-wikilink" => Ok(Self::TypstWikilink),
+            "typst-rule" => Ok(Self::TypstRule),
             _ => Err(format!("unknown symbol table '{name}'")),
         }
     }
@@ -197,7 +217,7 @@ impl<'a> SyntaxConceals<'a> {
                 noconceal.push(text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end));
                 continue;
             };
-            if bytes.is_empty() || bytes.len() > MAX_CONCEALED_BYTES {
+            if bytes.is_empty() || bytes.len() > table.max_bytes() {
                 continue;
             }
             let concealed: Cow<str> = text.byte_slice(bytes.clone()).into();
@@ -396,6 +416,29 @@ mod test {
         assert_eq!(typst("$#sym.alpha + 1$"), "$α + 1$");
         // other fields are not symbols
         assert_eq!(typst("#calc.pi #page.width"), "#calc.pi #page.width");
+    }
+
+    #[test]
+    fn typst_wikilinks() {
+        assert_eq!(
+            typst("See [[Functor\\#Laws|functors]] and [[Natural Isomorphism]]."),
+            "See Functor#Laws|functors and Natural Isomorphism."
+        );
+        // the `!` of an embed belongs to the text before it
+        assert_eq!(typst("![[img.png|300]]"), "!img.png|300");
+        assert_eq!(typst("- a [[x]]\n= Head [[y]]"), "- a x\n= Head y");
+        // not in raw text or math, and not single or empty brackets
+        assert_eq!(typst("`[[raw]]` $[[m]]$"), "`[[raw]]` $[[m]]$");
+        assert_eq!(typst("[x] [[]]"), "[x] [[]]");
+    }
+
+    #[test]
+    fn typst_rules() {
+        assert_eq!(typst("a\n#line(length: 100%)\nb"), "a\n─…\nb");
+        assert_eq!(typst("#line(length:100%)"), "─…");
+        // other lines are left as they are
+        assert_eq!(typst("#line(length: 50%)"), "#line(length: 50%)");
+        assert_eq!(typst("#line()"), "#line()");
     }
 
     fn cursors(ranges: &[(usize, usize)]) -> Selection {
