@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::chars::char_is_line_ending;
 use crate::syntax::{merge_regions, Loader, Syntax};
-use crate::text_annotations::{Conceal, ConcealSource};
+use crate::text_annotations::{Conceal, ConcealSource, Replacement};
 use crate::{RopeSlice, Selection};
 
 /// The longest text, in bytes, that is looked up in a [`SymbolTable`].
@@ -44,12 +44,12 @@ pub enum SymbolTable {
 }
 
 impl SymbolTable {
-    /// The symbol that `text` stands for.
-    pub fn resolve(self, text: &str) -> Option<&'static str> {
+    /// What `text` is shown as.
+    pub fn resolve(self, text: &str) -> Option<Replacement> {
         match self {
-            Self::TypstMath => typst::math_symbol(text),
-            Self::TypstCode => typst::code_symbol(text),
-            Self::TypstShorthand => typst::shorthand(text),
+            Self::TypstMath => typst::math_symbol(text).map(Replacement::from),
+            Self::TypstCode => typst::code_symbol(text).map(Replacement::from),
+            Self::TypstShorthand => typst::shorthand(text).map(Replacement::from),
         }
     }
 }
@@ -204,10 +204,12 @@ impl<'a> SyntaxConceals<'a> {
             if concealed.contains(char_is_line_ending) {
                 continue;
             }
-            let Some(replacement) = table
-                .resolve(&concealed)
-                .filter(|symbol| is_visible(symbol))
-            else {
+            let Some(replacement) = table.resolve(&concealed).filter(|replacement| {
+                is_visible(match replacement {
+                    Replacement::Text(text) => text,
+                    Replacement::Fill(g) => g,
+                })
+            }) else {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
@@ -261,7 +263,7 @@ impl ConcealSource for SyntaxConceals<'_> {
             let shown = line_conceals
                 .iter()
                 .filter(|conceal| conceal.start >= char_idx && !revealed(conceal));
-            conceals.extend(shown);
+            conceals.extend(shown.cloned());
             line += 1;
             if line == first_line + SERVED_LINES {
                 break;
@@ -310,7 +312,10 @@ mod test {
             let end = conceals.conceals_from(fetched, &mut batch);
             for conceal in batch {
                 rendered.extend(slice.slice(pos..conceal.start).chars());
-                rendered.push_str(conceal.replacement);
+                match conceal.replacement {
+                    Replacement::Text(text) => rendered.push_str(&text),
+                    Replacement::Fill(g) => rendered.push_str(&format!("{g}…")),
+                }
                 pos = conceal.end;
             }
             fetched = end;
@@ -467,7 +472,11 @@ mod test {
                 SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
             let mut fetched = Vec::new();
             conceals.conceals_from(0, &mut fetched);
-            let fetched: Vec<_> = fetched.iter().map(|c| (c.start, c.replacement)).collect();
+            let fetched: Vec<_> = fetched
+                .into_iter()
+                .map(|c| (c.start, c.replacement))
+                .collect();
+            let shown = shown.map(|(start, symbol)| (start, Replacement::from(symbol)));
             assert_eq!(fetched, shown);
         }
         assert_eq!(cache.borrow().lines.len(), 1);

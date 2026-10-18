@@ -23,7 +23,7 @@ use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 
 use crate::graphemes::{grapheme_width, Grapheme, GraphemeStr};
 use crate::syntax::Highlight;
-use crate::text_annotations::TextAnnotations;
+use crate::text_annotations::{Replacement, TextAnnotations};
 use crate::{fold, Position, RopeSlice};
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +58,15 @@ impl GraphemeSource {
         matches!(self, GraphemeSource::Fold { .. })
     }
 
+    /// Returns whether this grapheme shows document text as other text, the placeholder of a
+    /// closed fold or a conceal's replacement
+    pub fn is_placeholder(self) -> bool {
+        matches!(
+            self,
+            GraphemeSource::Fold { .. } | GraphemeSource::Conceal { .. }
+        )
+    }
+
     pub fn is_eof(self) -> bool {
         // all doc chars except the EOF char have non-zero codepoints
         matches!(self, GraphemeSource::Document { codepoints: 0 })
@@ -72,12 +81,15 @@ impl GraphemeSource {
         }
     }
 
-    // A fold's placeholder may be several graphemes, like ` … `, so it is measured as a whole
-    // and is a non-whitespace word of its own whatever it starts with.
+    // A fold's placeholder or a conceal's replacement may be several graphemes, like ` … `, so
+    // it is measured as a whole. A fold's placeholder is also a non-whitespace word of its own
+    // whatever it starts with.
 
     fn width(self, grapheme: &Grapheme) -> usize {
         match grapheme {
-            Grapheme::Other { g } if self.is_fold() => g.graphemes(true).map(grapheme_width).sum(),
+            Grapheme::Other { g } if self.is_placeholder() => {
+                g.graphemes(true).map(grapheme_width).sum()
+            }
             _ => grapheme.width(),
         }
     }
@@ -320,10 +332,15 @@ impl<'t> DocumentFormatter<'t> {
                 self.annotations.skip_hidden(conceal.end);
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
-                (
-                    conceal.replacement.into(),
-                    GraphemeSource::Conceal { codepoints },
-                )
+                let replacement = match conceal.replacement {
+                    Replacement::Text(text) => text,
+                    Replacement::Fill(g) => {
+                        let width = self.text_fmt.viewport_width as usize;
+                        let count = width.saturating_sub(col + 1) / grapheme_width(g).max(1);
+                        Cow::Owned(g.repeat(count.max(1)))
+                    }
+                };
+                (replacement.into(), GraphemeSource::Conceal { codepoints })
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
 
@@ -350,6 +367,19 @@ impl<'t> DocumentFormatter<'t> {
         let grapheme = GraphemeWithSource::new(grapheme, col, self.text_fmt.tab_width, source);
 
         Some(grapheme)
+    }
+
+    /// The column a row that soft wraps continues in: after the indentation it carries over
+    /// and the wrap indicator.
+    fn wrapped_row_start(&self) -> usize {
+        let indent = self
+            .indent_level
+            .filter(|&indent| indent as u16 <= self.text_fmt.max_indent_retain)
+            .unwrap_or(0);
+        let indicator: usize = UnicodeSegmentation::graphemes(&*self.text_fmt.wrap_indicator, true)
+            .map(grapheme_width)
+            .sum();
+        indent + indicator
     }
 
     /// Move a word to the next visual line
@@ -450,7 +480,11 @@ impl<'t> DocumentFormatter<'t> {
                 }
                 Ordering::Equal if word_width > self.text_fmt.max_wrap as usize => return,
                 Ordering::Greater if word_width > self.text_fmt.max_wrap as usize => {
-                    self.peeked_grapheme = self.word_buf.pop();
+                    // a placeholder that fits no row stays, overflowing its own
+                    let alone = matches!(&self.word_buf[..], [g] if g.source.is_placeholder());
+                    if !alone {
+                        self.peeked_grapheme = self.word_buf.pop();
+                    }
                     return;
                 }
                 Ordering::Equal | Ordering::Greater => {
@@ -463,10 +497,13 @@ impl<'t> DocumentFormatter<'t> {
             let Some(grapheme) = self.next_grapheme(col, char_pos) else {
                 return;
             };
-            // a placeholder that does not fit the row wraps instead of overflowing it, once
-            if grapheme.source.is_fold()
+            // a placeholder that does not fit the row wraps instead of overflowing it, once, if
+            // it fits the next row
+            let width = self.text_fmt.viewport_width as usize;
+            if grapheme.source.is_placeholder()
                 && !wrapped_fold
-                && col + grapheme.width() > self.text_fmt.viewport_width as usize
+                && col + grapheme.width() > width
+                && self.wrapped_row_start() + grapheme.width() <= width
             {
                 self.peeked_grapheme = Some(grapheme);
                 if word_width > self.text_fmt.max_wrap as usize {

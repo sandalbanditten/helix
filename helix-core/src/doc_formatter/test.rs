@@ -3,7 +3,7 @@ use std::cell::Cell;
 use crate::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSource, TextFormat};
 use crate::fold::Fold;
 use crate::text_annotations::{
-    Conceal, ConcealSource, InlineAnnotation, LineAnnotation, Overlay, TextAnnotations,
+    Conceal, ConcealSource, InlineAnnotation, LineAnnotation, Overlay, Replacement, TextAnnotations,
 };
 use crate::Position;
 
@@ -511,6 +511,51 @@ fn conceal_widths() {
 }
 
 #[test]
+fn conceal_placeholders() {
+    // a replacement of several graphemes is measured as a whole
+    let conceals = [Conceal::new(0, 8, "Note")];
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint("[[Note]] x".into(), &text_fmt, &annotations, 0)
+            .map(|g| (g.char_idx, g.visual_pos.col, g.width()))
+            .collect();
+    assert_eq!(graphemes[..2], [(0, 0, 4), (8, 4, 1)]);
+    assert_eq!(
+        concealed_text("[[Note]] x\n", false, &conceals, 0),
+        "Note x \n "
+    );
+
+    // one that does not fit the row wraps instead of overflowing it
+    let text = "some words [[Natural Isomorphism|isomorphism]]\n";
+    let conceals = [Conceal::new(11, 46, "isomorphism")];
+    assert_eq!(
+        concealed_text(text, true, &conceals, 0),
+        "some words \n.isomorphism \n "
+    );
+    // unless it fits no row, which it overflows, leaving the line break to the next row
+    let conceals = [Conceal::new(11, 46, "Natural Isomorphism")];
+    assert_eq!(
+        concealed_text(text, true, &conceals, 0),
+        "some words Natural Isomorphism\n. \n "
+    );
+
+    // a fill reaches the column before the row's end, wherever it starts
+    let text = "a\n#line()\n  #line()\nb\n";
+    let conceals = [
+        Conceal::new(2, 9, Replacement::Fill("─")),
+        Conceal::new(12, 19, Replacement::Fill("─")),
+    ];
+    for softwrap in [false, true] {
+        assert_eq!(
+            concealed_text(text, softwrap, &conceals, 0),
+            format!("a \n{} \n  {} \nb \n ", "─".repeat(16), "─".repeat(14))
+        );
+    }
+}
+
+#[test]
 fn conceal_and_annotations() {
     let inline = [
         InlineAnnotation::new(3, "A"),
@@ -570,7 +615,7 @@ impl ConcealSource for WindowedConceals<'_> {
             .conceals
             .iter()
             .filter(|conceal| (char_idx..end).contains(&conceal.start));
-        conceals.extend(in_window);
+        conceals.extend(in_window.cloned());
         end
     }
 }
