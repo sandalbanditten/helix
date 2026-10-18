@@ -47,11 +47,16 @@ server's features can be limited with `only-features` / `except-features`.
 
 ## Following the view
 
-A server that sets the experimental capability `helixViewport` is told which
-document the focused view shows and the first line it shows, as the
-notification `helix/viewport` with `{ uri, topLine }` (`topLine` counts from
-0), whenever either changes. Previews use it to follow the editor; tinymist
-uses it to keep zathura on the note being edited.
+Servers that set the experimental capability `helixViewport` are sent the
+notification `helix/viewport` whenever the focused view's document, first line
+or cursor changes, so that previews can follow the editor:
+
+| Field | Description |
+| --- | --- |
+| `uri` | The focused view's document |
+| `topLine` | The first line the view shows, counting from 0 |
+| `cursor` | The position of the primary cursor |
+| `scrollDuration` | How long the view takes to scroll, in milliseconds: the [`smooth-scroll`](./editor.md#editorsmooth-scroll-section) duration, or 0 when it is disabled |
 
 [lsp]: https://microsoft.github.io/language-server-protocol/
 [wiki]: https://github.com/helix-editor/helix/wiki/Language-Server-Configurations

@@ -1,6 +1,6 @@
-//! Tells language servers which document the focused view shows and the first line it shows
-//! (`helix/viewport`), so that previews can follow the editor. Servers opt in with the
-//! experimental capability `helixViewport`.
+//! Tells language servers which document the focused view shows, the first line it shows and
+//! where its cursor is (`helix/viewport`), so that previews can follow the editor. Servers opt in
+//! with the experimental capability `helixViewport`.
 
 use std::time::Duration;
 
@@ -27,6 +27,9 @@ impl lsp::notification::Notification for HelixViewport {
 struct HelixViewportParams {
     uri: lsp::Url,
     top_line: u32,
+    cursor: lsp::Position,
+    /// How long the view takes to scroll, in milliseconds, or 0 when it moves at once.
+    scroll_duration: u32,
 }
 
 #[derive(Default)]
@@ -57,6 +60,13 @@ fn notify(editor: &Editor, event: &ViewportEvent) {
     let Some(uri) = doc.url() else {
         return;
     };
+    let smooth_scroll = &editor.config().smooth_scroll;
+    let scroll_duration = if smooth_scroll.enable {
+        smooth_scroll.duration.as_millis() as u32
+    } else {
+        0
+    };
+    let text = doc.text();
     for server in doc.language_servers() {
         let wants = server.is_initialized()
             && server
@@ -67,29 +77,33 @@ fn notify(editor: &Editor, event: &ViewportEvent) {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
         if wants {
+            let cursor = event.cursor.min(text.len_chars());
             server.notify::<HelixViewport>(HelixViewportParams {
                 uri: uri.clone(),
                 top_line: event.top_line as u32,
+                cursor: helix_lsp::util::pos_to_lsp_pos(text, cursor, server.offset_encoding()),
+                scroll_duration,
             });
         }
     }
 }
 
-/// The focused view's document and the first line it shows.
+/// The focused view's document, the first line it shows and its cursor.
 fn focused(editor: &Editor) -> ViewportEvent {
     let (view, doc) = current_ref!(editor);
     let text = doc.text();
     ViewportEvent {
         doc: doc.id(),
         top_line: text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars())),
+        cursor: doc.selection(view.id).primary().cursor(text.slice(..)),
     }
 }
 
-/// Sends the focused view's document and top line when they differ from `last`. Called on every
-/// render, so it sees the view's scroll target, not the frames animating towards it.
-pub fn follow(editor: &Editor, last: &mut Option<(DocumentId, usize)>) {
+/// Sends the focused view's document, top line and cursor when they differ from `last`. Called
+/// on every render, so it sees the view's scroll target, not the frames animating towards it.
+pub fn follow(editor: &Editor, last: &mut Option<(DocumentId, usize, usize)>) {
     let event = focused(editor);
-    let current = Some((event.doc, event.top_line));
+    let current = Some((event.doc, event.top_line, event.cursor));
     if *last != current {
         *last = current;
         send_blocking(&editor.handlers.viewport, event);
