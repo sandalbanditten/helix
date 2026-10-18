@@ -404,6 +404,12 @@ mod test {
             "$a → b ≠ c ≤ d … e ≔ f$"
         );
         assert_eq!(typst("$||x|| [|x|]$"), "$‖x‖ ⟦x⟧$");
+        // shorthands the grammar splits, like `==>` into `=` and `=>`, but not across spaces
+        assert_eq!(
+            typst("$a ==> b |=> c <~~ d >-> e <-< f$"),
+            "$a ⟹ b ⤇ c ⬳ d ↣ e ↢ f$"
+        );
+        assert_eq!(typst("$a = => b$"), "$a = ⇒ b$");
         // markup, where `~` is a non-breaking space
         assert_eq!(typst("a -- b --- c... d~e"), "a – b — c… d~e");
     }

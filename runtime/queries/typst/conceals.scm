@@ -32,6 +32,18 @@
   (#eq? @conceal "||")
   (#set! conceal.symbols "typst-shorthand"))
 
+; Shorthands the grammar splits, like `==>` into `=` and `=>`, as a whole
+((_
+  [(symbol) (shorthand)] @conceal .
+  [(symbol) (shorthand)] @conceal)
+  (#set! conceal.symbols "typst-shorthand"))
+
+((_
+  [(symbol) (shorthand)] @conceal .
+  [(symbol) (shorthand)] @conceal .
+  [(symbol) (shorthand)] @conceal)
+  (#set! conceal.symbols "typst-shorthand"))
+
 ((group ["(" ")"] @conceal)
   (#any-of? @conceal "[|" "|]")
   (#set! conceal.symbols "typst-shorthand"))
