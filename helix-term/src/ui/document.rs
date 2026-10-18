@@ -192,6 +192,11 @@ pub fn render_text<'a>(
                 syntax_style: renderer.fold_style,
                 overlay_style: overlay_highlighter.style,
             },
+            // a rule is drawn like the indent guides
+            GraphemeSource::Conceal { fill: true, .. } => GraphemeStyle {
+                syntax_style: renderer.indent_guide_style,
+                overlay_style: overlay_highlighter.style,
+            },
             // a conceal is styled like the start of the text it conceals
             GraphemeSource::Conceal { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter

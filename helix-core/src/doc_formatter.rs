@@ -44,6 +44,8 @@ pub enum GraphemeSource {
     /// Document text shown as another grapheme, see [`Conceal`](crate::text_annotations::Conceal).
     Conceal {
         codepoints: u32,
+        /// Whether it fills the rest of the row, like a horizontal rule.
+        fill: bool,
     },
 }
 
@@ -76,7 +78,7 @@ impl GraphemeSource {
         match self {
             GraphemeSource::Document { codepoints }
             | GraphemeSource::Fold { codepoints }
-            | GraphemeSource::Conceal { codepoints } => codepoints as usize,
+            | GraphemeSource::Conceal { codepoints, .. } => codepoints as usize,
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
@@ -332,6 +334,7 @@ impl<'t> DocumentFormatter<'t> {
                 self.annotations.skip_hidden(conceal.end);
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
+                let fill = matches!(conceal.replacement, Replacement::Fill(_));
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,
                     Replacement::Fill(g) => {
@@ -340,7 +343,10 @@ impl<'t> DocumentFormatter<'t> {
                         Cow::Owned(g.repeat(count.max(1)))
                     }
                 };
-                (replacement.into(), GraphemeSource::Conceal { codepoints })
+                (
+                    replacement.into(),
+                    GraphemeSource::Conceal { codepoints, fill },
+                )
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
 
