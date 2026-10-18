@@ -883,3 +883,46 @@ async fn counted_vertical_moves_skip_wrapped_rows() -> anyhow::Result<()> {
     )
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn jump_labels_show_over_document_links() -> anyhow::Result<()> {
+    use helix_lsp::lsp;
+
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[x|]# see linked words\n")
+        .build()?;
+    let (_, doc) = helix_view::current!(app.editor);
+    let range = lsp::Range::new(lsp::Position::new(0, 6), lsp::Position::new(0, 18));
+    doc.document_links = vec![helix_view::document::DocumentLink {
+        start: 6,
+        end: 18,
+        link: lsp::DocumentLink {
+            range,
+            target: None,
+            tooltip: None,
+            data: None,
+        },
+        language_server_id: Default::default(),
+    }];
+    let labelled = |app: &helix_term::application::Application| {
+        let label = app.editor.theme.get("ui.virtual.jump-label");
+        let screen = app.screen();
+        let row = (0..screen.area.height)
+            .find(|&y| {
+                let row: String = (0..screen.area.width)
+                    .map(|x| screen[(x, y)].symbol.as_str())
+                    .collect();
+                row.contains("nked")
+            })
+            .unwrap();
+        // the label on `linked` keeps its own color over the link's
+        let x = (0..screen.area.width)
+            .find(|&x| {
+                screen[(x, row)].symbol.as_str() == "n"
+                    && screen[(x + 1, row)].symbol.as_str() == "k"
+            })
+            .unwrap();
+        assert_eq!(screen[(x - 1, row)].fg, label.fg.unwrap());
+    };
+    test_key_sequence(&mut app, Some("gw"), Some(&labelled), false).await
+}

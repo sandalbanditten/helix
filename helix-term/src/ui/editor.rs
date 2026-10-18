@@ -254,13 +254,6 @@ impl EditorView {
         };
         let mut overlays = Vec::new();
 
-        overlays.push(Self::overlay_syntax_highlights(
-            doc,
-            view_offset.anchor,
-            inner.height,
-            &text_annotations,
-        ));
-
         if doc
             .language_config()
             .and_then(|config| config.rainbow_brackets)
@@ -288,6 +281,14 @@ impl EditorView {
         }
 
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+
+        // overlaid text like jump labels shows over the styles of the text it covers
+        overlays.push(Self::overlay_syntax_highlights(
+            doc,
+            view_offset.anchor,
+            inner.height,
+            &text_annotations,
+        ));
 
         if is_focused {
             if config.lsp.auto_document_highlight {
