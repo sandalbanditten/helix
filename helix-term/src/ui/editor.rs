@@ -66,6 +66,8 @@ pub struct EditorView {
     pub(crate) undo_tree: UndoTree,
     pub(crate) dired: Dired,
     pub(crate) diff_view: DiffView,
+    /// The focused document and top line language servers last heard of.
+    viewport: Option<(helix_view::DocumentId, usize)>,
     pub(crate) reload_question: ReloadQuestion,
     /// What the scrollbars and minimaps mark.
     overview: Overview,
@@ -132,6 +134,7 @@ impl EditorView {
             undo_tree: UndoTree::default(),
             dired: Dired::default(),
             diff_view: DiffView::default(),
+            viewport: None,
             reload_question: ReloadQuestion::default(),
             overview: Overview::default(),
             minimaps: RefCell::default(),
@@ -2154,6 +2157,7 @@ impl Component for EditorView {
 
         self.dired.follow(cx.editor);
         self.diff_view.follow(cx.editor);
+        crate::handlers::viewport::follow(cx.editor, &mut self.viewport);
         // A split covers the editor only while it shows its dired or compilation buffer, or a
         // pane of the diff view.
         if let Some(zoomed) = cx.editor.tree.zoomed() {

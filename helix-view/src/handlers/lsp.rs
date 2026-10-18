@@ -40,6 +40,12 @@ pub struct PullAllDocumentsDiagnosticsEvent {
     pub language_servers: HashSet<LanguageServerId>,
 }
 
+/// The document the focused view shows and the first line it shows.
+pub struct ViewportEvent {
+    pub doc: DocumentId,
+    pub top_line: usize,
+}
+
 pub struct CodeActionHintEvent {
     pub document_id: DocumentId,
     pub view_id: ViewId,

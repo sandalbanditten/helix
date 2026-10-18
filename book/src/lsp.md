@@ -45,5 +45,13 @@ language may use [several servers](./languages.md#configuring-language-servers-f
 for each request the first server in the list that supports it is used, and a
 server's features can be limited with `only-features` / `except-features`.
 
+## Following the view
+
+A server that sets the experimental capability `helixViewport` is told which
+document the focused view shows and the first line it shows, as the
+notification `helix/viewport` with `{ uri, topLine }` (`topLine` counts from
+0), whenever either changes. Previews use it to follow the editor; tinymist
+uses it to keep zathura on the note being edited.
+
 [lsp]: https://microsoft.github.io/language-server-protocol/
 [wiki]: https://github.com/helix-editor/helix/wiki/Language-Server-Configurations

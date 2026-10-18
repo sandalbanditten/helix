@@ -29,6 +29,7 @@ mod prompt;
 mod signature_help;
 mod snippet;
 mod spelling;
+pub mod viewport;
 mod workspace_trust;
 
 pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
@@ -44,6 +45,7 @@ pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
     let pull_diagnostics = PullDiagnosticsHandler::default().spawn();
     let pull_all_documents_diagnostics = PullAllDocumentsDiagnosticHandler::default().spawn();
     let spelling = spelling::SpellingHook::default().spawn();
+    let viewport = viewport::Handler::default().spawn();
 
     let handlers = Handlers {
         completions: helix_view::handlers::completion::CompletionHandler::new(event_tx),
@@ -56,6 +58,7 @@ pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
         pull_all_documents_diagnostics,
         code_action_hint,
         spelling: helix_view::handlers::spelling::SpellingHandler::new(spelling),
+        viewport,
     };
 
     helix_view::handlers::register_hooks(&handlers);
@@ -74,5 +77,6 @@ pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
     file_tree::register_hooks(&handlers);
     live_search::register_hooks(&handlers);
     spelling::register_hooks(&handlers);
+    viewport::register_hooks(&handlers);
     handlers
 }

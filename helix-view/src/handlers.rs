@@ -31,6 +31,7 @@ pub struct Handlers {
     pub pull_all_documents_diagnostics: Sender<lsp::PullAllDocumentsDiagnosticsEvent>,
     pub code_action_hint: Sender<lsp::CodeActionHintEvent>,
     pub spelling: SpellingHandler,
+    pub viewport: Sender<lsp::ViewportEvent>,
 }
 
 impl Handlers {
