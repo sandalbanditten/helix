@@ -215,6 +215,8 @@ pub struct Resolver {
     dirs: Vec<PathBuf>,
     picker: FilePickerConfig,
     resolved: HashMap<(String, Option<PathBuf>), Option<PathBuf>>,
+    /// The paths with spaces tried before the loci they end with, like `Some Note.typ`.
+    spaced: HashMap<String, Option<PathBuf>>,
     /// The files under the run's directory by name, listed at the first bare name not found.
     names: Option<HashMap<OsString, Vec<PathBuf>>>,
 }
@@ -236,6 +238,7 @@ impl Resolver {
             dirs,
             picker,
             resolved: HashMap::new(),
+            spaced: HashMap::new(),
             names: None,
         }
     }
@@ -251,19 +254,61 @@ impl Resolver {
         resolved
     }
 
-    fn look_up(&mut self, path: &str, package: Option<&Path>) -> Option<PathBuf> {
+    /// The existing file that `found` in `line` names and where its path starts, which is before
+    /// `found` when the path has spaces, like `Some Note.typ:3:5` in the output of
+    /// `rg --vimgrep`. The longest such path that exists wins.
+    pub fn resolve_in(&mut self, line: &str, found: &Found) -> Option<(PathBuf, usize)> {
+        const WORDS: usize = 8;
+        let end = found.range.start;
+        let mut starts = Vec::new();
+        if line[end..].starts_with(&found.path) {
+            let mut start = end;
+            while let Some(before) = line[..start].strip_suffix(' ') {
+                let word = before.rsplit(' ').next().unwrap_or_default();
+                let path_like =
+                    !word.is_empty() && !word.contains(|c: char| "\"'`()[]{}<>:,;|".contains(c));
+                if !path_like || starts.len() == WORDS {
+                    break;
+                }
+                start -= word.len() + 1;
+                starts.push(start);
+            }
+        }
+        for start in starts.into_iter().rev() {
+            let path = format!("{}{}", &line[start..end], found.path);
+            let resolved = match self.spaced.get(&path) {
+                Some(resolved) => resolved.clone(),
+                None => {
+                    let resolved = self.look_up_path(&path);
+                    self.spaced.insert(path, resolved.clone());
+                    resolved
+                }
+            };
+            if let Some(resolved) = resolved {
+                return Some((resolved, start));
+            }
+        }
+        Some((self.resolve(found)?, end))
+    }
+
+    /// The existing file that `path` names, absolute or relative to the run's directories.
+    fn look_up_path(&self, path: &str) -> Option<PathBuf> {
         let path = helix_stdx::path::expand_tilde(Path::new(path));
         if path.is_absolute() {
             return path.is_file().then(|| path.into_owned());
         }
-        let relative = self
-            .dirs
+        self.dirs
             .iter()
             .map(|dir| dir.join(&path))
-            .find(|path| path.is_file());
-        if let Some(found) = relative {
-            return Some(helix_stdx::path::normalize(found));
+            .find(|path| path.is_file())
+            .map(helix_stdx::path::normalize)
+    }
+
+    fn look_up(&mut self, path: &str, package: Option<&Path>) -> Option<PathBuf> {
+        if let Some(found) = self.look_up_path(path) {
+            return Some(found);
         }
+        let path = helix_stdx::path::expand_tilde(Path::new(path));
         // A bare file name, as stack traces and test runners print them.
         let mut components = path.components();
         let name = match (components.next(), components.next()) {
@@ -345,10 +390,11 @@ impl Finder {
         let mut start = 0;
         for line in text.split_inclusive('\n') {
             let content = line.strip_suffix('\n').unwrap_or(line);
-            for found in find(content) {
-                let Some(path) = self.resolver.resolve(&found) else {
+            for mut found in find(content) {
+                let Some((path, path_start)) = self.resolver.resolve_in(content, &found) else {
                     continue;
                 };
+                found.range.start = path_start;
                 loci.push(Locus {
                     start: start + content[..found.range.start].chars().count(),
                     len: content[found.range.clone()].chars().count(),
@@ -395,6 +441,8 @@ mod tests {
             "a.ts",
             "Main.kt",
             "App.scala",
+            "100 - Notes/Some Note.typ",
+            "other/Note.typ",
         ] {
             let path = dir.path().join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -649,6 +697,38 @@ Finished at 14:03:12
             ("a.ts(1,5)", Severity::Error, 1, 5)
         );
         assert_eq!(found.len(), 3);
+    }
+
+    #[test]
+    fn loci_of_paths_with_spaces() {
+        let dir = project();
+        let output = "100 - Notes/Some Note.typ:3:5:the match
+thread 'main' panicked at 100 - Notes/Some Note.typ:2:1:
+";
+        let rg = "100 - Notes/Some Note.typ:3:5:the match";
+        let panic = "thread 'main' panicked at 100 - Notes/Some Note.typ:2:1:";
+        let file = "100 - Notes/Some Note.typ";
+        assert_eq!(
+            loci(dir.path(), output),
+            [
+                locus(
+                    "100 - Notes/Some Note.typ:3:5",
+                    Severity::Info,
+                    rg,
+                    file,
+                    3,
+                    5
+                ),
+                locus(
+                    "100 - Notes/Some Note.typ:2:1",
+                    Severity::Error,
+                    panic,
+                    file,
+                    2,
+                    1
+                ),
+            ]
+        );
     }
 
     /// Times finding loci, in release:
