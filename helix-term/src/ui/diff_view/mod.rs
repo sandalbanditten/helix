@@ -447,6 +447,11 @@ impl DiffView {
         if !intact {
             let pair = self.pair.take().expect("checked above");
             editor.close_diff_panes(pair.panes, None);
+            // Panes that were the only views leave a scratch buffer, not an empty editor, as
+            // when one of them came to show its partner.
+            if editor.tree.views().next().is_none() {
+                editor.new_file(Action::VerticalSplit);
+            }
             if let Some(task) = self.task.take() {
                 task.abort();
             }

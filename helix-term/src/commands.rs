@@ -935,19 +935,26 @@ fn goto_previous_buffer(cx: &mut Context) {
 
 fn goto_buffer(editor: &mut Editor, direction: Direction, count: usize) {
     let current = view!(editor).doc;
+    // The diff view's panes are no buffers to go to.
+    let buffers: Vec<_> = editor
+        .documents
+        .iter()
+        .filter(|&(&id, doc)| id == current || doc.diff_view.is_none())
+        .map(|(&id, _)| id)
+        .collect();
 
     let id = match direction {
         Direction::Forward => {
-            let iter = editor.documents.keys();
+            let iter = buffers.iter();
             // skip 'count' times past current buffer
-            iter.cycle().skip_while(|id| *id != &current).nth(count)
+            iter.cycle().skip_while(|id| **id != current).nth(count)
         }
         Direction::Backward => {
-            let iter = editor.documents.keys();
+            let iter = buffers.iter();
             // skip 'count' times past current buffer
             iter.rev()
                 .cycle()
-                .skip_while(|id| *id != &current)
+                .skip_while(|id| **id != current)
                 .nth(count)
         }
     }
