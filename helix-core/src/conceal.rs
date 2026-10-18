@@ -55,9 +55,9 @@ impl SymbolTable {
     /// What `text` is shown as.
     pub fn resolve(self, text: &str) -> Option<Replacement> {
         match self {
-            Self::TypstMath => typst::math_symbol(text).map(Replacement::from),
-            Self::TypstCode => typst::code_symbol(text).map(Replacement::from),
-            Self::TypstShorthand => typst::shorthand(text).map(Replacement::from),
+            Self::TypstMath => typst::math_symbol(text).map(widened),
+            Self::TypstCode => typst::code_symbol(text).map(widened),
+            Self::TypstShorthand => typst::shorthand(text).map(widened),
             Self::TypstWikilink => typst::wikilink(text).map(Replacement::from),
             Self::TypstRule => typst::is_full_width_line(text).then_some(Replacement::Fill("─")),
         }
@@ -70,6 +70,27 @@ impl SymbolTable {
             _ => MAX_CONCEALED_BYTES,
         }
     }
+}
+
+/// `symbol` as a replacement, taking three columns if it is a long arrow like `⟹`, which fonts draw
+/// about as wide as `==>`.
+fn widened(symbol: &'static str) -> Replacement {
+    const LONG_ARROWS: &[(&str, &str)] = &[
+        ("⟵", "⟵  "),
+        ("⟶", "⟶  "),
+        ("⟷", "⟷  "),
+        ("⟸", "⟸  "),
+        ("⟹", "⟹  "),
+        ("⟺", "⟺  "),
+        ("⟻", "⟻  "),
+        ("⟼", "⟼  "),
+        ("⟽", "⟽  "),
+        ("⟾", "⟾  "),
+        ("⟿", "⟿  "),
+        ("⬳", "⬳  "),
+    ];
+    let wide = LONG_ARROWS.iter().find(|&&(arrow, _)| arrow == symbol);
+    Replacement::from(wide.map_or(symbol, |&(_, wide)| wide))
 }
 
 impl FromStr for SymbolTable {
@@ -354,7 +375,7 @@ mod test {
         // modifiers in any order, like Typst
         assert_eq!(
             typst("$arrow.r.long arrow.long.r eq.not RR dot$"),
-            "$⟶ ⟶ ≠ ℝ ⋅$"
+            "$⟶   ⟶   ≠ ℝ ⋅$"
         );
         // symbols in attachments, fractions, roots, primes, factorials and arguments
         assert_eq!(
@@ -404,10 +425,10 @@ mod test {
             "$a → b ≠ c ≤ d … e ≔ f$"
         );
         assert_eq!(typst("$||x|| [|x|]$"), "$‖x‖ ⟦x⟧$");
-        // shorthands the grammar splits, like `==>` into `=` and `=>`, but not across spaces
+        // shorthands the grammar splits, like `|=>` into `|` and `=>`, but not across spaces
         assert_eq!(
             typst("$a ==> b |=> c <~~ d >-> e <-< f$"),
-            "$a ⟹ b ⤇ c ⬳ d ↣ e ↢ f$"
+            "$a ⟹   b ⤇ c ⬳   d ↣ e ↢ f$"
         );
         assert_eq!(typst("$a = => b$"), "$a = ⇒ b$");
         // markup, where `~` is a non-breaking space
@@ -415,10 +436,20 @@ mod test {
     }
 
     #[test]
+    fn typst_long_arrows() {
+        // long arrows take three columns, however they are written
+        assert_eq!(
+            typst("$arrow.r.double.long$ $a --> b$ #sym.arrow.l.long"),
+            "$⟹  $ $a ⟶   b$ ⟵  "
+        );
+        assert_eq!(typst("$arrow.r$ $a |-> b$"), "$→$ $a ↦ b$");
+    }
+
+    #[test]
     fn typst_code_symbols() {
         // the `#` is hidden with the symbol
         assert_eq!(typst("Done. #sym.qed #emoji.face"), "Done. ∎ 😀");
-        assert_eq!(typst("#let a = sym.arrow.r.long"), "#let a = ⟶");
+        assert_eq!(typst("#let a = sym.arrow.r.long"), "#let a = ⟶  ");
         assert_eq!(typst("$#sym.alpha + 1$"), "$α + 1$");
         // other fields are not symbols
         assert_eq!(typst("#calc.pi #page.width"), "#calc.pi #page.width");
