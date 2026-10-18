@@ -63,6 +63,17 @@
 (heading "=====" @markup.heading.marker) @markup.heading.5
 (heading "======" @markup.heading.marker) @markup.heading.6
 (url) @tag
+; Obsidian-style wikilinks, like `[[Note\#Heading|alias]]`
+(_
+  (text) @_open @markup.link.url .
+  (text) @_open.second @markup.link.url .
+  (text) @markup.link.url .
+  (text) @_close @markup.link.url .
+  (text) @_close.second @markup.link.url
+  (#eq? @_open "[")
+  (#eq? @_open.second "[")
+  (#eq? @_close "]")
+  (#eq? @_close.second "]"))
 (emph) @markup.italic
 (strong) @markup.bold
 (symbol) @constant.character
