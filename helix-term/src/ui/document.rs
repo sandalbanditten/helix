@@ -192,6 +192,11 @@ pub fn render_text<'a>(
                 syntax_style: renderer.fold_style,
                 overlay_style: overlay_highlighter.style,
             },
+            // a rule is drawn like the indent guides
+            GraphemeSource::Conceal { fill: true, .. } => GraphemeStyle {
+                syntax_style: renderer.indent_guide_style,
+                overlay_style: overlay_highlighter.style,
+            },
             // a conceal is styled like the start of the text it conceals
             GraphemeSource::Conceal { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter
@@ -399,7 +404,7 @@ impl<'a> TextRenderer<'a> {
         style = style.patch(grapheme_style.overlay_style);
 
         let width = grapheme.width();
-        let is_fold = grapheme.source.is_fold();
+        let is_placeholder = grapheme.source.is_placeholder();
         let mut is_tab = false;
         let space = if is_virtual { " " } else { &self.space };
         let nbsp = if is_virtual { " " } else { &self.nbsp };
@@ -435,7 +440,7 @@ impl<'a> TextRenderer<'a> {
                 // `render-whitespace` pads. A single `set_grapheme` would pack
                 // them into one wide cell and leave the rest unstyled.
                 self.surface.set_tab(x, y, grapheme, style);
-            } else if is_fold {
+            } else if is_placeholder {
                 // the placeholder may be several graphemes, each gets its own cells
                 let mut x = x;
                 for g in grapheme.graphemes(true) {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -80,24 +81,46 @@ impl Overlay {
     }
 }
 
-/// Document text within one line shown as another grapheme, like `α` for `alpha`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Document text within one line shown as something else, like `α` for `alpha`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conceal {
     /// The char index of the first concealed char.
     pub start: usize,
     /// The char index after the last concealed char, greater than `start`.
     pub end: usize,
-    /// The grapheme shown instead of the concealed text.
-    pub replacement: &'static str,
+    /// What is shown instead of the concealed text.
+    pub replacement: Replacement,
 }
 
 impl Conceal {
-    pub fn new(start: usize, end: usize, replacement: &'static str) -> Self {
+    pub fn new(start: usize, end: usize, replacement: impl Into<Replacement>) -> Self {
         Self {
             start,
             end,
-            replacement,
+            replacement: replacement.into(),
         }
+    }
+}
+
+/// What a [`Conceal`] shows instead of the text it conceals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Replacement {
+    /// Text, like `α` for `alpha`, which may be several graphemes.
+    Text(Cow<'static, str>),
+    /// A grapheme repeated up to the end of the row, like a horizontal rule. The row's last
+    /// column stays free, so it never wraps.
+    Fill(&'static str),
+}
+
+impl From<&'static str> for Replacement {
+    fn from(text: &'static str) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+impl From<String> for Replacement {
+    fn from(text: String) -> Self {
+        Self::Text(text.into())
     }
 }
 
@@ -367,12 +390,12 @@ impl ConcealLayer<'_> {
         }
         let conceals = self.conceals.borrow();
         loop {
-            let conceal = *conceals.get(self.next.get())?;
+            let conceal = conceals.get(self.next.get())?;
             match conceal.start.cmp(&char_idx) {
                 Ordering::Greater => return None,
                 Ordering::Equal => {
                     self.next.set(self.next.get() + 1);
-                    return Some(conceal);
+                    return Some(conceal.clone());
                 }
                 // starts inside a grapheme that was already passed
                 Ordering::Less => self.next.set(self.next.get() + 1),

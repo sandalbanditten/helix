@@ -66,8 +66,8 @@ pub struct EditorView {
     pub(crate) undo_tree: UndoTree,
     pub(crate) dired: Dired,
     pub(crate) diff_view: DiffView,
-    /// The focused document and top line language servers last heard of.
-    viewport: Option<(helix_view::DocumentId, usize)>,
+    /// The focused document, top line and cursor language servers last heard of.
+    viewport: Option<(helix_view::DocumentId, usize, usize)>,
     pub(crate) reload_question: ReloadQuestion,
     /// What the scrollbars and minimaps mark.
     overview: Overview,

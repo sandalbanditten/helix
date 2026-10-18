@@ -12,7 +12,7 @@ use helix_view::{
     diff_view::{LineChange, Side},
     doc,
     document::Mode,
-    editor::DiffTool,
+    editor::{Action, DiffTool},
     graphics::Rect,
     view::ViewPosition,
     DocumentId, ViewId,
@@ -790,6 +790,43 @@ async fn hunk_jumps_go_through_the_files_of_a_diff_of_many() -> anyhow::Result<(
     session
         .until("the previous file", |app| name(app) == "sub/b.rs (new)")
         .await;
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn buffer_jumps_pass_over_the_panes() -> anyhow::Result<()> {
+    let (_dir, old, new) = directories()?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session
+        .until("the first file", |app| panes(app).is_some())
+        .await;
+    // the panes are the only buffers, so there is none to go to
+    session.keys("gn").await?;
+    session.keys("gp").await?;
+    let app = &session.app;
+    assert!(panes(app).is_some());
+    assert_eq!(name(app), "sub/b.rs (new)");
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_showing_its_partner_leaves_a_scratch() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (old, new) = (dir.path().join("old.rs"), dir.path().join("new.rs"));
+    fs::write(&old, "a\n")?;
+    fs::write(&new, "b\n")?;
+    let mut session = diff_session(&[&old, &new])?;
+    session.keys("").await?;
+    session.until("the panes", |app| panes(app).is_some()).await;
+    let [(_, old), (new_view, _)] = panes(&session.app).unwrap();
+    session.app.editor.focus(new_view);
+    session.app.editor.switch(old, Action::Replace);
+    session.keys("").await?;
+    let app = &session.app;
+    assert!(panes(app).is_none());
+    assert_eq!(app.editor.tree.views().count(), 1);
+    assert_eq!(name(app), "[scratch]");
     session.quit().await
 }
 

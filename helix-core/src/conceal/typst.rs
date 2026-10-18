@@ -65,6 +65,31 @@ pub(super) fn shorthand(shorthand: &str) -> Option<&'static str> {
         .map(|&(_, symbol)| symbol)
 }
 
+/// The text an Obsidian-style wikilink like `[[Note\#Heading|alias]]` shows, without its
+/// brackets and the backslashes of its escapes.
+pub(super) fn wikilink(link: &str) -> Option<String> {
+    let inner = link.strip_prefix("[[")?.strip_suffix("]]")?;
+    if inner.is_empty() || inner.contains(['[', ']']) {
+        return None;
+    }
+    let mut shown = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => shown.push(chars.next().unwrap_or(c)),
+            c => shown.push(c),
+        }
+    }
+    Some(shown)
+}
+
+/// Whether `code` is `#line(length: 100%)`, a line across the page, spaced in any way.
+pub(super) fn is_full_width_line(code: &str) -> bool {
+    code.chars()
+        .filter(|c| !c.is_whitespace())
+        .eq("#line(length:100%)".chars())
+}
+
 /// Resolves `path` in `module` like Typst does, with modifiers in any order.
 fn resolve(mut module: Module, path: &str) -> Option<&'static str> {
     if path.split('.').any(str::is_empty) {

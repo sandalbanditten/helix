@@ -7,8 +7,8 @@ Helix shows text as the symbol it stands for until the cursor comes close (see
 $2 alpha^2$ and $x in RR$    →    $2 α^2$ and $x ∈ ℝ$
 ```
 
-The text to conceal comes from a `conceals.scm` query file, and its symbols from a symbol table
-built into Helix. Query files should be placed in `runtime/queries/{language}/conceals.scm` when
+The text to conceal comes from a `conceals.scm` query file, and what it is shown as from a symbol
+table built into Helix. Query files should be placed in `runtime/queries/{language}/conceals.scm` when
 contributing to Helix. You may place these under your local runtime directory
 (`~/.config/helix/runtime` in Linux for example) for the sake of testing.
 
@@ -51,6 +51,8 @@ Captures a node whose text is not concealed, like a syntax error:
 | `typst-math` | Typst's symbols as math refers to them | `alpha` → `α`, `arrow.r.long` → `⟶` |
 | `typst-code` | Typst's symbols and emoji as code refers to them | `sym.qed` → `∎`, `#emoji.face` → `😀` |
 | `typst-shorthand` | Typst's shorthands | `->` → `→`, `--` → `–` |
+| `typst-wikilink` | Obsidian-style wikilinks, without their brackets and escapes | `[[Note\#Heading]]` → `Note#Heading` |
+| `typst-rule` | Lines across the page, as a rule filling the row | `#line(length: 100%)` → `────` |
 
 The `conceals.scm` files in `runtime/queries` serve as examples.
 

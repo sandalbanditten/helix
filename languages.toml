@@ -3985,7 +3985,7 @@ compile-command = "typst compile %{file_path_absolute}"
 
 [[grammar]]
 name = "typst"
-source = { git = "https://github.com/uben0/tree-sitter-typst", rev = "13863ddcbaa7b68ee6221cea2e3143415e64aea4" }
+source = { git = "https://github.com/uben0/tree-sitter-typst", rev = "46cf4ded12ee974a70bf8457263b67ad7ee0379d" }
 
 [[language]]
 name = "nunjucks"

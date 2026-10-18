@@ -20,11 +20,14 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::chars::char_is_line_ending;
 use crate::syntax::{merge_regions, Loader, Syntax};
-use crate::text_annotations::{Conceal, ConcealSource};
+use crate::text_annotations::{Conceal, ConcealSource, Replacement};
 use crate::{RopeSlice, Selection};
 
-/// The longest text, in bytes, that is looked up in a [`SymbolTable`].
+/// The longest text, in bytes, that is looked up in a [`SymbolTable`] of symbols.
 const MAX_CONCEALED_BYTES: usize = 64;
+
+/// The longest wikilink, in bytes, that is concealed.
+const MAX_WIKILINK_BYTES: usize = 512;
 
 /// The most lines whose conceals are computed at once.
 const FETCHED_LINES: usize = 128;
@@ -41,17 +44,53 @@ pub enum SymbolTable {
     TypstCode,
     /// Typst's shorthands of more than one character, like `->` or `--`.
     TypstShorthand,
+    /// Obsidian-style wikilinks in Typst markup, like `[[Note\#Heading|alias]]`, shown without
+    /// their brackets and the backslashes of their escapes.
+    TypstWikilink,
+    /// Lines across the page, `#line(length: 100%)`, shown as a rule filling the row.
+    TypstRule,
 }
 
 impl SymbolTable {
-    /// The symbol that `text` stands for.
-    pub fn resolve(self, text: &str) -> Option<&'static str> {
+    /// What `text` is shown as.
+    pub fn resolve(self, text: &str) -> Option<Replacement> {
         match self {
-            Self::TypstMath => typst::math_symbol(text),
-            Self::TypstCode => typst::code_symbol(text),
-            Self::TypstShorthand => typst::shorthand(text),
+            Self::TypstMath => typst::math_symbol(text).map(widened),
+            Self::TypstCode => typst::code_symbol(text).map(widened),
+            Self::TypstShorthand => typst::shorthand(text).map(widened),
+            Self::TypstWikilink => typst::wikilink(text).map(Replacement::from),
+            Self::TypstRule => typst::is_full_width_line(text).then_some(Replacement::Fill("─")),
         }
     }
+
+    /// The longest text, in bytes, that is looked up in the table.
+    fn max_bytes(self) -> usize {
+        match self {
+            Self::TypstWikilink => MAX_WIKILINK_BYTES,
+            _ => MAX_CONCEALED_BYTES,
+        }
+    }
+}
+
+/// `symbol` as a replacement, taking three columns if it is a long arrow like `⟹`, which fonts draw
+/// about as wide as `==>`.
+fn widened(symbol: &'static str) -> Replacement {
+    const LONG_ARROWS: &[(&str, &str)] = &[
+        ("⟵", "⟵  "),
+        ("⟶", "⟶  "),
+        ("⟷", "⟷  "),
+        ("⟸", "⟸  "),
+        ("⟹", "⟹  "),
+        ("⟺", "⟺  "),
+        ("⟻", "⟻  "),
+        ("⟼", "⟼  "),
+        ("⟽", "⟽  "),
+        ("⟾", "⟾  "),
+        ("⟿", "⟿  "),
+        ("⬳", "⬳  "),
+    ];
+    let wide = LONG_ARROWS.iter().find(|&&(arrow, _)| arrow == symbol);
+    Replacement::from(wide.map_or(symbol, |&(_, wide)| wide))
 }
 
 impl FromStr for SymbolTable {
@@ -62,6 +101,8 @@ impl FromStr for SymbolTable {
             "typst-math" => Ok(Self::TypstMath),
             "typst-code" => Ok(Self::TypstCode),
             "typst-shorthand" => Ok(Self::TypstShorthand),
+            "typst-wikilink" => Ok(Self::TypstWikilink),
+            "typst-rule" => Ok(Self::TypstRule),
             _ => Err(format!("unknown symbol table '{name}'")),
         }
     }
@@ -197,17 +238,19 @@ impl<'a> SyntaxConceals<'a> {
                 noconceal.push(text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end));
                 continue;
             };
-            if bytes.is_empty() || bytes.len() > MAX_CONCEALED_BYTES {
+            if bytes.is_empty() || bytes.len() > table.max_bytes() {
                 continue;
             }
             let concealed: Cow<str> = text.byte_slice(bytes.clone()).into();
             if concealed.contains(char_is_line_ending) {
                 continue;
             }
-            let Some(replacement) = table
-                .resolve(&concealed)
-                .filter(|symbol| is_visible(symbol))
-            else {
+            let Some(replacement) = table.resolve(&concealed).filter(|replacement| {
+                is_visible(match replacement {
+                    Replacement::Text(text) => text,
+                    Replacement::Fill(g) => g,
+                })
+            }) else {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
@@ -261,7 +304,7 @@ impl ConcealSource for SyntaxConceals<'_> {
             let shown = line_conceals
                 .iter()
                 .filter(|conceal| conceal.start >= char_idx && !revealed(conceal));
-            conceals.extend(shown);
+            conceals.extend(shown.cloned());
             line += 1;
             if line == first_line + SERVED_LINES {
                 break;
@@ -310,7 +353,10 @@ mod test {
             let end = conceals.conceals_from(fetched, &mut batch);
             for conceal in batch {
                 rendered.extend(slice.slice(pos..conceal.start).chars());
-                rendered.push_str(conceal.replacement);
+                match conceal.replacement {
+                    Replacement::Text(text) => rendered.push_str(&text),
+                    Replacement::Fill(g) => rendered.push_str(&format!("{g}…")),
+                }
                 pos = conceal.end;
             }
             fetched = end;
@@ -329,7 +375,7 @@ mod test {
         // modifiers in any order, like Typst
         assert_eq!(
             typst("$arrow.r.long arrow.long.r eq.not RR dot$"),
-            "$⟶ ⟶ ≠ ℝ ⋅$"
+            "$⟶   ⟶   ≠ ℝ ⋅$"
         );
         // symbols in attachments, fractions, roots, primes, factorials and arguments
         assert_eq!(
@@ -379,18 +425,57 @@ mod test {
             "$a → b ≠ c ≤ d … e ≔ f$"
         );
         assert_eq!(typst("$||x|| [|x|]$"), "$‖x‖ ⟦x⟧$");
+        // shorthands the grammar splits, like `|=>` into `|` and `=>`, but not across spaces
+        assert_eq!(
+            typst("$a ==> b |=> c <~~ d >-> e <-< f$"),
+            "$a ⟹   b ⤇ c ⬳   d ↣ e ↢ f$"
+        );
+        assert_eq!(typst("$a = => b$"), "$a = ⇒ b$");
         // markup, where `~` is a non-breaking space
         assert_eq!(typst("a -- b --- c... d~e"), "a – b — c… d~e");
+    }
+
+    #[test]
+    fn typst_long_arrows() {
+        // long arrows take three columns, however they are written
+        assert_eq!(
+            typst("$arrow.r.double.long$ $a --> b$ #sym.arrow.l.long"),
+            "$⟹  $ $a ⟶   b$ ⟵  "
+        );
+        assert_eq!(typst("$arrow.r$ $a |-> b$"), "$→$ $a ↦ b$");
     }
 
     #[test]
     fn typst_code_symbols() {
         // the `#` is hidden with the symbol
         assert_eq!(typst("Done. #sym.qed #emoji.face"), "Done. ∎ 😀");
-        assert_eq!(typst("#let a = sym.arrow.r.long"), "#let a = ⟶");
+        assert_eq!(typst("#let a = sym.arrow.r.long"), "#let a = ⟶  ");
         assert_eq!(typst("$#sym.alpha + 1$"), "$α + 1$");
         // other fields are not symbols
         assert_eq!(typst("#calc.pi #page.width"), "#calc.pi #page.width");
+    }
+
+    #[test]
+    fn typst_wikilinks() {
+        assert_eq!(
+            typst("See [[Functor\\#Laws|functors]] and [[Natural Isomorphism]]."),
+            "See Functor#Laws|functors and Natural Isomorphism."
+        );
+        // the `!` of an embed belongs to the text before it
+        assert_eq!(typst("![[img.png|300]]"), "!img.png|300");
+        assert_eq!(typst("- a [[x]]\n= Head [[y]]"), "- a x\n= Head y");
+        // not in raw text or math, and not single or empty brackets
+        assert_eq!(typst("`[[raw]]` $[[m]]$"), "`[[raw]]` $[[m]]$");
+        assert_eq!(typst("[x] [[]]"), "[x] [[]]");
+    }
+
+    #[test]
+    fn typst_rules() {
+        assert_eq!(typst("a\n#line(length: 100%)\nb"), "a\n─…\nb");
+        assert_eq!(typst("#line(length:100%)"), "─…");
+        // other lines are left as they are
+        assert_eq!(typst("#line(length: 50%)"), "#line(length: 50%)");
+        assert_eq!(typst("#line()"), "#line()");
     }
 
     fn cursors(ranges: &[(usize, usize)]) -> Selection {
@@ -467,7 +552,11 @@ mod test {
                 SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
             let mut fetched = Vec::new();
             conceals.conceals_from(0, &mut fetched);
-            let fetched: Vec<_> = fetched.iter().map(|c| (c.start, c.replacement)).collect();
+            let fetched: Vec<_> = fetched
+                .into_iter()
+                .map(|c| (c.start, c.replacement))
+                .collect();
+            let shown = shown.map(|(start, symbol)| (start, Replacement::from(symbol)));
             assert_eq!(fetched, shown);
         }
         assert_eq!(cache.borrow().lines.len(), 1);
