@@ -257,6 +257,25 @@ mod test {
         .await
     }
 
+    /// `:move` takes a bare file name as one in the working directory.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn moving_to_a_bare_file_name() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["dir/x.txt"])?;
+        let mut app = workspace.app("dir/x.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![(
+                Some(":move y.txt<ret>"),
+                Some(&|app| {
+                    assert!(workspace.path("y.txt").exists());
+                    assert_eq!(focused_path(app), Some(workspace.path("y.txt").as_path()));
+                }),
+            )],
+            false,
+        )
+        .await
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn undo_files_follow_renamed_and_pasted_entries() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["dir/x.txt", "dir/sub/y.txt"])?;
