@@ -8,7 +8,7 @@ use helix_event::{register_hook, send_blocking, AsyncHook};
 use helix_lsp::lsp;
 use helix_view::events::LanguageServerInitialized;
 use helix_view::handlers::{lsp::ViewportEvent, Handlers};
-use helix_view::{current_ref, DocumentId, Editor};
+use helix_view::{DocumentId, Editor};
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
@@ -88,21 +88,25 @@ fn notify(editor: &Editor, event: &ViewportEvent) {
     }
 }
 
-/// The focused view's document, the first line it shows and its cursor.
-fn focused(editor: &Editor) -> ViewportEvent {
-    let (view, doc) = current_ref!(editor);
+/// The focused view's document, the first line it shows and its cursor, or `None` while the
+/// focus is on a view that is gone, like when the diff view swaps its views.
+fn focused(editor: &Editor) -> Option<ViewportEvent> {
+    let view = editor.tree.try_get(editor.tree.focus)?;
+    let doc = editor.document(view.doc)?;
     let text = doc.text();
-    ViewportEvent {
+    Some(ViewportEvent {
         doc: doc.id(),
         top_line: text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars())),
         cursor: doc.selection(view.id).primary().cursor(text.slice(..)),
-    }
+    })
 }
 
 /// Sends the focused view's document, top line and cursor when they differ from `last`. Called
 /// on every render, so it sees the view's scroll target, not the frames animating towards it.
 pub fn follow(editor: &Editor, last: &mut Option<(DocumentId, usize, usize)>) {
-    let event = focused(editor);
+    let Some(event) = focused(editor) else {
+        return;
+    };
     let current = Some((event.doc, event.top_line, event.cursor));
     if *last != current {
         *last = current;
@@ -114,7 +118,9 @@ pub(super) fn register_hooks(handlers: &Handlers) {
     let tx = handlers.viewport.clone();
     // A server that just started hasn't heard about the view yet.
     register_hook!(move |event: &mut LanguageServerInitialized<'_>| {
-        send_blocking(&tx, focused(event.editor));
+        if let Some(focused) = focused(event.editor) {
+            send_blocking(&tx, focused);
+        }
         Ok(())
     });
 }
