@@ -312,7 +312,7 @@ async fn markdown_in_commit_messages() -> anyhow::Result<()> {
     let rendered = |app: &Application| {
         assert_shows(
             app,
-            &["See \u{f059f} the docs for why.", "# a [comment](x)"],
+            &["See \u{f059f} the docs for why.", "# a \u{f0339} comment"],
         )
     };
     test_key_sequence(&mut app, Some("<esc>"), Some(&rendered), false).await?;

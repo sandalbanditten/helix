@@ -6,6 +6,6 @@
  (#set! injection.language "git-rebase"))
 
 ; The message's body, as Markdown
-((message_line) @injection.content
- (#set! injection.combined)
+((message) @injection.content
+ (#set! injection.include-children)
  (#set! injection.language "markdown"))
