@@ -215,7 +215,7 @@ impl Renderer<'_, '_> {
             let bytes = bytes_of(row);
             if row.kind() == "pipe_table_delimiter_row" {
                 let border = border(&widths, DELIMITER, &aligns);
-                self.conceal(bytes, Replacement::from(border), ConcealStyle::Guide);
+                self.conceal(bytes, Replacement::from(border), ConcealStyle::Rule);
                 continue;
             }
             let row_chars = text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end);
@@ -274,7 +274,7 @@ impl Renderer<'_, '_> {
 
             // the rest of the cells on rows of their own
             for k in 1..height {
-                let mut parts = vec![(prefix.clone(), RowStyle::Guide)];
+                let mut parts = vec![(prefix.clone(), RowStyle::Rule)];
                 let mut guide = String::from("│ ");
                 for (column, &width) in widths.iter().enumerate() {
                     if column > 0 {
@@ -287,12 +287,12 @@ impl Renderer<'_, '_> {
                     let shown_width: usize = units.iter().map(|unit| unit.width).sum();
                     let (before, after) = align(column).padding(width.saturating_sub(shown_width));
                     guide.extend(iter::repeat_n(' ', before));
-                    parts.push((std::mem::take(&mut guide), RowStyle::Guide));
+                    parts.push((std::mem::take(&mut guide), RowStyle::Rule));
                     parts.extend(units.iter().map(|unit| (unit.shown.clone(), unit.style)));
                     guide.extend(iter::repeat_n(' ', after));
                 }
                 guide.push_str(" │");
-                parts.push((guide, RowStyle::Guide));
+                parts.push((guide, RowStyle::Rule));
                 let line = text.char_to_line(row_chars.start);
                 let row = VirtualRow::new(parts, wrapped.clone());
                 self.rendered.rows.push((line, false, row));
@@ -367,7 +367,7 @@ impl Renderer<'_, '_> {
                 Replacement::Fill(_) | Replacement::Hidden => String::new(),
             };
             let style = match conceal.style {
-                ConcealStyle::Guide => RowStyle::Guide,
+                ConcealStyle::Rule => RowStyle::Rule,
                 ConcealStyle::Scope(scope) => RowStyle::Scope(scope),
                 ConcealStyle::Text => RowStyle::Text {
                     char_idx: conceal.start,
@@ -411,9 +411,9 @@ impl Renderer<'_, '_> {
         let text = self.text;
         let bytes = text.char_to_byte(chars.start)..text.char_to_byte(chars.end);
         if chars.is_empty() {
-            self.insert(bytes.start, replacement, ConcealStyle::Guide);
+            self.insert(bytes.start, replacement, ConcealStyle::Rule);
         } else {
-            self.conceal(bytes, replacement, ConcealStyle::Guide);
+            self.conceal(bytes, replacement, ConcealStyle::Rule);
         }
     }
 
@@ -427,7 +427,7 @@ impl Renderer<'_, '_> {
 
     /// Draws `border` on a row of its own below `line`, or above it if `above`.
     fn row(&mut self, line: usize, above: bool, border: String) {
-        let row = VirtualRow::new(vec![(border, RowStyle::Guide)], None);
+        let row = VirtualRow::new(vec![(border, RowStyle::Rule)], None);
         self.rendered.rows.push((line, above, row));
     }
 }

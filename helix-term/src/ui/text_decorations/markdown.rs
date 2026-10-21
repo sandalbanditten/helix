@@ -82,8 +82,8 @@ pub struct MarkdownRows<'a> {
     /// The lines with rows and their rows, sorted.
     rows: Vec<(usize, LineRows)>,
     text: RopeSlice<'a>,
-    /// The styles rows are drawn in: like the indent guides, or like the text.
-    guide: Style,
+    /// The styles rows are drawn in: like the markers of whitespace, or like the text.
+    rule: Style,
     plain: Style,
     theme: &'a Theme,
     /// The syntax styles of the chars of the text that rows show, sorted.
@@ -102,7 +102,7 @@ impl<'a> MarkdownRows<'a> {
     pub fn new(
         rows: Vec<(usize, LineRows)>,
         text: RopeSlice<'a>,
-        guide: Style,
+        rule: Style,
         plain: Style,
         theme: &'a Theme,
         styles: Vec<(usize, Style)>,
@@ -111,7 +111,7 @@ impl<'a> MarkdownRows<'a> {
         Self {
             rows,
             text,
-            guide,
+            rule,
             plain,
             theme,
             styles,
@@ -137,7 +137,7 @@ impl<'a> MarkdownRows<'a> {
             let mut col = 0;
             for (text, style) in &row.parts {
                 let style = match style {
-                    RowStyle::Guide => self.guide,
+                    RowStyle::Rule => self.rule,
                     RowStyle::Scope(scope) => self.plain.patch(self.theme.get(scope)),
                     RowStyle::Text { char_idx } => {
                         let i = self.styles.partition_point(|&(other, _)| other < *char_idx);

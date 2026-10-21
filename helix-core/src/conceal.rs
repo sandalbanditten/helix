@@ -237,8 +237,8 @@ impl VirtualRow {
 /// How a part of a [`VirtualRow`] is styled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowStyle {
-    /// Like the indent guides, like the borders of a table.
-    Guide,
+    /// Like the markers of whitespace, like the borders of a table.
+    Rule,
     /// In the style of a theme scope over the text's base style.
     Scope(&'static str),
     /// Like the document text at `char_idx`, which the part shows, like a wrapped cell's text.
@@ -1046,7 +1046,7 @@ mod test {
             &cache,
         )
         .unwrap();
-        let row = |border: &str| VirtualRow::new(vec![(border.to_owned(), RowStyle::Guide)], None);
+        let row = |border: &str| VirtualRow::new(vec![(border.to_owned(), RowStyle::Rule)], None);
         assert_eq!(
             conceals.rows(0..text.len_lines()),
             [

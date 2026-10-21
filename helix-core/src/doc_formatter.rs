@@ -103,7 +103,13 @@ impl GraphemeSource {
     }
 
     fn is_whitespace(self, grapheme: &Grapheme) -> bool {
-        !self.is_fold() && grapheme.is_whitespace()
+        match grapheme {
+            // a conceal's replacement, like ` │ `, is whitespace only if all of it is
+            Grapheme::Other { g } if matches!(self, GraphemeSource::Conceal { .. }) => {
+                g.chars().all(char::is_whitespace)
+            }
+            _ => !self.is_fold() && grapheme.is_whitespace(),
+        }
     }
 
     fn is_word_boundary(self, grapheme: &Grapheme) -> bool {

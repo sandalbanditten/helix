@@ -1,6 +1,6 @@
 ## Building from source
 
-- [Configuring Helix's runtime files](#configuring-helixs-runtime-files)
+- [Configuring Helix' runtime files](#configuring-helixs-runtime-files)
   - [Linux and macOS](#linux-and-macos)
   - [Windows](#windows)
   - [Multiple runtime directories](#multiple-runtime-directories)

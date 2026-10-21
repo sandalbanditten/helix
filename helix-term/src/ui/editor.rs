@@ -291,9 +291,7 @@ impl EditorView {
             decorations.add_decoration(text_decorations::MarkdownRows::new(
                 rows,
                 text,
-                theme
-                    .try_get("ui.virtual.indent-guide")
-                    .unwrap_or_else(|| theme.get("ui.virtual.whitespace")),
+                plain.patch(theme.get("ui.virtual.whitespace")),
                 plain,
                 theme,
                 styles,

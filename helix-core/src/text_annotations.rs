@@ -96,12 +96,12 @@ pub struct Conceal {
 }
 
 impl Conceal {
-    /// A conceal styled as its replacement usually is: a rule like the indent guides, text like
+    /// A conceal styled as its replacement usually is: a rule in the whitespace color, text like
     /// the text it conceals.
     pub fn new(start: usize, end: usize, replacement: impl Into<Replacement>) -> Self {
         let replacement = replacement.into();
         let style = match replacement {
-            Replacement::Fill(_) => ConcealStyle::Guide,
+            Replacement::Fill(_) => ConcealStyle::Rule,
             Replacement::Text(_) | Replacement::Hidden => ConcealStyle::Text,
         };
         Self {
@@ -136,8 +136,8 @@ pub enum ConcealStyle {
     /// Like the start of the text it conceals, patched with `ui.virtual.conceal`.
     #[default]
     Text,
-    /// Like the indent guides, like a rule or the borders of a table.
-    Guide,
+    /// Like the markers of whitespace, like a rule or the borders of a table.
+    Rule,
     /// In the style of a theme scope, like `markup.heading.1`, over the text's base style.
     Scope(&'static str),
 }

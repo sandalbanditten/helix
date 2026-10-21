@@ -189,11 +189,7 @@ impl<'a, 't> Renderer<'a, 't> {
             Element::Rule => {
                 let rule = self.slice(bytes.clone());
                 let end = bytes.start + rule.trim_end().len();
-                self.conceal(
-                    bytes.start..end,
-                    Replacement::Fill("─"),
-                    ConcealStyle::Guide,
-                );
+                self.conceal(bytes.start..end, Replacement::Fill("─"), ConcealStyle::Rule);
             }
             Element::ListMarker => self.list_marker(node),
             Element::QuoteMarker => self.quote_marker(node),
@@ -452,12 +448,12 @@ impl<'a, 't> Renderer<'a, 't> {
                 let line_end = self.line_end_byte(open.start);
                 self.element(open.start..line_end, |this| {
                     this.conceal(open.start..info_start, icon, ConcealStyle::Scope("label"));
-                    let rule = ConcealStyle::Guide;
+                    let rule = ConcealStyle::Rule;
                     this.insert(line_end, Replacement::from(" "), rule);
                     this.insert(line_end, Replacement::Fill("─"), rule);
                 });
             }
-            None => self.conceal(open, Replacement::Fill("─"), ConcealStyle::Guide),
+            None => self.conceal(open, Replacement::Fill("─"), ConcealStyle::Rule),
         }
         let close = block
             .children()
@@ -466,7 +462,7 @@ impl<'a, 't> Renderer<'a, 't> {
             .last();
         if let Some(close) = close {
             let close = bytes_of(&close);
-            self.conceal(close, Replacement::Fill("─"), ConcealStyle::Guide);
+            self.conceal(close, Replacement::Fill("─"), ConcealStyle::Rule);
         }
     }
 

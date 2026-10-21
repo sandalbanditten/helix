@@ -215,8 +215,8 @@ pub fn render_text<'a>(
             },
             GraphemeSource::Conceal { style, .. } => GraphemeStyle {
                 syntax_style: match style {
-                    // a rule or a table's border is drawn like the indent guides
-                    ConcealStyle::Guide => renderer.indent_guide_style,
+                    // a rule or a table's border is drawn like the markers of whitespace
+                    ConcealStyle::Rule => renderer.whitespace_style,
                     ConcealStyle::Text => syntax_highlighter
                         .style
                         .patch(span_styler.style_at(grapheme.char_idx))
