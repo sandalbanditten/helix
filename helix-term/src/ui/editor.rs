@@ -10,7 +10,7 @@ use crate::{
         diff_view::{self, DiffView},
         dired::{self, Dired},
         dock,
-        document::{render_document, LinePos, SyntaxHighlighting, TextRenderer},
+        document::{render_document, syntax_styles, LinePos, SyntaxHighlighting, TextRenderer},
         file_tree::FileTree,
         minimap::Minimaps,
         overview::{self, Overview},
@@ -23,7 +23,7 @@ use crate::{
 };
 
 use helix_core::{
-    conceal::{ConcealDecoration, DecorationStyle},
+    conceal::{ConcealDecoration, DecorationStyle, LineRows, RowStyle},
     diagnostic::NumberOrString,
     fold::{self, Fold},
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
@@ -286,14 +286,17 @@ impl EditorView {
         let lines = first..view.estimate_last_doc_line(doc) + 1;
         let rows = view.conceal_rows(doc, is_focused, first.saturating_sub(1)..lines.end);
         if !rows.is_empty() {
+            let plain = theme.get("ui.text");
+            let styles = Self::markdown_row_styles(doc, &rows, theme, plain, &loader);
             decorations.add_decoration(text_decorations::MarkdownRows::new(
                 rows,
                 text,
                 theme
                     .try_get("ui.virtual.indent-guide")
                     .unwrap_or_else(|| theme.get("ui.virtual.whitespace")),
-                theme.get("ui.text"),
+                plain,
                 theme,
+                styles,
                 doc.text_format(inner.width, None).soft_wrap,
             ));
         }
@@ -466,6 +469,40 @@ impl EditorView {
             len: text.len_lines(),
             shared: viewport.right() == area.right(),
         })
+    }
+
+    /// The syntax styles of the chars of the text that the virtual `rows` show, like the cells of
+    /// a table wrapped onto them, sorted.
+    fn markdown_row_styles(
+        doc: &Document,
+        rows: &[(usize, LineRows)],
+        theme: &Theme,
+        plain: Style,
+        loader: &syntax::Loader,
+    ) -> Vec<(usize, Style)> {
+        let mut chars: Vec<usize> = rows
+            .iter()
+            .flat_map(|(_, rows)| rows.above.iter().chain(&rows.below))
+            .flat_map(|row| &row.parts)
+            .filter_map(|(_, style)| match style {
+                RowStyle::Text { char_idx } => Some(*char_idx),
+                _ => None,
+            })
+            .collect();
+        if chars.is_empty() {
+            return Vec::new();
+        }
+        chars.sort_unstable();
+        chars.dedup();
+        let text = doc.text().slice(..);
+        let highlighting = doc.syntax().map(|syntax| SyntaxHighlighting {
+            syntax,
+            loader,
+            range: text.char_to_byte(chars[0]) as u32
+                ..text.char_to_byte((chars[chars.len() - 1] + 1).min(text.len_chars())) as u32,
+        });
+        let styles = syntax_styles(highlighting, text, theme, plain, &chars);
+        chars.into_iter().zip(styles).collect()
     }
 
     /// The text of rendered Markdown drawn in the color of a theme scope, like the title of a

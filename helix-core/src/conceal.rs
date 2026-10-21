@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::chars::char_is_line_ending;
 use crate::syntax::{merge_regions, Loader, Syntax};
-use crate::text_annotations::{Conceal, ConcealSource, ConcealStyle, LineAnnotation, Replacement};
+use crate::text_annotations::{Conceal, ConcealSource, LineAnnotation, Replacement};
 use crate::tree_sitter::Node;
 use crate::{Position, RopeSlice, Selection};
 
@@ -178,6 +178,9 @@ pub struct ConcealOptions {
     pub symbols: bool,
     /// How Markdown is drawn rendered, or `None` to leave it as it is.
     pub markdown: Option<MarkdownRender>,
+    /// The columns the text wraps at, if it soft-wraps, which tables wider than that wrap their
+    /// cells to fit.
+    pub wrap: Option<u16>,
 }
 
 /// When the cursors of the focused view reveal a conceal.
@@ -219,7 +222,27 @@ pub enum DecorationStyle {
 /// and how each is styled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualRow {
-    pub parts: Vec<(String, ConcealStyle)>,
+    pub parts: Vec<(String, RowStyle)>,
+    /// The chars of the element the row is revealed with, if any, like the row of a table whose
+    /// cells wrap onto it.
+    element: Option<ops::Range<usize>>,
+}
+
+impl VirtualRow {
+    pub(crate) fn new(parts: Vec<(String, RowStyle)>, element: Option<ops::Range<usize>>) -> Self {
+        Self { parts, element }
+    }
+}
+
+/// How a part of a [`VirtualRow`] is styled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowStyle {
+    /// Like the indent guides, like the borders of a table.
+    Guide,
+    /// In the style of a theme scope over the text's base style.
+    Scope(&'static str),
+    /// Like the document text at `char_idx`, which the part shows, like a wrapped cell's text.
+    Text { char_idx: usize },
 }
 
 /// The virtual rows drawn around a line.
@@ -445,7 +468,8 @@ impl<'a> SyntaxConceals<'a> {
         // tables, measured with the conceals of their cells
         if let Some(options) = self.options.markdown {
             for table in std::mem::take(&mut rendered.tables) {
-                markdown::Renderer::new(text, &self.loader, options, &mut rendered).table(&table);
+                markdown::Renderer::new(text, &self.loader, options, &mut rendered)
+                    .table(&table, self.options.wrap);
             }
         }
         let Rendered {
@@ -499,7 +523,8 @@ impl<'a> SyntaxConceals<'a> {
             .collect()
     }
 
-    /// Calls `f` with the virtual rows around `line`, if it has any.
+    /// Calls `f` with the virtual rows around `line` that the cursors don't reveal, if it has
+    /// any.
     fn with_rows<R>(&self, line: usize, f: impl FnOnce(Option<&LineRows>) -> R) -> R {
         let text = self.text;
         let mut cache = self.cache.borrow_mut();
@@ -507,7 +532,30 @@ impl<'a> SyntaxConceals<'a> {
             let window = cache.window(line, text.len_lines());
             self.fetch(&mut cache, window);
         }
-        f(cache.rows.get(&line))
+        let rows = cache.rows.get(&line);
+        let revealed = |row: &VirtualRow| {
+            row.element
+                .clone()
+                .is_some_and(|element| self.reveals_element(element))
+        };
+        if rows.is_some_and(|rows| rows.above.iter().chain(&rows.below).any(revealed)) {
+            let rows = rows.map(|rows| LineRows {
+                above: rows
+                    .above
+                    .iter()
+                    .filter(|row| !revealed(row))
+                    .cloned()
+                    .collect(),
+                below: rows
+                    .below
+                    .iter()
+                    .filter(|row| !revealed(row))
+                    .cloned()
+                    .collect(),
+            });
+            return f(rows.as_ref());
+        }
+        f(rows)
     }
 
     /// The decorations of the lines `lines` that the cursors don't reveal, and their lines.
@@ -656,6 +704,7 @@ mod test {
             icons: true,
             injected: true,
         }),
+        wrap: None,
     };
 
     fn parse(language: &str, text: &Rope) -> Syntax {
@@ -909,6 +958,59 @@ mod test {
     }
 
     #[test]
+    fn markdown_wrapped_tables() {
+        // a table wider than the text wraps the cells of its widest columns
+        let source =
+            "| Name | Description |\n|---|---|\n| hx | A post-modern modal **text** editor |\n";
+        let options = ConcealOptions {
+            wrap: Some(24),
+            ..OPTIONS
+        };
+        assert_eq!(
+            render_with("markdown", source, None, options),
+            "│ Name │ Description  │\n├──────┼──────────────┤\n│ hx   │ A            │\n\
+             └──────┴──────────────┘"
+        );
+        let text = Rope::from(source);
+        let syntax = parse("markdown", &text);
+        let cache = RefCell::default();
+        let rows = |reveal| {
+            let conceals = SyntaxConceals::new(
+                text.slice(..),
+                &syntax,
+                LOADER.clone(),
+                reveal,
+                options,
+                &cache,
+            )
+            .unwrap();
+            let rows = conceals.rows(2..3).pop().map(|(_, rows)| rows.below);
+            let shown = |row: &VirtualRow| {
+                let parts = row.parts.iter().map(|(text, _)| text.as_str());
+                parts.collect::<String>()
+            };
+            rows.unwrap_or_default()
+                .iter()
+                .map(shown)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(None),
+            [
+                "│      │ post-modern  │",
+                "│      │ modal text   │",
+                "│      │ editor       │"
+            ]
+        );
+        // a cursor in the row shows it as it is, its cells on the row
+        let selection = Selection::point(35);
+        assert_eq!(
+            rows(Some((&selection, ConcealReveal::Line))),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
     fn markdown_table_rows() {
         // without blank lines around it, the borders are rows of their own
         let source = "| a |\n|---|\n| b |\n# After\n";
@@ -924,9 +1026,7 @@ mod test {
             &cache,
         )
         .unwrap();
-        let row = |border: &str| VirtualRow {
-            parts: vec![(border.to_owned(), ConcealStyle::Guide)],
-        };
+        let row = |border: &str| VirtualRow::new(vec![(border.to_owned(), RowStyle::Guide)], None);
         assert_eq!(
             conceals.rows(0..text.len_lines()),
             [

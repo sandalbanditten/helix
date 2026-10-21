@@ -614,9 +614,11 @@ impl View {
             return None;
         }
         let config = doc.config.load();
+        let format = doc.text_format(self.inner_width(doc), None);
         let options = ConcealOptions {
             symbols: config.conceal.enable,
             markdown: config.markdown.render(),
+            wrap: format.soft_wrap.then_some(format.viewport_width),
         };
         let reveal = focused.then(|| (doc.selection(self.id), config.conceal.reveal));
         doc.conceals(reveal, options)

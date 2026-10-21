@@ -36,6 +36,27 @@ pub struct SyntaxHighlighting<'a> {
     pub range: ops::Range<u32>,
 }
 
+/// The syntax styles of the chars `chars`, which are sorted, as `highlighting` highlights them
+/// over `text_style`.
+pub fn syntax_styles(
+    highlighting: Option<SyntaxHighlighting>,
+    text: RopeSlice,
+    theme: &Theme,
+    text_style: Style,
+    chars: &[usize],
+) -> Vec<Style> {
+    let mut highlighter = SyntaxHighlighter::new(highlighting, text, theme, text_style);
+    chars
+        .iter()
+        .map(|&char_idx| {
+            while char_idx >= highlighter.pos {
+                highlighter.advance();
+            }
+            highlighter.style
+        })
+        .collect()
+}
+
 /// Fixed styles of char ranges, sorted and disjoint, which need no theme scope.
 pub type StyleSpans<'a> = &'a [(ops::Range<usize>, Style)];
 

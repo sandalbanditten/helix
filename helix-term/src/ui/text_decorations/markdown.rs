@@ -3,11 +3,10 @@
 
 use std::ops::Range;
 
-use helix_core::conceal::{ConcealDecoration, DecorationStyle, LineRows, VirtualRow};
+use helix_core::conceal::{ConcealDecoration, DecorationStyle, LineRows, RowStyle, VirtualRow};
 use helix_core::doc_formatter::FormattedGrapheme;
 use helix_core::graphemes::grapheme_width;
 use helix_core::line_ending::line_end_char_index;
-use helix_core::text_annotations::ConcealStyle;
 use helix_core::unicode::segmentation::UnicodeSegmentation;
 use helix_core::{Position, RopeSlice};
 use helix_view::graphics::{Modifier, Rect, Style};
@@ -87,6 +86,8 @@ pub struct MarkdownRows<'a> {
     guide: Style,
     plain: Style,
     theme: &'a Theme,
+    /// The syntax styles of the chars of the text that rows show, sorted.
+    styles: Vec<(usize, Style)>,
     /// Whether lines wrap, so a line may end after several visual lines.
     wraps: bool,
     /// The first visual row not drawn yet.
@@ -104,6 +105,7 @@ impl<'a> MarkdownRows<'a> {
         guide: Style,
         plain: Style,
         theme: &'a Theme,
+        styles: Vec<(usize, Style)>,
         wraps: bool,
     ) -> Self {
         Self {
@@ -112,6 +114,7 @@ impl<'a> MarkdownRows<'a> {
             guide,
             plain,
             theme,
+            styles,
             wraps,
             next_row: 0,
             line_ends: false,
@@ -134,9 +137,15 @@ impl<'a> MarkdownRows<'a> {
             let mut col = 0;
             for (text, style) in &row.parts {
                 let style = match style {
-                    ConcealStyle::Guide => self.guide,
-                    ConcealStyle::Text => self.plain,
-                    ConcealStyle::Scope(scope) => self.plain.patch(self.theme.get(scope)),
+                    RowStyle::Guide => self.guide,
+                    RowStyle::Scope(scope) => self.plain.patch(self.theme.get(scope)),
+                    RowStyle::Text { char_idx } => {
+                        let i = self.styles.partition_point(|&(other, _)| other < *char_idx);
+                        match self.styles.get(i) {
+                            Some(&(other, style)) if other == *char_idx => style,
+                            _ => self.plain,
+                        }
+                    }
                 };
                 for grapheme in text.graphemes(true) {
                     let width = grapheme_width(grapheme);

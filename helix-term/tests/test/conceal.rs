@@ -399,3 +399,36 @@ async fn markdown_tables() -> anyhow::Result<()> {
     let drawn = |app: &Application| assert_shows(app, &rows);
     test_key_sequence(&mut app, Some("<esc>"), Some(&drawn), false).await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_tables_wrap_to_fit() -> anyhow::Result<()> {
+    let long = "word ".repeat(30);
+    let source = format!("#[x|]#\n\n| a | b |\n|---|---|\n| short | {long}|\n");
+    let config = Config {
+        editor: helix_view::editor::Config {
+            soft_wrap: helix_core::syntax::config::SoftWrap {
+                enable: Some(true),
+                ..Default::default()
+            },
+            ..test_editor_config()
+        },
+        ..test_config()
+    };
+    let mut app = AppBuilder::new()
+        .with_file("foo.md", None)
+        .with_config(config)
+        .with_input_text(&source)
+        .build()?;
+    let wrapped = |app: &Application| {
+        let screen = screen(app);
+        let rows: Vec<_> = screen.iter().filter(|row| row.contains("│ word")).collect();
+        assert!(rows.len() > 1, "{screen:#?}");
+        // every row of the cell ends at the table's right border
+        let ends: Vec<_> = rows.iter().map(|row| row.chars().count()).collect();
+        assert!(
+            ends.windows(2).all(|pair| pair[0] == pair[1]),
+            "{screen:#?}"
+        );
+    };
+    test_key_sequence(&mut app, Some("<esc>"), Some(&wrapped), false).await
+}
