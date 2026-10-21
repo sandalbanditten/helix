@@ -1084,6 +1084,32 @@ mod test {
     }
 
     #[test]
+    fn test_positions_across_zero_width_conceals() {
+        let text = Rope::from("ab\n\ncd\n");
+        let slice = text.slice(..);
+        let text_fmt = TextFormat::default();
+        // `┌─┐` is shown on the empty line and `!` before `d`, hiding nothing
+        let conceals = [Conceal::new(3, 3, "┌─┐"), Conceal::new(5, 5, "!")];
+        let mut annotations = TextAnnotations::default();
+        annotations.add_conceals(&conceals[..]);
+
+        let offset =
+            |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
+        assert_eq!(offset(0, 3), (Position::new(1, 3), 0));
+        assert_eq!(offset(0, 4), (Position::new(2, 0), 0));
+        assert_eq!(offset(0, 5), (Position::new(2, 2), 0));
+
+        let char_at = |anchor, rows, col| {
+            char_idx_at_visual_offset(slice, anchor, rows, col, &text_fmt, &annotations)
+        };
+        assert_eq!(char_at(0, 1, 1), (3, 0), "a click on the replacement");
+        // like virtual text, a click on a replacement after a char lands on that char
+        assert_eq!(char_at(0, 2, 1), (4, 0));
+        assert_eq!(char_at(0, 2, 2), (5, 0));
+        assert_eq!(char_at(3, 1, 2), (5, 0), "down");
+    }
+
+    #[test]
     fn test_positions_across_folds() {
         let text = Rope::from("fn f() {\n    1\n}\nx\n");
         let slice = text.slice(..);

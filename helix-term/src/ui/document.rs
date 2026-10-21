@@ -193,7 +193,7 @@ pub fn render_text<'a>(
                 overlay_style: overlay_highlighter.style,
             },
             // a rule is drawn like the indent guides
-            GraphemeSource::Conceal { fill: true, .. } => GraphemeStyle {
+            GraphemeSource::Conceal { rule: true, .. } => GraphemeStyle {
                 syntax_style: renderer.indent_guide_style,
                 overlay_style: overlay_highlighter.style,
             },

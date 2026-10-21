@@ -248,6 +248,7 @@ impl<'a> SyntaxConceals<'a> {
             let Some(replacement) = table.resolve(&concealed).filter(|replacement| {
                 is_visible(match replacement {
                     Replacement::Text(text) => text,
+                    Replacement::Rule(text) => text,
                     Replacement::Fill(g) => g,
                 })
             }) else {
@@ -355,6 +356,7 @@ mod test {
                 rendered.extend(slice.slice(pos..conceal.start).chars());
                 match conceal.replacement {
                     Replacement::Text(text) => rendered.push_str(&text),
+                    Replacement::Rule(text) => rendered.push_str(&text),
                     Replacement::Fill(g) => rendered.push_str(&format!("{g}…")),
                 }
                 pos = conceal.end;

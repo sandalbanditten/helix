@@ -81,12 +81,13 @@ impl Overlay {
     }
 }
 
-/// Document text within one line shown as something else, like `α` for `alpha`.
+/// Document text within one line shown as something else, like `α` for `alpha`. A conceal of no
+/// text shows its replacement before `start`, like virtual text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conceal {
     /// The char index of the first concealed char.
     pub start: usize,
-    /// The char index after the last concealed char, greater than `start`.
+    /// The char index after the last concealed char, at least `start`.
     pub end: usize,
     /// What is shown instead of the concealed text.
     pub replacement: Replacement,
@@ -110,6 +111,8 @@ pub enum Replacement {
     /// A grapheme repeated up to the end of the row, like a horizontal rule. The row's last
     /// column stays free, so it never wraps.
     Fill(&'static str),
+    /// Text drawn like the indent guides, like the borders of a table.
+    Rule(String),
 }
 
 impl From<&'static str> for Replacement {
@@ -367,7 +370,7 @@ impl ConcealLayer<'_> {
         debug_assert!(end > char_idx);
         debug_assert!(conceals
             .iter()
-            .all(|conceal| char_idx <= conceal.start && conceal.start < conceal.end));
+            .all(|conceal| char_idx <= conceal.start && conceal.start <= conceal.end));
         debug_assert!(conceals.windows(2).all(|pair| pair[0].end <= pair[1].start));
         self.fetched.set((char_idx, end));
         self.next.set(0);

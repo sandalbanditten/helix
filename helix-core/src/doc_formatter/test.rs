@@ -556,6 +556,42 @@ fn conceal_placeholders() {
 }
 
 #[test]
+fn zero_width_conceals() {
+    // a conceal of no text is drawn before its char, also on an empty line
+    let text = "ab\n\ncd\n";
+    let conceals = [
+        Conceal::new(1, 1, Replacement::Rule("│".into())),
+        Conceal::new(3, 3, "┌─┐"),
+        Conceal::new(5, 5, "!"),
+    ];
+    for softwrap in [false, true] {
+        assert_eq!(
+            concealed_text(text, softwrap, &conceals, 0),
+            "a│b \n┌─┐ \nc!d \n "
+        );
+    }
+
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .map(|g| (g.char_idx, g.visual_pos.col, g.doc_chars(), g.is_virtual()))
+            .collect();
+    assert_eq!(
+        graphemes[..6],
+        [
+            (0, 0, 1, false),
+            (1, 1, 0, true),
+            (1, 2, 1, false),
+            (2, 3, 1, false),
+            (3, 0, 0, true),
+            (3, 3, 1, false),
+        ]
+    );
+}
+
+#[test]
 fn conceal_and_annotations() {
     let inline = [
         InlineAnnotation::new(3, "A"),

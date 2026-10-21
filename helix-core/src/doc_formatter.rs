@@ -44,15 +44,19 @@ pub enum GraphemeSource {
     /// Document text shown as another grapheme, see [`Conceal`](crate::text_annotations::Conceal).
     Conceal {
         codepoints: u32,
-        /// Whether it fills the rest of the row, like a horizontal rule.
-        fill: bool,
+        /// Whether it is drawn like the indent guides, like a horizontal rule.
+        rule: bool,
     },
 }
 
 impl GraphemeSource {
-    /// Returns whether this grapheme is virtual inline text
+    /// Returns whether this grapheme is virtual inline text, which includes the replacement of a
+    /// conceal of no text
     pub fn is_virtual(self) -> bool {
-        matches!(self, GraphemeSource::VirtualText { .. })
+        matches!(
+            self,
+            GraphemeSource::VirtualText { .. } | GraphemeSource::Conceal { codepoints: 0, .. }
+        )
     }
 
     /// Returns whether this grapheme is the placeholder of a closed fold
@@ -330,13 +334,17 @@ impl<'t> DocumentFormatter<'t> {
                     GraphemeSource::Fold { codepoints },
                 )
             } else if let Some(conceal) = self.annotations.conceal_at(char_pos, len_chars) {
-                self.graphemes = self.text.slice(conceal.end..).graphemes();
-                self.annotations.skip_hidden(conceal.end);
+                // a conceal of no text hides nothing to skip
+                if conceal.end > conceal.start {
+                    self.graphemes = self.text.slice(conceal.end..).graphemes();
+                    self.annotations.skip_hidden(conceal.end);
+                }
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
-                let fill = matches!(conceal.replacement, Replacement::Fill(_));
+                let rule = !matches!(conceal.replacement, Replacement::Text(_));
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,
+                    Replacement::Rule(text) => Cow::Owned(text),
                     Replacement::Fill(g) => {
                         let width = self.text_fmt.viewport_width as usize;
                         let count = width.saturating_sub(col + 1) / grapheme_width(g).max(1);
@@ -345,7 +353,7 @@ impl<'t> DocumentFormatter<'t> {
                 };
                 (
                     replacement.into(),
-                    GraphemeSource::Conceal { codepoints, fill },
+                    GraphemeSource::Conceal { codepoints, rule },
                 )
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
