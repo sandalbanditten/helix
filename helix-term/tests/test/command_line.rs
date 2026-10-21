@@ -194,6 +194,14 @@ async fn inline_completion() -> anyhow::Result<()> {
                     );
                     // no menu, only the command's documentation box
                     assert!(!screen_row(app, 1).contains("compile-kill"));
+                    // braces as text, the completions greyed out
+                    let screen = app.screen();
+                    let y = screen.area.bottom() - 1;
+                    let theme = &app.editor.theme;
+                    assert_eq!(screen[(5, y)].symbol.as_str(), "{");
+                    assert_eq!(screen[(5, y)].fg, theme.get("ui.text").fg.unwrap());
+                    assert_eq!(screen[(6, y)].fg, theme.get("ui.text.inactive").fg.unwrap());
+                    assert_ne!(theme.get("ui.text").fg, theme.get("ui.text.inactive").fg);
                 }),
             ),
             (

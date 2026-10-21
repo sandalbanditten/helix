@@ -625,6 +625,7 @@ impl Prompt {
     /// Renders the completions greyed out after the line, like Emacs' icomplete:
     /// `:co{mpile | mpile! | nfig-open | …}`.
     fn render_inline_completion(&self, area: Rect, surface: &mut Surface, theme: &Theme) {
+        let text = theme.get("ui.text");
         let inactive = theme.get("ui.text.inactive");
         let selected = theme.get("ui.menu.selected");
 
@@ -643,7 +644,7 @@ impl Prompt {
             width,
         );
 
-        spans.push(Span::styled("{", inactive));
+        spans.push(Span::styled("{", text));
         if page.start > 0 {
             spans.push(Span::styled(ELLIPSIS, inactive));
             spans.push(Span::styled(SEPARATOR, inactive));
@@ -663,7 +664,7 @@ impl Prompt {
             spans.push(Span::styled(SEPARATOR, inactive));
             spans.push(Span::styled(ELLIPSIS, inactive));
         }
-        spans.push(Span::styled("}", inactive));
+        spans.push(Span::styled("}", text));
 
         surface.set_spans(area.x, area.y, &Spans::from(spans), area.width);
     }
