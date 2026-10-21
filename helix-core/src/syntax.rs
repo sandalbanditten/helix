@@ -573,6 +573,12 @@ impl Loader {
         self.language(lang).conceal_query(self)
     }
 
+    /// Whether the conceals of `lang` render Markdown, like those of Markdown itself.
+    pub(crate) fn conceals_markdown(&self, lang: Language) -> bool {
+        self.conceal_query(lang)
+            .is_some_and(|query| query.renders_markdown)
+    }
+
     pub fn language_server_configs(&self) -> &HashMap<String, LanguageServerConfiguration> {
         &self.language_server_configs
     }
@@ -963,16 +969,26 @@ impl Syntax {
         source: RopeSlice<'a>,
         loader: &'a Loader,
         range: ops::Range<u32>,
-    ) -> impl Iterator<Item = ConcealMatch> + 'a {
+    ) -> impl Iterator<Item = ConcealMatch<'a>> + 'a {
         let mut matches = QueryMatchIter::<_, ()>::new(
             &self.inner,
             source,
             |lang| loader.conceal_query(lang).map(|query| &query.query),
             range,
         );
+        // the languages of the layers the iterator is in, the innermost last
+        let mut languages = vec![self.root_language()];
         iter::from_fn(move || loop {
-            let QueryMatchIterEvent::Match(mat) = matches.next()? else {
-                continue;
+            let mat = match matches.next()? {
+                QueryMatchIterEvent::Match(mat) => mat,
+                QueryMatchIterEvent::EnterInjection(injection) => {
+                    languages.push(self.layer(injection.layer).language);
+                    continue;
+                }
+                QueryMatchIterEvent::ExitInjection { .. } => {
+                    languages.pop();
+                    continue;
+                }
             };
             let Some(query) = loader.conceal_query(matches.current_language()) else {
                 continue;
@@ -985,13 +1001,21 @@ impl Syntax {
             let Some(capture) = capture else {
                 continue;
             };
-            let bytes = mat
-                .nodes_for_capture(capture)
-                .map(|node| node.byte_range())
-                .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end));
-            if let Some(bytes) = bytes {
-                return Some(ConcealMatch { bytes, table });
-            }
+            let mut nodes = mat.nodes_for_capture(capture);
+            let Some(node) = nodes.next().cloned() else {
+                continue;
+            };
+            let bytes = nodes.fold(node.byte_range(), |bytes, node| {
+                bytes.start.min(node.start_byte())..bytes.end.max(node.end_byte())
+            });
+            // the language the match's layer is injected into
+            let host = languages.len().checked_sub(2).map(|i| languages[i]);
+            return Some(ConcealMatch {
+                bytes,
+                table,
+                node,
+                in_markdown: host.is_some_and(|host| loader.conceals_markdown(host)),
+            });
         })
     }
 
@@ -1664,13 +1688,18 @@ impl SpellcheckQuery {
 }
 
 /// A match of a `conceals.scm` query.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConcealMatch {
+#[derive(Debug, Clone)]
+pub struct ConcealMatch<'a> {
     /// The bytes from the first to the last node of the match's `@conceal` or `@noconceal`
     /// capture.
     pub bytes: ops::Range<u32>,
     /// The table that resolves the text of a `@conceal` match, or `None` for a `@noconceal` match.
     pub table: Option<SymbolTable>,
+    /// The first node of the capture.
+    pub node: Node<'a>,
+    /// Whether the match's layer is injected into a language whose conceals render Markdown,
+    /// like LaTeX math in Markdown.
+    pub in_markdown: bool,
 }
 
 #[derive(Debug)]
@@ -1682,6 +1711,8 @@ pub struct ConcealQuery {
     noconceal_capture: Option<Capture>,
     /// The table of each pattern that captures `@conceal`, from `(#set! conceal.symbols "…")`.
     tables: HashMap<Pattern, SymbolTable>,
+    /// Whether a table renders Markdown.
+    renders_markdown: bool,
 }
 
 impl ConcealQuery {
@@ -1692,7 +1723,7 @@ impl ConcealQuery {
                 key: "conceal.symbols",
                 val,
             } => {
-                let table = val
+                let table: SymbolTable = val
                     .ok_or("property 'conceal.symbols' needs a symbol table")?
                     .parse()?;
                 tables.insert(pattern, table);
@@ -1704,6 +1735,7 @@ impl ConcealQuery {
         Ok(Self {
             conceal_capture: query.get_capture("conceal"),
             noconceal_capture: query.get_capture("noconceal"),
+            renders_markdown: tables.values().any(|table| table.renders_markdown()),
             tables,
             query,
         })

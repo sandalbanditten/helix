@@ -181,9 +181,9 @@
 | mail | ✓ | ✓ |  |  | ✓ |  |  |  |  |  |
 | make | ✓ |  | ✓ |  |  |  |  |  |  |  |
 | markdoc | ✓ |  |  |  |  |  |  |  |  | `markdoc-ls` |
-| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ | ✓ |  | `marksman`, `markdown-oxide`, `rumdl` |
+| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ | ✓ | ✓ | `marksman`, `markdown-oxide`, `rumdl` |
 | markdown-rustdoc | ✓ |  |  |  |  |  |  | ✓ |  |  |
-| markdown.inline | ✓ |  |  |  |  |  |  | ✓ |  |  |
+| markdown.inline | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
 | matlab | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  |  |
 | mermaid | ✓ |  |  |  |  |  |  |  |  |  |
 | meson | ✓ |  | ✓ |  |  |  |  |  |  | `mesonlsp` |

@@ -6,7 +6,7 @@ use futures_util::FutureExt;
 use helix_core::auto_pairs::AutoPairs;
 use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
-use helix_core::conceal::{ConcealCache, ConcealReveal, SyntaxConceals};
+use helix_core::conceal::{ConcealCache, ConcealOptions, ConcealReveal, SyntaxConceals};
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
@@ -1587,14 +1587,23 @@ impl Document {
         &self.view_data(view_id).folds
     }
 
-    /// The conceals of the document's syntax tree, except those `reveal` shows as they are.
+    /// The conceals `options` asks for of the document's syntax tree, except those `reveal` shows
+    /// as they are.
     pub(crate) fn conceals<'a>(
         &'a self,
         reveal: Option<(&'a Selection, ConcealReveal)>,
+        options: ConcealOptions,
     ) -> Option<SyntaxConceals<'a>> {
         let text = self.text().slice(..);
         let loader = self.syn_loader.load_full();
-        SyntaxConceals::new(text, self.syntax()?, loader, reveal, &self.conceal_cache)
+        SyntaxConceals::new(
+            text,
+            self.syntax()?,
+            loader,
+            reveal,
+            options,
+            &self.conceal_cache,
+        )
     }
 
     /// The folds hidden in the view, if the document is shown in it.

@@ -1,6 +1,9 @@
 use helix_core::conceal::ConcealReveal;
 use helix_term::application::Application;
-use helix_view::{current_ref, editor::ConcealConfig};
+use helix_view::{
+    current_ref,
+    editor::{ConcealConfig, MarkdownConfig},
+};
 
 use super::*;
 
@@ -221,4 +224,106 @@ async fn unfocused_views_conceal_everything() -> anyhow::Result<()> {
         true,
     )
     .await
+}
+
+/// An app editing a document called `name` with `input` as its text and selection, and Markdown
+/// rendered as `markdown` says.
+fn markdown_app(
+    name: &str,
+    input: &str,
+    conceal: ConcealConfig,
+    markdown: MarkdownConfig,
+) -> anyhow::Result<Application> {
+    let config = Config {
+        editor: helix_view::editor::Config {
+            conceal,
+            markdown,
+            ..test_editor_config()
+        },
+        ..test_config()
+    };
+    AppBuilder::new()
+        .with_file(name, None)
+        .with_config(config)
+        .with_input_text(input)
+        .build()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_renders_away_from_cursors() -> anyhow::Result<()> {
+    let mut app = markdown_app(
+        "foo.md",
+        "#[x|]#\nA **bold** [link](https://x.org)\n",
+        ConcealConfig::default(),
+        MarkdownConfig::default(),
+    )?;
+    test_key_sequences(
+        &mut app,
+        vec![
+            (
+                Some("<esc>"),
+                Some(&|app| assert_shows(app, &["x", "A bold \u{f059f} link"])),
+            ),
+            // the cursor's line is shown as it is
+            (
+                Some("j"),
+                Some(&|app| assert_shows(app, &["x", "A **bold** [link](https://x.org)"])),
+            ),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_switches() -> anyhow::Result<()> {
+    let source = "#[x|]#\nA **bold** word\n";
+    // Markdown is rendered without the symbols of `[editor.conceal]`
+    let no_symbols = ConcealConfig {
+        enable: false,
+        ..ConcealConfig::default()
+    };
+    let mut app = markdown_app("foo.md", source, no_symbols, MarkdownConfig::default())?;
+    let rendered = |app: &Application| assert_shows(app, &["A bold word"]);
+    test_key_sequence(&mut app, Some("<esc>"), Some(&rendered), false).await?;
+
+    let disabled = MarkdownConfig {
+        enable_render: false,
+        ..MarkdownConfig::default()
+    };
+    let mut app = markdown_app("foo.md", source, ConcealConfig::default(), disabled)?;
+    let raw = |app: &Application| assert_shows(app, &["A **bold** word"]);
+    test_key_sequence(&mut app, Some("<esc>"), Some(&raw), false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_in_commit_messages() -> anyhow::Result<()> {
+    let source = "#[F|]#ix it\n\nSee [the docs](https://x.org) for **why**.\n# a [comment](x)\n";
+    let mut app = markdown_app(
+        "COMMIT_EDITMSG",
+        source,
+        ConcealConfig::default(),
+        MarkdownConfig::default(),
+    )?;
+    let rendered = |app: &Application| {
+        assert_shows(
+            app,
+            &["See \u{f059f} the docs for why.", "# a [comment](x)"],
+        )
+    };
+    test_key_sequence(&mut app, Some("<esc>"), Some(&rendered), false).await?;
+
+    let documents_only = MarkdownConfig {
+        injected: false,
+        ..MarkdownConfig::default()
+    };
+    let mut app = markdown_app(
+        "COMMIT_EDITMSG",
+        source,
+        ConcealConfig::default(),
+        documents_only,
+    )?;
+    let raw =
+        |app: &Application| assert_shows(app, &["See [the docs](https://x.org) for **why**."]);
+    test_key_sequence(&mut app, Some("<esc>"), Some(&raw), false).await
 }

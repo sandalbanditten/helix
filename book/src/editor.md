@@ -30,6 +30,7 @@
 - [`[editor.minimap]` Section](#editorminimap-section)
 - [`[editor.folding]` Section](#editorfolding-section)
 - [`[editor.conceal]` Section](#editorconceal-section)
+- [`[editor.markdown]` Section](#editormarkdown-section)
 - [`[editor.smart-tab]` Section](#editorsmart-tab-section)
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
@@ -673,6 +674,24 @@ Example:
 ```toml
 [editor.conceal]
 reveal = "line"
+```
+
+### `[editor.markdown]` Section
+
+Options for drawing Markdown rendered: markup is hidden or shown as icons, except on the lines with
+a cursor. `[See the docs](https://example.com)` is shown as `󰖟 See the docs`.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `enable-render` | Whether Markdown is drawn rendered | `true` |
+| `icons` | Whether icons are drawn, which need a [Nerd Font](https://www.nerdfonts.com) | `true` |
+| `injected` | Whether Markdown in other languages, like doc comments and commit messages, is drawn rendered too | `true` |
+
+Example:
+
+```toml
+[editor.markdown]
+icons = false
 ```
 
 ### `[editor.smart-tab]` Section

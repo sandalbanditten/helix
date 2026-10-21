@@ -1,11 +1,14 @@
 //! Concealing: document text shown as the symbol it stands for, like `α` for `alpha` in Typst
-//! math.
+//! math, or Markdown drawn rendered.
 //!
 //! A language's `conceals.scm` query captures the text to conceal, and a [`SymbolTable`] resolves
 //! it. [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except
 //! the ones the cursors reveal.
 
+mod markdown;
 mod typst;
+
+pub use markdown::MarkdownRender;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -49,10 +52,13 @@ pub enum SymbolTable {
     TypstWikilink,
     /// Lines across the page, `#line(length: 100%)`, shown as a rule filling the row.
     TypstRule,
+    /// Markdown's markup, drawn rendered from the captured node, like `**` hidden around bold
+    /// text.
+    Markdown(markdown::Element),
 }
 
 impl SymbolTable {
-    /// What `text` is shown as.
+    /// What `text` is shown as, if the table looks up text rather than rendering Markdown.
     pub fn resolve(self, text: &str) -> Option<Replacement> {
         match self {
             Self::TypstMath => typst::math_symbol(text).map(widened),
@@ -60,7 +66,13 @@ impl SymbolTable {
             Self::TypstShorthand => typst::shorthand(text).map(widened),
             Self::TypstWikilink => typst::wikilink(text).map(Replacement::from),
             Self::TypstRule => typst::is_full_width_line(text).then_some(Replacement::Fill("─")),
+            Self::Markdown(_) => None,
         }
+    }
+
+    /// Whether the table renders Markdown.
+    pub(crate) fn renders_markdown(self) -> bool {
+        matches!(self, Self::Markdown(_))
     }
 
     /// The longest text, in bytes, that is looked up in the table.
@@ -103,7 +115,11 @@ impl FromStr for SymbolTable {
             "typst-shorthand" => Ok(Self::TypstShorthand),
             "typst-wikilink" => Ok(Self::TypstWikilink),
             "typst-rule" => Ok(Self::TypstRule),
-            _ => Err(format!("unknown symbol table '{name}'")),
+            _ => name
+                .strip_prefix("markdown-")
+                .and_then(|element| element.parse().ok())
+                .map(Self::Markdown)
+                .ok_or_else(|| format!("unknown symbol table '{name}'")),
         }
     }
 }
@@ -153,12 +169,39 @@ impl ConcealReveal {
     }
 }
 
+/// What is concealed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ConcealOptions {
+    /// Whether text is shown as the symbol it stands for, like Typst's `alpha` as `α`.
+    pub symbols: bool,
+    /// How Markdown is drawn rendered, or `None` to leave it as it is.
+    pub markdown: Option<MarkdownRender>,
+}
+
+/// When the cursors of the focused view reveal a conceal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reveal {
+    /// As `[editor.conceal] reveal` says.
+    Configured,
+    /// While a cursor is on its line, like rendered Markdown.
+    Line,
+}
+
+/// A conceal and when it is revealed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Cached {
+    conceal: Conceal,
+    reveal: Reveal,
+}
+
 /// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
 /// whenever the tree changes.
 #[derive(Debug, Default)]
 pub struct ConcealCache {
     /// The conceals of each line computed so far, sorted and disjoint.
-    lines: HashMap<usize, Vec<Conceal>>,
+    lines: HashMap<usize, Vec<Cached>>,
+    /// What was concealed in `lines`.
+    options: ConcealOptions,
 }
 
 impl ConcealCache {
@@ -186,25 +229,45 @@ pub struct SyntaxConceals<'a> {
     loader: Arc<Loader>,
     /// The selection whose cursors reveal conceals and how, or `None` to reveal nothing.
     reveal: Option<(&'a Selection, ConcealReveal)>,
+    options: ConcealOptions,
     cache: &'a RefCell<ConcealCache>,
 }
 
 impl<'a> SyntaxConceals<'a> {
-    /// The conceals of `syntax`, a tree of `text`, kept in `cache`, or `None` if its language has no
-    /// conceals.
+    /// The conceals of `syntax`, a tree of `text`, that `options` asks for, kept in `cache`, or
+    /// `None` if nothing in it can be concealed.
     pub fn new(
         text: RopeSlice<'a>,
         syntax: &'a Syntax,
         loader: Arc<Loader>,
         reveal: Option<(&'a Selection, ConcealReveal)>,
+        mut options: ConcealOptions,
         cache: &'a RefCell<ConcealCache>,
     ) -> Option<Self> {
-        loader.conceal_query(syntax.root_language())?;
+        let root = syntax.root_language();
+        // Markdown injected into other languages, like their doc comments, is rendered only if
+        // `injected` is set
+        options.markdown = options
+            .markdown
+            .filter(|markdown| markdown.injected || loader.conceals_markdown(root));
+        let conceals_root =
+            loader.conceal_query(root).is_some() && (options.symbols || options.markdown.is_some());
+        let renders_injected = options.markdown.is_some_and(|markdown| markdown.injected);
+        if !conceals_root && !renders_injected {
+            return None;
+        }
+        let mut cache_mut = cache.borrow_mut();
+        if cache_mut.options != options {
+            cache_mut.clear();
+            cache_mut.options = options;
+        }
+        drop(cache_mut);
         Some(Self {
             text,
             syntax,
             loader,
             reveal,
+            options,
             cache,
         })
     }
@@ -220,14 +283,14 @@ impl<'a> SyntaxConceals<'a> {
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
         }
-        for conceal in self.conceals(text.line_to_char(lines.start)..end) {
-            let line = text.char_to_line(conceal.start);
-            cache.lines.entry(line).or_default().push(conceal);
+        for cached in self.conceals(text.line_to_char(lines.start)..end) {
+            let line = text.char_to_line(cached.conceal.start);
+            cache.lines.entry(line).or_default().push(cached);
         }
     }
 
     /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint.
-    fn conceals(&self, range: ops::Range<usize>) -> Vec<Conceal> {
+    fn conceals(&self, range: ops::Range<usize>) -> Vec<Cached> {
         let text = self.text;
         let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
         let mut noconceal = Vec::new();
@@ -238,6 +301,16 @@ impl<'a> SyntaxConceals<'a> {
                 noconceal.push(text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end));
                 continue;
             };
+            if let SymbolTable::Markdown(element) = table {
+                if let Some(options) = self.options.markdown {
+                    let mut renderer = markdown::Renderer::new(text, options, &mut conceals);
+                    renderer.render(element, &mat.node, bytes);
+                }
+                continue;
+            }
+            if !self.options.symbols {
+                continue;
+            }
             if bytes.is_empty() || bytes.len() > table.max_bytes() {
                 continue;
             }
@@ -257,11 +330,10 @@ impl<'a> SyntaxConceals<'a> {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
-            conceals.push(Conceal::new(
-                start,
-                text.byte_to_char(bytes.end),
-                replacement,
-            ));
+            conceals.push(Cached {
+                conceal: Conceal::new(start, text.byte_to_char(bytes.end), replacement),
+                reveal: Reveal::Configured,
+            });
         }
 
         merge_regions(&mut noconceal);
@@ -270,19 +342,32 @@ impl<'a> SyntaxConceals<'a> {
             i.checked_sub(1)
                 .is_some_and(|i| conceal.end <= noconceal[i].end)
         };
-        conceals.retain(|conceal| !in_noconceal(conceal));
+        conceals.retain(|cached| !in_noconceal(&cached.conceal));
 
-        conceals.sort_unstable_by_key(|conceal| (conceal.start, Reverse(conceal.end)));
-        let mut outermost: Vec<Conceal> = Vec::with_capacity(conceals.len());
-        for conceal in conceals {
+        conceals.sort_unstable_by_key(|cached| (cached.conceal.start, Reverse(cached.conceal.end)));
+        let mut outermost: Vec<Cached> = Vec::with_capacity(conceals.len());
+        for cached in conceals {
             if outermost
                 .last()
-                .is_none_or(|last| last.end <= conceal.start)
+                .is_none_or(|last| last.conceal.end <= cached.conceal.start)
             {
-                outermost.push(conceal);
+                outermost.push(cached);
             }
         }
         outermost
+    }
+
+    /// Whether the cursors show the concealed text of `cached` as it is.
+    fn reveals(&self, cached: &Cached) -> bool {
+        let Some((selection, configured)) = self.reveal else {
+            return false;
+        };
+        let text = self.text;
+        let range = cached.conceal.start..cached.conceal.end;
+        match cached.reveal {
+            Reveal::Configured => configured.reveals(text, selection, range),
+            Reveal::Line => ConcealReveal::Line.reveals(text, selection, range),
+        }
     }
 }
 
@@ -297,17 +382,13 @@ impl ConcealSource for SyntaxConceals<'_> {
         }
 
         // hand out the known lines that follow, except what the cursors reveal
-        let revealed = |conceal: &Conceal| {
-            self.reveal.is_some_and(|(selection, reveal)| {
-                reveal.reveals(text, selection, conceal.start..conceal.end)
-            })
-        };
         let mut line = first_line;
         while let Some(line_conceals) = cache.lines.get(&line) {
             let shown = line_conceals
                 .iter()
-                .filter(|conceal| conceal.start >= char_idx && !revealed(conceal));
-            conceals.extend(shown.cloned());
+                .filter(|cached| cached.conceal.start >= char_idx && !self.reveals(cached))
+                .map(|cached| cached.conceal.clone());
+            conceals.extend(shown);
             line += 1;
             if line == first_line + SERVED_LINES {
                 break;
@@ -336,6 +417,14 @@ mod test {
 
     static LOADER: Lazy<Arc<Loader>> = Lazy::new(|| Arc::new(crate::config::default_lang_loader()));
 
+    const OPTIONS: ConcealOptions = ConcealOptions {
+        symbols: true,
+        markdown: Some(MarkdownRender {
+            icons: true,
+            injected: true,
+        }),
+    };
+
     fn parse(language: &str, text: &Rope) -> Syntax {
         let language = LOADER.language_for_name(language).unwrap();
         Syntax::new(text.slice(..), language, &LOADER).unwrap()
@@ -343,11 +432,22 @@ mod test {
 
     /// Renders `source` with its conceals, except those `selection` reveals.
     fn render(language: &str, source: &str, reveal: Option<(&Selection, ConcealReveal)>) -> String {
+        render_with(language, source, reveal, OPTIONS)
+    }
+
+    /// Renders `source` with the conceals `options` asks for, except those `selection` reveals.
+    fn render_with(
+        language: &str,
+        source: &str,
+        reveal: Option<(&Selection, ConcealReveal)>,
+        options: ConcealOptions,
+    ) -> String {
         let text = Rope::from(source);
         let slice = text.slice(..);
         let syntax = parse(language, &text);
         let cache = RefCell::default();
-        let conceals = SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
+        let conceals =
+            SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, options, &cache).unwrap();
         let mut rendered = String::new();
         let mut pos = 0;
         let mut fetched = 0;
@@ -371,6 +471,120 @@ mod test {
 
     fn typst(source: &str) -> String {
         render("typst", source, None)
+    }
+
+    fn markdown(source: &str) -> String {
+        render("markdown", source, None)
+    }
+
+    #[test]
+    fn markdown_inline_markup() {
+        assert_eq!(
+            markdown("A **bold**, *italic*, _under_ and ~~gone~~ `code` or ``a`b``\n"),
+            "A bold, italic, under and gone code or a`b\n"
+        );
+        assert_eq!(
+            markdown("&copy; 2026 &mdash; A &rarr; B &#8594; &#x2192; &nope; &Tab;\n"),
+            "© 2026 — A → B → → &nope; &Tab;\n"
+        );
+        // only numeric footnote references
+        assert_eq!(
+            markdown("As shown[^1] before[^note] and[^12].\n"),
+            "As shown¹ before[^note] and¹².\n"
+        );
+    }
+
+    #[test]
+    fn markdown_links() {
+        assert_eq!(
+            markdown(
+                "See [the docs](https://example.com \"Docs\") and [ref][example], [it][], \
+                 [top](#top), <https://x.org>, <me@x.org> and ![Diagram](img/arch.png).\n\n\
+                 [example]: https://example.com\n"
+            ),
+            "See \u{f059f} the docs and \u{f0339} ref, \u{f0339} it, \u{f0339} top, \
+             \u{f059f} https://x.org, \u{f0013} me@x.org and \u{f0976} Diagram.\n\n\
+             [example]: https://example.com\n"
+        );
+        // the text of a link is rendered too, and links without text are left as they are
+        assert_eq!(
+            markdown("[**bold** link](https://x.org) [](https://x.org)\n"),
+            "\u{f059f} bold link [](https://x.org)\n"
+        );
+        assert_eq!(
+            markdown("See [[Kampagne]] and [[004 - K|the cast]] or [[S#B]], not [a].\n"),
+            "See \u{f15d6} Kampagne and \u{f15d6} the cast or \u{f15d6} S#B, not [a].\n"
+        );
+        // without icons
+        let options = ConcealOptions {
+            markdown: Some(MarkdownRender {
+                icons: false,
+                injected: true,
+            }),
+            ..OPTIONS
+        };
+        assert_eq!(
+            render_with(
+                "markdown",
+                "[docs](https://x.org) [[Note|alias]]\n",
+                None,
+                options
+            ),
+            "docs alias\n"
+        );
+    }
+
+    #[test]
+    fn markdown_rules() {
+        assert_eq!(markdown("a\n\n---\n\n***\nb\n"), "a\n\n─…\n\n─…\nb\n");
+        // frontmatter and setext underlines are no rules
+        let source = "---\ntitle: x\n---\n\nTitle\n---\n";
+        assert_eq!(markdown(source), source);
+    }
+
+    #[test]
+    fn markdown_reveal() {
+        let source = "A **bold** word\nand *more*\n";
+        let selection = Selection::point(3);
+        let reveal = Some((&selection, ConcealReveal::Adjacent));
+        // the cursor's line is revealed, whatever `reveal` is
+        assert_eq!(
+            render("markdown", source, reveal),
+            "A **bold** word\nand more\n"
+        );
+    }
+
+    #[test]
+    fn markdown_injected() {
+        let source = "/// See [docs](https://x.org).\nfn f() {}\n";
+        assert_eq!(
+            render("rust", source, None),
+            "/// See \u{f059f} docs.\nfn f() {}\n"
+        );
+        // only Markdown documents are rendered unless injected Markdown is
+        let options = ConcealOptions {
+            markdown: Some(MarkdownRender {
+                icons: true,
+                injected: false,
+            }),
+            ..OPTIONS
+        };
+        let text = Rope::from(source);
+        let syntax = parse("rust", &text);
+        let cache = RefCell::default();
+        let conceals = SyntaxConceals::new(
+            text.slice(..),
+            &syntax,
+            LOADER.clone(),
+            None,
+            options,
+            &cache,
+        );
+        assert!(conceals.is_none());
+        assert_eq!(
+            render_with("markdown", "[docs](https://x.org)\n", None, options),
+            "\u{f059f} docs\n"
+        );
     }
 
     #[test]
@@ -553,7 +767,8 @@ mod test {
             let selection = Selection::point(cursor);
             let reveal = Some((&selection, ConcealReveal::Symbol));
             let conceals =
-                SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, &cache).unwrap();
+                SyntaxConceals::new(slice, &syntax, LOADER.clone(), reveal, OPTIONS, &cache)
+                    .unwrap();
             let mut fetched = Vec::new();
             conceals.conceals_from(0, &mut fetched);
             let fetched: Vec<_> = fetched

@@ -49,7 +49,7 @@ use anyhow::{anyhow, bail, Error};
 pub use helix_core::diagnostic::Severity;
 use helix_core::{
     auto_pairs::AutoPairs,
-    conceal::ConcealReveal,
+    conceal::{ConcealReveal, MarkdownRender},
     diagnostic::DiagnosticProvider,
     diff::compare_ropes,
     syntax::{
@@ -589,6 +589,8 @@ pub struct Config {
     pub folding: FoldingConfig,
     /// Text shown as the symbol it stands for, like `α` for `alpha` in Typst math.
     pub conceal: ConcealConfig,
+    /// Markdown drawn rendered, like links as their text without their destination.
+    pub markdown: MarkdownConfig,
     /// Mouse support. Defaults to true.
     pub mouse: bool,
     /// Which register to use for mouse yank.
@@ -1507,6 +1509,40 @@ impl Default for ConcealConfig {
     }
 }
 
+/// Markdown drawn rendered, like links as their text without their destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct MarkdownConfig {
+    /// Whether Markdown is drawn rendered. Defaults to `true`.
+    pub enable_render: bool,
+    /// Whether icons are drawn with Nerd Font glyphs, or else left out or drawn in plain
+    /// Unicode. Defaults to `true`.
+    pub icons: bool,
+    /// Whether Markdown injected into other languages, like doc comments and commit messages, is
+    /// rendered too. Defaults to `true`.
+    pub injected: bool,
+}
+
+impl Default for MarkdownConfig {
+    fn default() -> Self {
+        Self {
+            enable_render: true,
+            icons: true,
+            injected: true,
+        }
+    }
+}
+
+impl MarkdownConfig {
+    /// How Markdown is rendered, or `None` if it is left as it is.
+    pub fn render(&self) -> Option<MarkdownRender> {
+        self.enable_render.then_some(MarkdownRender {
+            icons: self.icons,
+            injected: self.injected,
+        })
+    }
+}
+
 /// Code folding: text hidden behind a placeholder at the end of its first line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
@@ -1719,6 +1755,7 @@ impl Default for Config {
             minimap: MinimapConfig::default(),
             folding: FoldingConfig::default(),
             conceal: ConcealConfig::default(),
+            markdown: MarkdownConfig::default(),
             mouse: true,
             mouse_yank_register: '*',
             shell: if cfg!(windows) {
