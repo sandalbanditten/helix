@@ -181,7 +181,7 @@
 | mail | ✓ | ✓ |  |  | ✓ |  |  |  |  |  |
 | make | ✓ |  | ✓ |  |  |  |  |  |  |  |
 | markdoc | ✓ |  |  |  |  |  |  |  |  | `markdoc-ls` |
-| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ | ✓ | ✓ | `marksman`, `markdown-oxide`, `rumdl` |
+| markdown | ✓ |  |  | ✓ |  | ✓ | ✓ | ✓ |  | `marksman`, `markdown-oxide`, `rumdl` |
 | markdown-rustdoc | ✓ |  |  |  |  |  |  | ✓ |  |  |
 | markdown.inline | ✓ |  |  |  |  |  |  | ✓ |  |  |
 | matlab | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  |  |

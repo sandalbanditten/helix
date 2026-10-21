@@ -556,60 +556,6 @@ fn conceal_placeholders() {
 }
 
 #[test]
-fn zero_width_conceals() {
-    // a conceal of no text is drawn before its char, also on an empty line
-    let text = "ab\n\ncd\n";
-    let conceals = [
-        Conceal::new(1, 1, Replacement::Rule("│".into())),
-        Conceal::new(3, 3, "┌─┐"),
-        Conceal::new(5, 5, "!"),
-    ];
-    for softwrap in [false, true] {
-        assert_eq!(
-            concealed_text(text, softwrap, &conceals, 0),
-            "a│b \n┌─┐ \nc!d \n "
-        );
-    }
-
-    let mut annotations = TextAnnotations::default();
-    annotations.add_conceals(&conceals[..]);
-    let text_fmt = TextFormat::new_test(false);
-    let graphemes: Vec<_> =
-        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
-            .map(|g| (g.char_idx, g.visual_pos.col, g.doc_chars(), g.is_virtual()))
-            .collect();
-    assert_eq!(
-        graphemes[..6],
-        [
-            (0, 0, 1, false),
-            (1, 1, 0, true),
-            (1, 2, 1, false),
-            (2, 3, 1, false),
-            (3, 0, 0, true),
-            (3, 3, 1, false),
-        ]
-    );
-}
-
-#[test]
-fn conceals_skipping_graphemes() {
-    // a conceal that ends inside a grapheme leaves the rest of it
-    let conceals = [Conceal::new(0, 1, "E")];
-    assert_eq!(
-        concealed_text("e\u{301}x\n", false, &conceals, 0),
-        "E\u{301}x \n "
-    );
-    // and long and dense ones are skipped like short ones
-    let text = format!("{}|a|b\n", "x".repeat(100));
-    let conceals = [
-        Conceal::new(0, 101, "L"),
-        Conceal::new(102, 103, "│"),
-        Conceal::new(103, 104, "!"),
-    ];
-    assert_eq!(concealed_text(&text, false, &conceals, 0), "La│! \n ");
-}
-
-#[test]
 fn conceal_and_annotations() {
     let inline = [
         InlineAnnotation::new(3, "A"),

@@ -222,26 +222,3 @@ async fn unfocused_views_conceal_everything() -> anyhow::Result<()> {
     )
     .await
 }
-
-#[tokio::test(flavor = "multi_thread")]
-async fn conceal_markdown_tables() -> anyhow::Result<()> {
-    let app = AppBuilder::new().with_file("foo.md", None).build()?;
-    let table = "\n| a | b |\n|---|---|\n| cc | d |\n";
-    // the cursor's row is shown as source, the other rows aligned in boxes
-    test_key_sequence_with_input_text(
-        Some(app),
-        (
-            &format!("#[x|]#yz\n{table}"),
-            "jjll",
-            "xyz\n\n| #[a|]# | b |\n|---|---|\n| cc | d |\n",
-        ),
-        &|app| {
-            assert_shows(
-                app,
-                &["xyz", "┌────┬───┐", "| a | b |", "├────┼───┤", "│ cc │ d │"],
-            )
-        },
-        false,
-    )
-    .await
-}

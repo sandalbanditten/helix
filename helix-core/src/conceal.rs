@@ -2,14 +2,13 @@
 //! math.
 //!
 //! A language's `conceals.scm` query captures the text to conceal, and a [`SymbolTable`] resolves
-//! it, or lays out a whole node like a table. [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except
+//! it. [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except
 //! the ones the cursors reveal.
 
-mod markdown;
 mod typst;
 
 use std::borrow::Cow;
-use std::cell::{OnceCell, RefCell};
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::ops;
@@ -50,9 +49,6 @@ pub enum SymbolTable {
     TypstWikilink,
     /// Lines across the page, `#line(length: 100%)`, shown as a rule filling the row.
     TypstRule,
-    /// Markdown's pipe tables, shown with their columns aligned and their borders drawn. It lays
-    /// out a whole `pipe_table` node instead of resolving text.
-    MarkdownTable,
 }
 
 impl SymbolTable {
@@ -64,16 +60,6 @@ impl SymbolTable {
             Self::TypstShorthand => typst::shorthand(text).map(widened),
             Self::TypstWikilink => typst::wikilink(text).map(Replacement::from),
             Self::TypstRule => typst::is_full_width_line(text).then_some(Replacement::Fill("─")),
-            Self::MarkdownTable => None,
-        }
-    }
-
-    /// When its conceals are revealed, given the configured `reveal`. A table's rows are revealed
-    /// whole, which keeps the other rows aligned while the cursor moves along one.
-    fn reveal(self, reveal: ConcealReveal) -> ConcealReveal {
-        match self {
-            Self::MarkdownTable => ConcealReveal::Line,
-            _ => reveal,
         }
     }
 
@@ -117,7 +103,6 @@ impl FromStr for SymbolTable {
             "typst-shorthand" => Ok(Self::TypstShorthand),
             "typst-wikilink" => Ok(Self::TypstWikilink),
             "typst-rule" => Ok(Self::TypstRule),
-            "markdown-table" => Ok(Self::MarkdownTable),
             _ => Err(format!("unknown symbol table '{name}'")),
         }
     }
@@ -172,8 +157,8 @@ impl ConcealReveal {
 /// whenever the tree changes.
 #[derive(Debug, Default)]
 pub struct ConcealCache {
-    /// The conceals of each line computed so far and their tables, sorted and disjoint.
-    lines: HashMap<usize, Vec<(Conceal, SymbolTable)>>,
+    /// The conceals of each line computed so far, sorted and disjoint.
+    lines: HashMap<usize, Vec<Conceal>>,
 }
 
 impl ConcealCache {
@@ -235,23 +220,16 @@ impl<'a> SyntaxConceals<'a> {
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
         }
-        for (conceal, table) in self.conceals(text.line_to_char(lines.start)..end) {
+        for conceal in self.conceals(text.line_to_char(lines.start)..end) {
             let line = text.char_to_line(conceal.start);
-            // a table also conceals the lines around it, which may be outside `lines`
-            if lines.contains(&line) {
-                cache.lines.entry(line).or_default().push((conceal, table));
-            }
+            cache.lines.entry(line).or_default().push(conceal);
         }
     }
 
-    /// The conceals of the chars `range`, which covers whole lines, and their tables, sorted and
-    /// disjoint.
-    fn conceals(&self, range: ops::Range<usize>) -> Vec<(Conceal, SymbolTable)> {
+    /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint.
+    fn conceals(&self, range: ops::Range<usize>) -> Vec<Conceal> {
         let text = self.text;
-        // a line next to `range` may hold a table whose border is drawn on a line of `range`
-        let first_line = text.char_to_line(range.start).saturating_sub(1);
-        let end_line = (text.char_to_line(range.end) + 2).min(text.len_lines());
-        let bytes = text.line_to_byte(first_line) as u32..text.line_to_byte(end_line) as u32;
+        let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
         let mut noconceal = Vec::new();
         let mut conceals = Vec::new();
         for mat in self.syntax.conceal_matches(text, &self.loader, bytes) {
@@ -260,12 +238,6 @@ impl<'a> SyntaxConceals<'a> {
                 noconceal.push(text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end));
                 continue;
             };
-            if table == SymbolTable::MarkdownTable {
-                let mut laid_out = Vec::new();
-                markdown::table_conceals(text, &mat.node, range.clone(), &mut laid_out);
-                conceals.extend(laid_out.into_iter().map(|conceal| (conceal, table)));
-                continue;
-            }
             if bytes.is_empty() || bytes.len() > table.max_bytes() {
                 continue;
             }
@@ -276,15 +248,17 @@ impl<'a> SyntaxConceals<'a> {
             let Some(replacement) = table.resolve(&concealed).filter(|replacement| {
                 is_visible(match replacement {
                     Replacement::Text(text) => text,
-                    Replacement::Rule(text) => text,
                     Replacement::Fill(g) => g,
                 })
             }) else {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
-            let conceal = Conceal::new(start, text.byte_to_char(bytes.end), replacement);
-            conceals.push((conceal, table));
+            conceals.push(Conceal::new(
+                start,
+                text.byte_to_char(bytes.end),
+                replacement,
+            ));
         }
 
         merge_regions(&mut noconceal);
@@ -293,18 +267,16 @@ impl<'a> SyntaxConceals<'a> {
             i.checked_sub(1)
                 .is_some_and(|i| conceal.end <= noconceal[i].end)
         };
-        conceals.retain(|(conceal, _)| !in_noconceal(conceal));
+        conceals.retain(|conceal| !in_noconceal(conceal));
 
-        // stable, so that of two conceals of no text at one place the first match's wins, like
-        // the bottom border of a table over the top border of the next
-        conceals.sort_by_key(|(conceal, _)| (conceal.start, Reverse(conceal.end)));
-        let mut outermost: Vec<(Conceal, SymbolTable)> = Vec::with_capacity(conceals.len());
-        for (conceal, table) in conceals {
+        conceals.sort_unstable_by_key(|conceal| (conceal.start, Reverse(conceal.end)));
+        let mut outermost: Vec<Conceal> = Vec::with_capacity(conceals.len());
+        for conceal in conceals {
             if outermost
                 .last()
-                .is_none_or(|(last, _)| last.end <= conceal.start && last.start < conceal.start)
+                .is_none_or(|last| last.end <= conceal.start)
             {
-                outermost.push((conceal, table));
+                outermost.push(conceal);
             }
         }
         outermost
@@ -322,27 +294,17 @@ impl ConcealSource for SyntaxConceals<'_> {
         }
 
         // hand out the known lines that follow, except what the cursors reveal
+        let revealed = |conceal: &Conceal| {
+            self.reveal.is_some_and(|(selection, reveal)| {
+                reveal.reveals(text, selection, conceal.start..conceal.end)
+            })
+        };
         let mut line = first_line;
         while let Some(line_conceals) = cache.lines.get(&line) {
-            let line_revealed = OnceCell::new();
-            let revealed = |(conceal, table): &(Conceal, SymbolTable)| {
-                let Some((selection, reveal)) = self.reveal else {
-                    return false;
-                };
-                let reveal = table.reveal(reveal);
-                let range = conceal.start..conceal.end;
-                match reveal {
-                    // the same for every conceal of the line
-                    ConcealReveal::Line => {
-                        *line_revealed.get_or_init(|| reveal.reveals(text, selection, range))
-                    }
-                    _ => reveal.reveals(text, selection, range),
-                }
-            };
             let shown = line_conceals
                 .iter()
-                .filter(|shown| shown.0.start >= char_idx && !revealed(shown));
-            conceals.extend(shown.map(|(conceal, _)| conceal.clone()));
+                .filter(|conceal| conceal.start >= char_idx && !revealed(conceal));
+            conceals.extend(shown.cloned());
             line += 1;
             if line == first_line + SERVED_LINES {
                 break;
@@ -393,7 +355,6 @@ mod test {
                 rendered.extend(slice.slice(pos..conceal.start).chars());
                 match conceal.replacement {
                     Replacement::Text(text) => rendered.push_str(&text),
-                    Replacement::Rule(text) => rendered.push_str(&text),
                     Replacement::Fill(g) => rendered.push_str(&format!("{g}…")),
                 }
                 pos = conceal.end;
@@ -515,105 +476,6 @@ mod test {
         // other lines are left as they are
         assert_eq!(typst("#line(length: 50%)"), "#line(length: 50%)");
         assert_eq!(typst("#line()"), "#line()");
-    }
-
-    fn markdown(source: &str) -> String {
-        render("markdown", source, None)
-    }
-
-    #[test]
-    fn markdown_tables() {
-        // cells are padded to their column's widest and aligned as the delimiter row says, with
-        // the borders drawn over the blank lines around the table
-        assert_eq!(
-            markdown(
-                "x\n\n| Name | Qty | Kind |\n|:-----|----:|:---:|\n| apple | 3 | fruit |\n\
-                 |fig|12|nut|\n\ny\n"
-            ),
-            "x\n\
-             ┌───────┬─────┬───────┐\n\
-             │ Name  │ Qty │ Kind  │\n\
-             ├───────┼─────┼───────┤\n\
-             │ apple │   3 │ fruit │\n\
-             │ fig   │  12 │  nut  │\n\
-             └───────┴─────┴───────┘\n\
-             y\n"
-        );
-        // outer borders without outer pipes, no borders at the text's start and end
-        assert_eq!(
-            markdown("a | b\n--|--\nlong | x\n"),
-            "│ a    │ b │\n├──────┼───┤\n│ long │ x │\n"
-        );
-        // empty and missing cells
-        assert_eq!(
-            markdown("| a | b | c |\n|---|---|---|\n| | x |\n| 1 |\n"),
-            "│ a │ b │ c │\n├───┼───┼───┤\n│   │ x │   │\n│ 1 │   │   │\n"
-        );
-        // wide graphemes and escaped pipes
-        assert_eq!(
-            markdown("| 日本 | a \\| b |\n|---|---|\n| 😀 | c |\n"),
-            "│ 日本 │ a \\| b │\n├──────┼────────┤\n│ 😀   │ c      │\n"
-        );
-    }
-
-    #[test]
-    fn markdown_table_borders() {
-        // in a list item, the borders are indented like the rows, over whitespace too
-        assert_eq!(
-            markdown("- item\n  \n  | a |\n  |---|\n\nz\n"),
-            "- item\n  ┌───┐\n  │ a │\n  ├───┤\n  └───┘\nz\n"
-        );
-        // a table in a block quote gets none, since the blank lines are outside the quote
-        assert_eq!(
-            markdown("\n> | a |\n> |---|\n> | b |\n\n"),
-            "\n> │ a │\n> ├───┤\n> │ b │\n\n"
-        );
-        // a blank line between two tables shows the bottom border of the first
-        assert_eq!(
-            markdown("| a |\n|---|\n\n| bb |\n|----|\n"),
-            "│ a │\n├───┤\n└───┘\n│ bb │\n├────┤\n"
-        );
-    }
-
-    #[test]
-    fn markdown_tables_across_fetches() {
-        // the widest cell is on the last row, past the lines fetched first
-        let rows = "| x |\n".repeat(FETCHED_LINES + 50);
-        let source = format!("| a |\n|---|\n{rows}| widest |\n");
-        let rendered = markdown(&source);
-        assert!(rendered.starts_with("│ a      │\n├────────┤\n│ x      │\n"));
-        assert!(rendered.ends_with("│ x      │\n│ widest │\n"));
-
-        // a border on the first line of a fetch, below a table ending on the last line before it
-        let table = format!("| a |\n|---|\n{}", "| x |\n".repeat(FETCHED_LINES - 2));
-        assert!(markdown(&format!("{table}\nq\n")).ends_with("│ x │\n└───┘\nq\n"));
-        // and one on the last line of a fetch, above a table starting on the first line after it
-        let lines = "q\n".repeat(FETCHED_LINES - 1);
-        assert!(markdown(&format!("{lines}\n| a |\n|---|\n")).ends_with("q\n┌───┐\n│ a │\n├───┤\n"));
-    }
-
-    #[test]
-    fn markdown_table_reveal() {
-        let source = "\n| a | b |\n|---|---|\n| cc | d |\n\n";
-        let at = |cursor: usize| {
-            let selection = cursors(&[(cursor, cursor + 1)]);
-            render(
-                "markdown",
-                source,
-                Some((&selection, ConcealReveal::Symbol)),
-            )
-        };
-        // a cursor anywhere on a row reveals the row, whatever the configured reveal
-        assert_eq!(
-            at(5),
-            "┌────┬───┐\n| a | b |\n├────┼───┤\n│ cc │ d │\n└────┴───┘\n"
-        );
-        assert_eq!(
-            at(25),
-            "┌────┬───┐\n│ a  │ b │\n├────┼───┤\n| cc | d |\n└────┴───┘\n"
-        );
-        // and one on a border's blank line the border
-        assert_eq!(at(0), "\n│ a  │ b │\n├────┼───┤\n│ cc │ d │\n└────┴───┘\n");
     }
 
     fn cursors(ranges: &[(usize, usize)]) -> Selection {
