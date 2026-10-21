@@ -592,6 +592,24 @@ fn zero_width_conceals() {
 }
 
 #[test]
+fn conceals_skipping_graphemes() {
+    // a conceal that ends inside a grapheme leaves the rest of it
+    let conceals = [Conceal::new(0, 1, "E")];
+    assert_eq!(
+        concealed_text("e\u{301}x\n", false, &conceals, 0),
+        "E\u{301}x \n "
+    );
+    // and long and dense ones are skipped like short ones
+    let text = format!("{}|a|b\n", "x".repeat(100));
+    let conceals = [
+        Conceal::new(0, 101, "L"),
+        Conceal::new(102, 103, "│"),
+        Conceal::new(103, 104, "!"),
+    ];
+    assert_eq!(concealed_text(&text, false, &conceals, 0), "La│! \n ");
+}
+
+#[test]
 fn conceal_and_annotations() {
     let inline = [
         InlineAnnotation::new(3, "A"),

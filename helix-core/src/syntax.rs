@@ -963,7 +963,8 @@ impl Syntax {
         source: RopeSlice<'a>,
         loader: &'a Loader,
         range: ops::Range<u32>,
-    ) -> impl Iterator<Item = ConcealMatch> + 'a {
+    ) -> impl Iterator<Item = ConcealMatch<'a>> + 'a {
+        let end = range.end;
         let mut matches = QueryMatchIter::<_, ()>::new(
             &self.inner,
             source,
@@ -971,8 +972,14 @@ impl Syntax {
             range,
         );
         iter::from_fn(move || loop {
-            let QueryMatchIterEvent::Match(mat) = matches.next()? else {
-                continue;
+            let mat = match matches.next()? {
+                QueryMatchIterEvent::Match(mat) => mat,
+                // the iterator enters every injection up to the end of the text, even those
+                // without a query, like the cells of a Markdown table, and matches come in order
+                QueryMatchIterEvent::EnterInjection(injection) if injection.range.start >= end => {
+                    return None
+                }
+                _ => continue,
             };
             let Some(query) = loader.conceal_query(matches.current_language()) else {
                 continue;
@@ -985,13 +992,14 @@ impl Syntax {
             let Some(capture) = capture else {
                 continue;
             };
-            let bytes = mat
-                .nodes_for_capture(capture)
-                .map(|node| node.byte_range())
-                .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end));
-            if let Some(bytes) = bytes {
-                return Some(ConcealMatch { bytes, table });
-            }
+            let mut nodes = mat.nodes_for_capture(capture);
+            let Some(node) = nodes.next().cloned() else {
+                continue;
+            };
+            let bytes = nodes.fold(node.byte_range(), |a, b| {
+                a.start.min(b.start_byte())..a.end.max(b.end_byte())
+            });
+            return Some(ConcealMatch { bytes, table, node });
         })
     }
 
@@ -1664,13 +1672,15 @@ impl SpellcheckQuery {
 }
 
 /// A match of a `conceals.scm` query.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConcealMatch {
+#[derive(Debug, Clone)]
+pub struct ConcealMatch<'tree> {
     /// The bytes from the first to the last node of the match's `@conceal` or `@noconceal`
     /// capture.
     pub bytes: ops::Range<u32>,
     /// The table that resolves the text of a `@conceal` match, or `None` for a `@noconceal` match.
     pub table: Option<SymbolTable>,
+    /// The first node of the capture.
+    pub node: Node<'tree>,
 }
 
 #[derive(Debug)]

@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use crate::doc_formatter::FormattedGrapheme;
 use crate::fold::Fold;
@@ -111,8 +112,9 @@ pub enum Replacement {
     /// A grapheme repeated up to the end of the row, like a horizontal rule. The row's last
     /// column stays free, so it never wraps.
     Fill(&'static str),
-    /// Text drawn like the indent guides, like the borders of a table.
-    Rule(String),
+    /// Text drawn like the indent guides, like the borders of a table. It is shared, since it is
+    /// cloned on its way to the formatter.
+    Rule(Arc<str>),
 }
 
 impl From<&'static str> for Replacement {

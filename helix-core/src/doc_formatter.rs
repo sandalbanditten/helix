@@ -336,7 +336,7 @@ impl<'t> DocumentFormatter<'t> {
             } else if let Some(conceal) = self.annotations.conceal_at(char_pos, len_chars) {
                 // a conceal of no text hides nothing to skip
                 if conceal.end > conceal.start {
-                    self.graphemes = self.text.slice(conceal.end..).graphemes();
+                    self.skip_graphemes(conceal.end - conceal.start, conceal.end);
                     self.annotations.skip_hidden(conceal.end);
                 }
                 let codepoints = u32::try_from(conceal.end - conceal.start)
@@ -344,7 +344,7 @@ impl<'t> DocumentFormatter<'t> {
                 let rule = !matches!(conceal.replacement, Replacement::Text(_));
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,
-                    Replacement::Rule(text) => Cow::Owned(text),
+                    Replacement::Rule(text) => Cow::Owned(text.to_string()),
                     Replacement::Fill(g) => {
                         let width = self.text_fmt.viewport_width as usize;
                         let count = width.saturating_sub(col + 1) / grapheme_width(g).max(1);
@@ -381,6 +381,27 @@ impl<'t> DocumentFormatter<'t> {
         let grapheme = GraphemeWithSource::new(grapheme, col, self.text_fmt.tab_width, source);
 
         Some(grapheme)
+    }
+
+    /// Moves the graphemes past the next `chars` chars, which end at `end`. Skipping a few
+    /// graphemes is much cheaper than slicing the text anew, which matters where conceals are
+    /// dense, like in a table.
+    fn skip_graphemes(&mut self, mut chars: usize, end: usize) {
+        const MAX_SKIPPED_CHARS: usize = 64;
+        if chars <= MAX_SKIPPED_CHARS {
+            while let Some(grapheme) = self.graphemes.next() {
+                let len = grapheme.len_chars();
+                if len > chars {
+                    // the conceal ends inside the grapheme
+                    break;
+                }
+                chars -= len;
+                if chars == 0 {
+                    return;
+                }
+            }
+        }
+        self.graphemes = self.text.slice(end..).graphemes();
     }
 
     /// The column a row that soft wraps continues in: after the indentation it carries over
