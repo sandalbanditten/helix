@@ -24,8 +24,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::chars::char_is_line_ending;
 use crate::syntax::{merge_regions, Loader, Syntax};
-use crate::text_annotations::{Conceal, ConcealSource, Replacement};
-use crate::{RopeSlice, Selection};
+use crate::text_annotations::{Conceal, ConcealSource, ConcealStyle, LineAnnotation, Replacement};
+use crate::tree_sitter::Node;
+use crate::{Position, RopeSlice, Selection};
 
 /// The longest text, in bytes, that is looked up in a [`SymbolTable`] of symbols.
 const MAX_CONCEALED_BYTES: usize = 64;
@@ -212,12 +213,38 @@ pub enum DecorationStyle {
     Scope(&'static str),
 }
 
+/// A row of rendered Markdown drawn between lines of the text, like the border of a table with
+/// no blank line next to it to be drawn over: its parts from the first column of the text area,
+/// and how each is styled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualRow {
+    pub parts: Vec<(String, ConcealStyle)>,
+}
+
+/// The virtual rows drawn around a line.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LineRows {
+    /// Above it, which only the first line of a text has.
+    pub above: Vec<VirtualRow>,
+    pub below: Vec<VirtualRow>,
+}
+
+/// The most lines a window of lines whose conceals are computed together grows to, to take in
+/// the whole of its tables.
+const MAX_TABLE_LINES: usize = 2048;
+
 /// What the Markdown of a window of lines is rendered as.
 #[derive(Debug, Default)]
-struct Rendered {
+struct Rendered<'t> {
     conceals: Vec<Cached>,
     /// The decorations and their lines.
     decorations: Vec<(usize, ConcealDecoration)>,
+    /// The virtual rows, their lines and whether they go above them.
+    rows: Vec<(usize, bool, VirtualRow)>,
+    /// The tables to lay out once the conceals of their cells are known.
+    tables: Vec<Node<'t>>,
+    /// The lines of the tables laid out, with the lines around them.
+    table_lines: Vec<ops::Range<usize>>,
 }
 
 /// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
@@ -228,6 +255,8 @@ pub struct ConcealCache {
     lines: HashMap<usize, Vec<Cached>>,
     /// The decorations of the lines in `lines` that have any.
     decorations: HashMap<usize, Vec<ConcealDecoration>>,
+    /// The virtual rows around the lines in `lines` that have any.
+    rows: HashMap<usize, LineRows>,
     /// What was concealed in `lines`.
     options: ConcealOptions,
 }
@@ -236,6 +265,7 @@ impl ConcealCache {
     pub fn clear(&mut self) {
         self.lines.clear();
         self.decorations.clear();
+        self.rows.clear();
     }
 
     /// The window of lines around `line` whose conceals are computed together, leaving out lines
@@ -302,20 +332,49 @@ impl<'a> SyntaxConceals<'a> {
     }
 
     /// Computes the conceals and decorations of the lines `lines` into `cache`.
-    fn fetch(&self, cache: &mut ConcealCache, lines: ops::Range<usize>) {
+    fn fetch(&self, cache: &mut ConcealCache, mut lines: ops::Range<usize>) {
         let text = self.text;
-        let end = if lines.end < text.len_lines() {
-            text.line_to_char(lines.end)
-        } else {
-            text.len_chars()
+        let chars = |lines: &ops::Range<usize>| {
+            let end = if lines.end < text.len_lines() {
+                text.line_to_char(lines.end)
+            } else {
+                text.len_chars()
+            };
+            text.line_to_char(lines.start)..end
         };
+        // the window takes in the whole of its tables, whose columns are as wide as their widest
+        // cell, and the lines around them, where their borders go
+        let mut rendered = self.render(chars(&lines));
+        loop {
+            let wanted = rendered
+                .table_lines
+                .iter()
+                .fold(lines.clone(), |lines, table| {
+                    lines.start.min(table.start)..lines.end.max(table.end)
+                });
+            if wanted == lines || wanted.len() > MAX_TABLE_LINES {
+                break;
+            }
+            lines = wanted;
+            rendered = self.render(chars(&lines));
+        }
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
             cache.decorations.remove(&line);
+            cache.rows.remove(&line);
         }
         // what a match renders on lines it reaches outside the window, like the title of a
         // callout above it, is left to the window of those lines
-        let rendered = self.render(text.line_to_char(lines.start)..end);
+        for (line, above, row) in rendered.rows {
+            if lines.contains(&line) {
+                let rows = cache.rows.entry(line).or_default();
+                if above {
+                    rows.above.push(row);
+                } else {
+                    rows.below.push(row);
+                }
+            }
+        }
         for cached in rendered.conceals {
             let line = text.char_to_line(cached.conceal.start);
             if lines.contains(&line) {
@@ -331,12 +390,11 @@ impl<'a> SyntaxConceals<'a> {
 
     /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint, and the
     /// decorations of rendered Markdown.
-    fn render(&self, range: ops::Range<usize>) -> Rendered {
+    fn render(&self, range: ops::Range<usize>) -> Rendered<'a> {
         let text = self.text;
         let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
         let mut noconceal = Vec::new();
-        let mut conceals = Vec::new();
-        let mut decorations = Vec::new();
+        let mut rendered = Rendered::default();
         for mat in self.syntax.conceal_matches(text, &self.loader, bytes) {
             let bytes = mat.bytes.start as usize..mat.bytes.end as usize;
             let Some(table) = mat.table else {
@@ -345,16 +403,11 @@ impl<'a> SyntaxConceals<'a> {
             };
             if let SymbolTable::Markdown(element) = table {
                 // what is injected into Markdown, like LaTeX math, only renders there
-                let rendered = !element.is_injected() || mat.in_markdown;
-                if let Some(options) = self.options.markdown.filter(|_| rendered) {
-                    let mut renderer = markdown::Renderer::new(
-                        text,
-                        &self.loader,
-                        options,
-                        &mut conceals,
-                        &mut decorations,
-                    );
-                    renderer.render(element, &mat.node, bytes);
+                let renders = !element.is_injected() || mat.in_markdown;
+                if let Some(options) = self.options.markdown.filter(|_| renders) {
+                    let mut renderer =
+                        markdown::Renderer::new(text, &self.loader, options, &mut rendered);
+                    renderer.render(element, mat.node, bytes);
                 }
                 continue;
             }
@@ -380,11 +433,25 @@ impl<'a> SyntaxConceals<'a> {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
-            conceals.push(Cached {
+            rendered.conceals.push(Cached {
                 conceal: Conceal::new(start, text.byte_to_char(bytes.end), replacement),
                 reveal: Reveal::Configured,
             });
         }
+
+        // tables, measured with the conceals of their cells
+        if let Some(options) = self.options.markdown {
+            for table in std::mem::take(&mut rendered.tables) {
+                markdown::Renderer::new(text, &self.loader, options, &mut rendered).table(&table);
+            }
+        }
+        let Rendered {
+            mut conceals,
+            decorations,
+            rows,
+            table_lines,
+            ..
+        } = rendered;
 
         merge_regions(&mut noconceal);
         let in_noconceal = |conceal: &Conceal| {
@@ -416,7 +483,28 @@ impl<'a> SyntaxConceals<'a> {
         Rendered {
             conceals: outermost,
             decorations,
+            rows,
+            tables: Vec::new(),
+            table_lines,
         }
+    }
+
+    /// The virtual rows around the lines `lines`, and their lines.
+    pub fn rows(&self, lines: ops::Range<usize>) -> Vec<(usize, LineRows)> {
+        lines
+            .filter_map(|line| self.with_rows(line, |rows| Some((line, rows?.clone()))))
+            .collect()
+    }
+
+    /// Calls `f` with the virtual rows around `line`, if it has any.
+    fn with_rows<R>(&self, line: usize, f: impl FnOnce(Option<&LineRows>) -> R) -> R {
+        let text = self.text;
+        let mut cache = self.cache.borrow_mut();
+        if line < text.len_lines() && !cache.lines.contains_key(&line) {
+            let window = cache.window(line, text.len_lines());
+            self.fetch(&mut cache, window);
+        }
+        f(cache.rows.get(&line))
     }
 
     /// The decorations of the lines `lines` that the cursors don't reveal, and their lines.
@@ -459,6 +547,54 @@ impl<'a> SyntaxConceals<'a> {
             Reveal::Configured => configured.reveals(text, selection, range),
             Reveal::Line => ConcealReveal::Line.reveals(text, selection, range),
         }
+    }
+}
+
+/// The virtual rows of rendered Markdown as the lines the document formatter makes room for.
+pub struct ConcealRows<'a> {
+    conceals: SyntaxConceals<'a>,
+    /// The last line whose end was looked for, and the char after its end.
+    line_end: Option<(usize, usize)>,
+}
+
+impl<'a> ConcealRows<'a> {
+    pub fn new(conceals: SyntaxConceals<'a>) -> Self {
+        Self {
+            conceals,
+            line_end: None,
+        }
+    }
+}
+
+impl LineAnnotation for ConcealRows<'_> {
+    fn virtual_lines_above(&mut self) -> usize {
+        self.conceals
+            .with_rows(0, |rows| rows.map_or(0, |rows| rows.above.len()))
+    }
+
+    fn insert_virtual_lines(
+        &mut self,
+        line_end_char_idx: usize,
+        _: Position,
+        doc_line: usize,
+    ) -> Position {
+        // a visual line ends where its line wraps too: the rows come after the end of the line
+        let text = self.conceals.text;
+        let end = match self.line_end {
+            Some((line, end)) if line == doc_line => end,
+            _ => {
+                let end = text.line_to_char((doc_line + 1).min(text.len_lines()));
+                self.line_end = Some((doc_line, end));
+                end
+            }
+        };
+        if line_end_char_idx < end {
+            return Position::new(0, 0);
+        }
+        let below = self
+            .conceals
+            .with_rows(doc_line, |rows| rows.map_or(0, |rows| rows.below.len()));
+        Position::new(below, 0)
     }
 }
 
@@ -749,6 +885,68 @@ mod test {
         // LaTeX documents are no Markdown
         let source = "$\\alpha^2$\n";
         assert_eq!(render("latex", source, None), source);
+    }
+
+    #[test]
+    fn markdown_tables() {
+        // columns as wide as their cells are drawn, aligned, with borders over the blank lines
+        let source = "Text\n\n| `Left` | *Center* | Right |\n|:--|:-:|--:|\n\
+                      | a | **Bold** | [link](https://x.org) |\n\nAfter\n";
+        assert_eq!(
+            markdown(source),
+            "Text\n\
+             ┌──────┬────────┬────────┐\n\
+             │ Left │ Center │  Right │\n\
+             ├━─────┼━──────━┼───────━┤\n\
+             │ a    │  Bold  │ \u{f059f} link │\n\
+             └──────┴────────┴────────┘\n\
+             After\n"
+        );
+        // rows without the outer pipes, and missing cells
+        assert_eq!(
+            markdown("\na | b\n--|--\nlonger\n\n"),
+            "┌────────┬───┐\n│ a      │ b │\n├────────┼───┤\n│ longer │   │\n└────────┴───┘\n"
+        );
+    }
+
+    #[test]
+    fn markdown_table_rows() {
+        // without blank lines around it, the borders are rows of their own
+        let source = "| a |\n|---|\n| b |\n# After\n";
+        let text = Rope::from(source);
+        let syntax = parse("markdown", &text);
+        let cache = RefCell::default();
+        let conceals = SyntaxConceals::new(
+            text.slice(..),
+            &syntax,
+            LOADER.clone(),
+            None,
+            OPTIONS,
+            &cache,
+        )
+        .unwrap();
+        let row = |border: &str| VirtualRow {
+            parts: vec![(border.to_owned(), ConcealStyle::Guide)],
+        };
+        assert_eq!(
+            conceals.rows(0..text.len_lines()),
+            [
+                (
+                    0,
+                    LineRows {
+                        above: vec![row("┌───┐")],
+                        below: Vec::new()
+                    }
+                ),
+                (
+                    2,
+                    LineRows {
+                        above: Vec::new(),
+                        below: vec![row("└───┘")]
+                    }
+                ),
+            ]
+        );
     }
 
     #[test]

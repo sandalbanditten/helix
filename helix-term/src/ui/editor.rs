@@ -281,8 +281,22 @@ impl EditorView {
             overlays.push(overlay);
         }
 
-        // rendered Markdown drawn over the text, like the bands of headings
+        // rendered Markdown drawn over the text, like checked tasks, and between its lines, like
+        // the borders of tables
         let lines = first..view.estimate_last_doc_line(doc) + 1;
+        let rows = view.conceal_rows(doc, is_focused, first.saturating_sub(1)..lines.end);
+        if !rows.is_empty() {
+            decorations.add_decoration(text_decorations::MarkdownRows::new(
+                rows,
+                text,
+                theme
+                    .try_get("ui.virtual.indent-guide")
+                    .unwrap_or_else(|| theme.get("ui.virtual.whitespace")),
+                theme.get("ui.text"),
+                theme,
+                doc.text_format(inner.width, None).soft_wrap,
+            ));
+        }
         let markdown = view.conceal_decorations(doc, is_focused, lines);
         if !markdown.is_empty() {
             if let Some(overlay) = Self::markdown_highlights(&markdown, theme) {

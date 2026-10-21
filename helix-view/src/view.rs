@@ -11,7 +11,7 @@ use crate::{
 
 use helix_core::{
     anchor_at_visual_offset, char_idx_at_visual_offset,
-    conceal::{ConcealDecoration, ConcealOptions, SyntaxConceals},
+    conceal::{ConcealDecoration, ConcealOptions, ConcealRows, LineRows, SyntaxConceals},
     doc_formatter::TextFormat,
     fold,
     movement::{move_vertically_visual, Direction, Movement},
@@ -635,6 +635,19 @@ impl View {
             .unwrap_or_default()
     }
 
+    /// The virtual rows of rendered Markdown that the view draws around the document lines
+    /// `lines` of `doc`, and their lines.
+    pub fn conceal_rows(
+        &self,
+        doc: &Document,
+        focused: bool,
+        lines: std::ops::Range<usize>,
+    ) -> Vec<(usize, LineRows)> {
+        self.conceals(doc, focused)
+            .map(|conceals| conceals.rows(lines))
+            .unwrap_or_default()
+    }
+
     /// The text annotations to draw the view with at its [render offset](Self::render_offset).
     /// Only a `focused` view reveals concealed text at its cursors.
     pub fn render_text_annotations<'a>(
@@ -852,6 +865,11 @@ impl View {
         if let Some(pane) = &doc.diff_view {
             text_annotations.add_line_annotation(Box::new(pane.filler_lines(doc.text().slice(..))));
             return text_annotations;
+        }
+
+        // the rows of rendered Markdown, like the borders of tables
+        if let Some(conceals) = self.conceals(doc, focused) {
+            text_annotations.add_line_annotation(Box::new(ConcealRows::new(conceals)));
         }
 
         let width = self.inner_width(doc);

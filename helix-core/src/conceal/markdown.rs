@@ -11,7 +11,9 @@ use std::str::FromStr;
 use tree_house::tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
-use super::{latex, widened, Cached, ConcealDecoration, DecorationStyle, Reveal};
+use super::{latex, widened, Cached, ConcealDecoration, DecorationStyle, Rendered, Reveal};
+
+mod table;
 use crate::chars::char_is_line_ending;
 use crate::icons;
 use crate::line_ending::line_end_char_index;
@@ -63,6 +65,8 @@ pub enum Element {
     /// The scripts in a word of LaTeX math in Markdown shown as superscripts and subscripts, like
     /// `x^2` as `x²`.
     LatexScripts,
+    /// A pipe table, shown with its columns aligned and its borders drawn, see [`table`].
+    Table,
 }
 
 impl Element {
@@ -90,6 +94,7 @@ impl FromStr for Element {
             "code-fence" => Ok(Self::CodeFence),
             "latex-command" => Ok(Self::LatexCommand),
             "latex-scripts" => Ok(Self::LatexScripts),
+            "table" => Ok(Self::Table),
             _ => Err(()),
         }
     }
@@ -133,34 +138,32 @@ const QUOTE_BAR: &str = "▎";
 /// The scope icons of links are styled with.
 const LINK_SCOPE: &str = "markup.link.text";
 
-/// Renders the captured Markdown of a query match into conceals and decorations.
-pub(super) struct Renderer<'a> {
+/// Renders the captured Markdown of a query match.
+pub(super) struct Renderer<'a, 't> {
     text: RopeSlice<'a>,
     loader: &'a Loader,
     options: MarkdownRender,
-    conceals: &'a mut Vec<Cached>,
-    decorations: &'a mut Vec<(usize, ConcealDecoration)>,
+    rendered: &'a mut Rendered<'t>,
 }
 
-impl<'a> Renderer<'a> {
+impl<'a, 't> Renderer<'a, 't> {
     pub(super) fn new(
         text: RopeSlice<'a>,
         loader: &'a Loader,
         options: MarkdownRender,
-        conceals: &'a mut Vec<Cached>,
-        decorations: &'a mut Vec<(usize, ConcealDecoration)>,
+        rendered: &'a mut Rendered<'t>,
     ) -> Self {
         Self {
             text,
             loader,
             options,
-            conceals,
-            decorations,
+            rendered,
         }
     }
 
     /// Renders `element`, captured as `node` and the nodes after it up to the end of `bytes`.
-    pub(super) fn render(&mut self, element: Element, node: &Node, bytes: Range<usize>) {
+    pub(super) fn render(&mut self, element: Element, node: Node<'t>, bytes: Range<usize>) {
+        let node = &node;
         match element {
             Element::Hide => self.conceal(bytes, Replacement::Hidden, ConcealStyle::Text),
             Element::Entity => self.entity(bytes),
@@ -183,6 +186,7 @@ impl<'a> Renderer<'a> {
             Element::CodeFence => self.code_fence(node),
             Element::LatexCommand => self.latex_command(node),
             Element::LatexScripts => self.latex_scripts(node),
+            Element::Table => self.rendered.tables.push(node.clone()),
         }
     }
 
@@ -197,7 +201,7 @@ impl<'a> Renderer<'a> {
             return;
         }
         let conceal = Conceal::new(range.start, range.end, replacement).styled(style);
-        self.conceals.push(Cached {
+        self.rendered.conceals.push(Cached {
             conceal,
             reveal: Reveal::Line,
         });
@@ -207,7 +211,7 @@ impl<'a> Renderer<'a> {
     fn insert(&mut self, byte: usize, replacement: Replacement, style: ConcealStyle) {
         let char_idx = self.text.byte_to_char(byte);
         let conceal = Conceal::new(char_idx, char_idx, replacement).styled(style);
-        self.conceals.push(Cached {
+        self.rendered.conceals.push(Cached {
             conceal,
             reveal: Reveal::Line,
         });
@@ -245,7 +249,7 @@ impl<'a> Renderer<'a> {
 
     fn decorate(&mut self, byte: usize, decoration: ConcealDecoration) {
         let line = self.text.byte_to_line(byte);
-        self.decorations.push((line, decoration));
+        self.rendered.decorations.push((line, decoration));
     }
 
     /// Decorates the text of the bytes `bytes` line by line, without the whitespace and quote

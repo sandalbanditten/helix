@@ -7,7 +7,7 @@ use helix_view::editor::CursorCache;
 use crate::ui::document::{LinePos, TextRenderer};
 
 pub use diagnostics::InlineDiagnostics;
-pub use markdown::Markdown;
+pub use markdown::{Markdown, MarkdownRows};
 
 mod diagnostics;
 mod markdown;

@@ -374,3 +374,24 @@ async fn markdown_checked_tasks() -> anyhow::Result<()> {
     )
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_tables() -> anyhow::Result<()> {
+    let mut app = markdown_app(
+        "foo.md",
+        "#[x|]#\n| a | [link](https://x.org) |\n|:-:|---|\n| long cell | b |\n# After\n",
+        ConcealConfig::default(),
+        MarkdownConfig::default(),
+    )?;
+    let rows = [
+        "x",
+        "┌───────────┬────────┐",
+        "│     a     │ \u{f059f} link │",
+        "├━─────────━┼────────┤",
+        "│ long cell │ b      │",
+        "└───────────┴────────┘",
+        "# After",
+    ];
+    let drawn = |app: &Application| assert_shows(app, &rows);
+    test_key_sequence(&mut app, Some("<esc>"), Some(&drawn), false).await
+}

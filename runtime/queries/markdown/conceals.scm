@@ -31,3 +31,7 @@
 ; rule, and their closing fence hidden
 ((fenced_code_block) @conceal
   (#set! conceal.symbols "markdown-code-fence"))
+
+; Pipe tables, with their columns aligned and their borders drawn
+((pipe_table) @conceal
+  (#set! conceal.symbols "markdown-table"))
