@@ -678,8 +678,9 @@ reveal = "line"
 
 ### `[editor.markdown]` Section
 
-Options for drawing Markdown rendered: markup is hidden or shown as icons, except on the lines with
-a cursor. `[See the docs](https://example.com)` is shown as `󰖟 See the docs`.
+Options for drawing Markdown rendered: markup is hidden or shown as icons, except for the elements a
+cursor is on or next to, like a whole link. `[See the docs](https://example.com)` is shown as
+`󰖟 See the docs`.
 
 | Key | Description | Default |
 | --- | --- | --- |

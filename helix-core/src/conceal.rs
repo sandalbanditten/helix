@@ -181,12 +181,13 @@ pub struct ConcealOptions {
 }
 
 /// When the cursors of the focused view reveal a conceal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Reveal {
     /// As `[editor.conceal] reveal` says.
     Configured,
-    /// While a cursor is on its line, like rendered Markdown.
-    Line,
+    /// While a cursor is on or next to the chars of the element of rendered Markdown the conceal
+    /// is a part of, like a whole link.
+    Element(ops::Range<usize>),
 }
 
 /// A conceal and when it is revealed.
@@ -237,8 +238,8 @@ const MAX_TABLE_LINES: usize = 2048;
 #[derive(Debug, Default)]
 struct Rendered<'t> {
     conceals: Vec<Cached>,
-    /// The decorations and their lines.
-    decorations: Vec<(usize, ConcealDecoration)>,
+    /// The decorations, their lines and the chars of the elements they are a part of.
+    decorations: Vec<(usize, ConcealDecoration, ops::Range<usize>)>,
     /// The virtual rows, their lines and whether they go above them.
     rows: Vec<(usize, bool, VirtualRow)>,
     /// The tables to lay out once the conceals of their cells are known.
@@ -253,8 +254,9 @@ struct Rendered<'t> {
 pub struct ConcealCache {
     /// The conceals of each line computed so far, sorted and disjoint.
     lines: HashMap<usize, Vec<Cached>>,
-    /// The decorations of the lines in `lines` that have any.
-    decorations: HashMap<usize, Vec<ConcealDecoration>>,
+    /// The decorations of the lines in `lines` that have any, and the chars of the elements they
+    /// are a part of.
+    decorations: HashMap<usize, Vec<(ConcealDecoration, ops::Range<usize>)>>,
     /// The virtual rows around the lines in `lines` that have any.
     rows: HashMap<usize, LineRows>,
     /// What was concealed in `lines`.
@@ -381,9 +383,10 @@ impl<'a> SyntaxConceals<'a> {
                 cache.lines.entry(line).or_default().push(cached);
             }
         }
-        for (line, decoration) in rendered.decorations {
+        for (line, decoration, element) in rendered.decorations {
             if lines.contains(&line) {
-                cache.decorations.entry(line).or_default().push(decoration);
+                let line_decorations = cache.decorations.entry(line).or_default();
+                line_decorations.push((decoration, element));
             }
         }
     }
@@ -521,17 +524,11 @@ impl<'a> SyntaxConceals<'a> {
             let Some(line_decorations) = cache.decorations.get(&line) else {
                 continue;
             };
-            let line_start = text.line_to_char(line);
-            let revealed = self.reveal.is_some_and(|(selection, _)| {
-                ConcealReveal::Line.reveals(text, selection, line_start..line_start + 1)
-            });
-            if !revealed {
-                decorations.extend(
-                    line_decorations
-                        .iter()
-                        .map(|decoration| (line, decoration.clone())),
-                );
-            }
+            let shown = line_decorations
+                .iter()
+                .filter(|(_, element)| !self.reveals_element(element.clone()))
+                .map(|(decoration, _)| (line, decoration.clone()));
+            decorations.extend(shown);
         }
         decorations
     }
@@ -542,11 +539,20 @@ impl<'a> SyntaxConceals<'a> {
             return false;
         };
         let text = self.text;
-        let range = cached.conceal.start..cached.conceal.end;
-        match cached.reveal {
-            Reveal::Configured => configured.reveals(text, selection, range),
-            Reveal::Line => ConcealReveal::Line.reveals(text, selection, range),
+        match &cached.reveal {
+            Reveal::Configured => {
+                let range = cached.conceal.start..cached.conceal.end;
+                configured.reveals(text, selection, range)
+            }
+            Reveal::Element(element) => self.reveals_element(element.clone()),
         }
+    }
+
+    /// Whether a cursor is on or next to the element of rendered Markdown of the chars `element`.
+    fn reveals_element(&self, element: ops::Range<usize>) -> bool {
+        self.reveal.is_some_and(|(selection, _)| {
+            ConcealReveal::Adjacent.reveals(self.text, selection, element)
+        })
     }
 }
 
@@ -825,8 +831,8 @@ mod test {
                 (3, decoration(35..39, DecorationStyle::Scope("diff.plus"))),
             ]
         );
-        // the cursor's line has none
-        let selection = Selection::point(9);
+        // none while a cursor is on or next to the checked task
+        let selection = Selection::point(17);
         let reveal = Some((&selection, ConcealReveal::Adjacent));
         let conceals = SyntaxConceals::new(
             text.slice(..),
@@ -944,13 +950,30 @@ mod test {
 
     #[test]
     fn markdown_reveal() {
-        let source = "A **bold** word\nand *more*\n";
-        let selection = Selection::point(3);
-        let reveal = Some((&selection, ConcealReveal::Adjacent));
-        // the cursor's line is revealed, whatever `reveal` is
+        let source = "A **bold** word and [docs](https://x.org) here\n";
+        let rendered = |cursor| {
+            let selection = Selection::point(cursor);
+            // whatever `reveal` is
+            render("markdown", source, Some((&selection, ConcealReveal::Line)))
+        };
+        // an element is revealed whole while a cursor is on or next to any part of it
+        let raw_bold = "A **bold** word and \u{f059f} docs here\n";
+        let raw_link = "A bold word and [docs](https://x.org) here\n";
+        assert_eq!(rendered(5), raw_bold, "in the bold text");
+        assert_eq!(rendered(10), raw_bold, "after the bold text");
+        assert_eq!(rendered(22), raw_link, "in the link's text");
+        assert_eq!(rendered(41), raw_link, "after the link");
         assert_eq!(
-            render("markdown", source, reveal),
-            "A **bold** word\nand more\n"
+            rendered(12),
+            "A bold word and \u{f059f} docs here\n",
+            "away from both"
+        );
+        // a cell, and the borders on both sides of it
+        let table = "| a | b | c |\n|---|---|---|\n";
+        let selection = Selection::point(6);
+        assert_eq!(
+            render("markdown", table, Some((&selection, ConcealReveal::Line))),
+            "│ a | b | c │\n├───┼───┼───┤\n└───┴───┴───┘"
         );
     }
 

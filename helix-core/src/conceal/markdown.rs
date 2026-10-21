@@ -1,6 +1,7 @@
 //! Markdown drawn rendered, after render-markdown.nvim: markup hidden or shown as icons.
 //!
-//! The conceals of Markdown are revealed while a cursor is on their line.
+//! An element of rendered Markdown, like a link, is revealed as a whole while a cursor is on or
+//! next to any part of it.
 
 mod entities;
 
@@ -132,6 +133,9 @@ pub(super) struct Renderer<'a, 't> {
     loader: &'a Loader,
     options: MarkdownRender,
     rendered: &'a mut Rendered<'t>,
+    /// The chars of the element the conceals rendered now are a part of, or `None` for each to
+    /// be an element of its own.
+    element: Option<Range<usize>>,
 }
 
 impl<'a, 't> Renderer<'a, 't> {
@@ -146,17 +150,41 @@ impl<'a, 't> Renderer<'a, 't> {
             loader,
             options,
             rendered,
+            element: None,
         }
+    }
+
+    /// Renders what `render` renders as part of the element of the bytes `bytes`.
+    fn element<R>(&mut self, bytes: Range<usize>, render: impl FnOnce(&mut Self) -> R) -> R {
+        let text = self.text;
+        let element = text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end);
+        let outer = self.element.replace(element);
+        let result = render(self);
+        self.element = outer;
+        result
+    }
+
+    /// When the conceal of the chars `range` is revealed.
+    fn reveal(&self, range: Range<usize>) -> Reveal {
+        Reveal::Element(self.element.clone().unwrap_or(range))
     }
 
     /// Renders `element`, captured as `node` and the nodes after it up to the end of `bytes`.
     pub(super) fn render(&mut self, element: Element, node: Node<'t>, bytes: Range<usize>) {
         let node = &node;
         match element {
-            Element::Hide => self.conceal(bytes, Replacement::Hidden, ConcealStyle::Text),
+            // the delimiters of emphasis or inline code are revealed together
+            Element::Hide => {
+                let parent = node
+                    .parent()
+                    .map_or(bytes.clone(), |parent| bytes_of(&parent));
+                self.element(parent, |this| {
+                    this.conceal(bytes, Replacement::Hidden, ConcealStyle::Text)
+                })
+            }
             Element::Entity => self.entity(bytes),
-            Element::Link => self.link(node),
-            Element::Wikilink => self.wikilink(bytes),
+            Element::Link => self.element(bytes_of(node), |this| this.link(node)),
+            Element::Wikilink => self.element(bytes.clone(), |this| this.wikilink(bytes)),
             Element::Footnote => self.footnote(bytes),
             Element::Rule => {
                 let rule = self.slice(bytes.clone());
@@ -171,7 +199,7 @@ impl<'a, 't> Renderer<'a, 't> {
             Element::QuoteMarker => self.quote_marker(node),
             Element::Callout => self.callout(node),
             Element::CodeFence => self.code_fence(node),
-            Element::LatexCommand => self.latex_command(node),
+            Element::LatexCommand => self.element(bytes_of(node), |this| this.latex_command(node)),
             Element::LatexScripts => self.latex_scripts(node),
             Element::Table => self.rendered.tables.push(node.clone()),
         }
@@ -187,21 +215,17 @@ impl<'a, 't> Renderer<'a, 't> {
         if text.slice(range.clone()).chars().any(char_is_line_ending) {
             return;
         }
+        let reveal = self.reveal(range.clone());
         let conceal = Conceal::new(range.start, range.end, replacement).styled(style);
-        self.rendered.conceals.push(Cached {
-            conceal,
-            reveal: Reveal::Line,
-        });
+        self.rendered.conceals.push(Cached { conceal, reveal });
     }
 
     /// Shows `replacement` before the byte `byte`, concealing nothing.
     fn insert(&mut self, byte: usize, replacement: Replacement, style: ConcealStyle) {
         let char_idx = self.text.byte_to_char(byte);
+        let reveal = self.reveal(char_idx..char_idx);
         let conceal = Conceal::new(char_idx, char_idx, replacement).styled(style);
-        self.rendered.conceals.push(Cached {
-            conceal,
-            reveal: Reveal::Line,
-        });
+        self.rendered.conceals.push(Cached { conceal, reveal });
     }
 
     /// Shows the bytes `bytes` as an `icon`, or hides them if icons are off.
@@ -236,7 +260,8 @@ impl<'a, 't> Renderer<'a, 't> {
 
     fn decorate(&mut self, byte: usize, decoration: ConcealDecoration) {
         let line = self.text.byte_to_line(byte);
-        self.rendered.decorations.push((line, decoration));
+        let element = self.element.clone().unwrap_or(decoration.range.clone());
+        self.rendered.decorations.push((line, decoration, element));
     }
 
     /// Decorates the text of the bytes `bytes` line by line, without the whitespace and quote
@@ -304,8 +329,12 @@ impl<'a, 't> Renderer<'a, 't> {
             let paragraph = task
                 .next_sibling()
                 .filter(|text| text.kind() == "paragraph");
+            // the task's text is revealed with its checkbox, which is revealed on its own
             if let Some(inline) = paragraph.filter(|_| checked).and_then(|text| text.child(0)) {
-                self.decorate_text(bytes_of(&inline), DecorationStyle::Done);
+                let inline = bytes_of(&inline);
+                self.element(bytes.start..inline.end, |this| {
+                    this.decorate_text(inline, DecorationStyle::Done)
+                });
             }
         } else if is_todo {
             self.conceal(
@@ -417,13 +446,16 @@ impl<'a, 't> Renderer<'a, 't> {
                     }
                     _ => Replacement::Hidden,
                 };
-                // the fence and the space before the info string
+                // the fence and the space before the info string, revealed with the rule after
+                // the info
                 let info_start = info.start_byte() as usize;
-                self.conceal(open.start..info_start, icon, ConcealStyle::Scope("label"));
                 let line_end = self.line_end_byte(open.start);
-                let rule = ConcealStyle::Guide;
-                self.insert(line_end, Replacement::from(" "), rule);
-                self.insert(line_end, Replacement::Fill("─"), rule);
+                self.element(open.start..line_end, |this| {
+                    this.conceal(open.start..info_start, icon, ConcealStyle::Scope("label"));
+                    let rule = ConcealStyle::Guide;
+                    this.insert(line_end, Replacement::from(" "), rule);
+                    this.insert(line_end, Replacement::Fill("─"), rule);
+                });
             }
             None => self.conceal(open, Replacement::Fill("─"), ConcealStyle::Guide),
         }
@@ -553,6 +585,11 @@ impl<'a, 't> Renderer<'a, 't> {
         let title = self.slice(kind_end..line_end);
         let icon = self.pick(callout.icon, "");
         let style = ConcealStyle::Scope(callout.scope);
+        // the kind and the title are revealed together
+        let title_end = kind_end + title.trim_end().len();
+        let outer = self
+            .element
+            .replace(self.text.byte_to_char(start)..self.text.byte_to_char(title_end));
         if title.trim().is_empty() {
             let shown = format!("{icon}{}", callout.title);
             self.conceal(start..kind_end, Replacement::from(shown), style);
@@ -567,6 +604,7 @@ impl<'a, 't> Renderer<'a, 't> {
             let title_style = DecorationStyle::Scope(callout.scope);
             self.decorate_text(title_start..line_end, title_style);
         }
+        self.element = outer;
     }
 
     fn entity(&mut self, bytes: Range<usize>) {

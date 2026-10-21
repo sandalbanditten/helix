@@ -68,7 +68,8 @@ Captures a node whose text is not concealed, like a syntax error:
 | `markdown-code-fence` | Fenced code blocks, with their opening fence as their language's icon, info and a rule, and their closing fence as a rule | ` ```rust ` → ` rust ────` |
 
 The `markdown-` tables draw Markdown rendered, as [`[editor.markdown]`](../editor.md#editormarkdown-section)
-says, and their conceals are revealed while the cursor is on their line.
+says, and their conceals are revealed while the cursor is on or next to the element they are a part
+of, like the whole of a link, or the borders on both sides of a table's cell.
 
 The `conceals.scm` files in `runtime/queries` serve as examples.
 

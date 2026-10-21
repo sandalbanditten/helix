@@ -264,10 +264,14 @@ async fn markdown_renders_away_from_cursors() -> anyhow::Result<()> {
                 Some("<esc>"),
                 Some(&|app| assert_shows(app, &["x", "A bold \u{f059f} link"])),
             ),
-            // the cursor's line is shown as it is
+            // an element is shown as it is while the cursor is on or next to it
             (
                 Some("j"),
-                Some(&|app| assert_shows(app, &["x", "A **bold** [link](https://x.org)"])),
+                Some(&|app| assert_shows(app, &["x", "A bold \u{f059f} link"])),
+            ),
+            (
+                Some("ll"),
+                Some(&|app| assert_shows(app, &["x", "A **bold** \u{f059f} link"])),
             ),
         ],
         false,

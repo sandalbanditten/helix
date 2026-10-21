@@ -136,8 +136,11 @@ impl Renderer<'_, '_> {
                 self.conceal(bytes, Replacement::from(border), ConcealStyle::Guide);
                 continue;
             }
-            // everything but the cells' contents is concealed, from one content to the next
-            let mut start = text.byte_to_char(bytes.start);
+            // everything but the cells' contents is concealed, from one content to the next, and
+            // is revealed with the cells on both sides of it
+            let row_start = text.byte_to_char(bytes.start);
+            let mut start = row_start;
+            let mut previous_start = row_start;
             let mut shown = String::from("│ ");
             let mut cells = cells.iter();
             for (column, &width) in widths.iter().enumerate() {
@@ -149,16 +152,19 @@ impl Renderer<'_, '_> {
                         let (before, after) = align(column).padding(width - content_width);
                         shown.extend(iter::repeat_n(' ', before));
                         let replacement = Replacement::from(std::mem::take(&mut shown));
+                        self.element = Some(previous_start..content.end);
                         self.conceal_chars(start..content.start, replacement);
                         shown.extend(iter::repeat_n(' ', after));
-                        start = content.end;
+                        (start, previous_start) = (content.end, content.start);
                     }
                     None => shown.extend(iter::repeat_n(' ', width)),
                 }
             }
             shown.push_str(" │");
             let end = text.byte_to_char(bytes.end);
+            self.element = Some(previous_start..end);
             self.conceal_chars(start..end, Replacement::from(shown));
+            self.element = None;
         }
 
         // the borders above and below, over the blank lines there or on rows of their own
