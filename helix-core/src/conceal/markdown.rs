@@ -13,7 +13,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{Cached, ConcealDecoration, DecorationStyle, Reveal};
 use crate::chars::char_is_line_ending;
+use crate::icons;
 use crate::line_ending::line_end_char_index;
+use crate::syntax::config::FileType;
+use crate::syntax::Loader;
 use crate::text_annotations::{Conceal, ConcealStyle, Replacement};
 use crate::RopeSlice;
 
@@ -51,6 +54,9 @@ pub enum Element {
     QuoteMarker,
     /// A block quote that may be a callout, `> [!NOTE]`, whose kind is shown as an icon and title.
     Callout,
+    /// A fenced code block, whose opening fence is shown as the icon of its language, its info
+    /// and a rule, and whose closing fence is hidden.
+    CodeFence,
 }
 
 impl FromStr for Element {
@@ -68,6 +74,7 @@ impl FromStr for Element {
             "list-marker" => Ok(Self::ListMarker),
             "quote-marker" => Ok(Self::QuoteMarker),
             "callout" => Ok(Self::Callout),
+            "code-fence" => Ok(Self::CodeFence),
             _ => Err(()),
         }
     }
@@ -123,6 +130,7 @@ const LINK_SCOPE: &str = "markup.link.text";
 /// Renders the captured Markdown of a query match into conceals and decorations.
 pub(super) struct Renderer<'a> {
     text: RopeSlice<'a>,
+    loader: &'a Loader,
     options: MarkdownRender,
     conceals: &'a mut Vec<Cached>,
     decorations: &'a mut Vec<(usize, ConcealDecoration)>,
@@ -131,12 +139,14 @@ pub(super) struct Renderer<'a> {
 impl<'a> Renderer<'a> {
     pub(super) fn new(
         text: RopeSlice<'a>,
+        loader: &'a Loader,
         options: MarkdownRender,
         conceals: &'a mut Vec<Cached>,
         decorations: &'a mut Vec<(usize, ConcealDecoration)>,
     ) -> Self {
         Self {
             text,
+            loader,
             options,
             conceals,
             decorations,
@@ -164,6 +174,7 @@ impl<'a> Renderer<'a> {
             Element::ListMarker => self.list_marker(node),
             Element::QuoteMarker => self.quote_marker(node),
             Element::Callout => self.callout(node),
+            Element::CodeFence => self.code_fence(node),
         }
     }
 
@@ -182,6 +193,37 @@ impl<'a> Renderer<'a> {
             conceal,
             reveal: Reveal::Line,
         });
+    }
+
+    /// Shows `replacement` before the byte `byte`, concealing nothing.
+    fn insert(&mut self, byte: usize, replacement: Replacement, style: ConcealStyle) {
+        let char_idx = self.text.byte_to_char(byte);
+        let conceal = Conceal::new(char_idx, char_idx, replacement).styled(style);
+        self.conceals.push(Cached {
+            conceal,
+            reveal: Reveal::Line,
+        });
+    }
+
+    /// Hides the line `byte` is on with its line break, unless it is the last line, which only
+    /// has its text hidden. It is revealed while a cursor is on it or on a line next to it, so it
+    /// can be reached.
+    fn hide_line(&mut self, byte: usize) {
+        let text = self.text;
+        let line = text.byte_to_line(byte);
+        let start = text.line_to_char(line);
+        let end = if line + 1 < text.len_lines() {
+            text.line_to_char(line + 1)
+        } else {
+            text.len_chars()
+        };
+        if start < end {
+            let conceal = Conceal::new(start, end, Replacement::Hidden);
+            self.conceals.push(Cached {
+                conceal,
+                reveal: Reveal::LineOrNeighbour,
+            });
+        }
     }
 
     /// Shows the bytes `bytes` as an `icon`, or hides them if icons are off.
@@ -421,6 +463,66 @@ impl<'a> Renderer<'a> {
         CALLOUTS
             .iter()
             .find(|callout| callout.kind.eq_ignore_ascii_case(kind))
+    }
+
+    /// Shows the opening fence of a code block as the icon of its language, its info string and a
+    /// rule, or as a rule if it has no info string, and hides the closing fence.
+    fn code_fence(&mut self, block: &Node) {
+        let mut children = block.children();
+        let Some(open) = children
+            .next()
+            .filter(|open| open.kind() == "fenced_code_block_delimiter")
+        else {
+            return;
+        };
+        let open = bytes_of(&open);
+        let info = block.children().find(|child| child.kind() == "info_string");
+        match info {
+            Some(info) => {
+                let language = info.children().find(|child| child.kind() == "language");
+                let icon = match language {
+                    Some(language) if self.options.icons => {
+                        let language = self.slice(bytes_of(&language));
+                        Replacement::from(format!("{} ", self.language_icon(&language)))
+                    }
+                    _ => Replacement::Hidden,
+                };
+                // the fence and the space before the info string
+                let info_start = info.start_byte() as usize;
+                self.conceal(open.start..info_start, icon, ConcealStyle::Scope("label"));
+                let line_end = self.line_end_byte(open.start);
+                let rule = ConcealStyle::Guide;
+                self.insert(line_end, Replacement::from(" "), rule);
+                self.insert(line_end, Replacement::Fill("─"), rule);
+            }
+            None => self.conceal(open, Replacement::Fill("─"), ConcealStyle::Guide),
+        }
+        let close = block
+            .children()
+            .skip(1)
+            .filter(|child| child.kind() == "fenced_code_block_delimiter")
+            .last();
+        if let Some(close) = close {
+            self.hide_line(close.start_byte() as usize);
+        }
+    }
+
+    /// The icon of the files of the language a code block is written in, like `rust` or `py`.
+    fn language_icon(&self, name: &str) -> &'static str {
+        let language = self
+            .loader
+            .language_for_match(RopeSlice::from(name))
+            .map(|language| self.loader.language(language).config());
+        let extension = language.and_then(|config| {
+            config
+                .file_types
+                .iter()
+                .find_map(|file_type| match file_type {
+                    FileType::Extension(extension) => Some(extension.as_str()),
+                    FileType::Glob(_) => None,
+                })
+        });
+        icons::file(&format!("code.{}", extension.unwrap_or(name)))
     }
 
     /// Shows the `[!KIND]` of a callout as its icon and title, or as its icon if it has a title

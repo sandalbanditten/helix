@@ -26,3 +26,8 @@
 ; Callouts, `> [!NOTE]`, with their kind as an icon and title
 ((block_quote) @conceal
   (#set! conceal.symbols "markdown-callout"))
+
+; Fenced code blocks, with their opening fence as the icon of their language, their info and a
+; rule, and their closing fence hidden
+((fenced_code_block) @conceal
+  (#set! conceal.symbols "markdown-code-fence"))

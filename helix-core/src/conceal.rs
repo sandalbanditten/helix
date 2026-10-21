@@ -145,7 +145,7 @@ impl ConcealReveal {
         let cursors = match self {
             Self::Adjacent if range.start > line_start() => range.start - 1..=range.end,
             Self::Adjacent => range.start..=range.end,
-            Self::Symbol => range.start..=range.end - 1,
+            Self::Symbol => range.start..=range.end.saturating_sub(1).max(range.start),
             Self::Line => {
                 let line = text.char_to_line(range.start);
                 // the last line has no line break, so its last position is the end of the text
@@ -185,6 +185,9 @@ enum Reveal {
     Configured,
     /// While a cursor is on its line, like rendered Markdown.
     Line,
+    /// While a cursor is on its line or on a line next to it, like a hidden line, which the
+    /// cursor could not reach otherwise.
+    LineOrNeighbour,
 }
 
 /// A conceal and when it is revealed.
@@ -344,8 +347,13 @@ impl<'a> SyntaxConceals<'a> {
             };
             if let SymbolTable::Markdown(element) = table {
                 if let Some(options) = self.options.markdown {
-                    let mut renderer =
-                        markdown::Renderer::new(text, options, &mut conceals, &mut decorations);
+                    let mut renderer = markdown::Renderer::new(
+                        text,
+                        &self.loader,
+                        options,
+                        &mut conceals,
+                        &mut decorations,
+                    );
                     renderer.render(element, &mat.node, bytes);
                 }
                 continue;
@@ -386,7 +394,16 @@ impl<'a> SyntaxConceals<'a> {
         };
         conceals.retain(|cached| !in_noconceal(&cached.conceal));
 
-        conceals.sort_unstable_by_key(|cached| (cached.conceal.start, Reverse(cached.conceal.end)));
+        // outermost first, and conceals of no text before those of text at the same char, in the
+        // order they were rendered in
+        conceals.sort_by_key(|cached| {
+            let conceal = &cached.conceal;
+            (
+                conceal.start,
+                conceal.end > conceal.start,
+                Reverse(conceal.end),
+            )
+        });
         let mut outermost: Vec<Cached> = Vec::with_capacity(conceals.len());
         for cached in conceals {
             if outermost
@@ -441,6 +458,14 @@ impl<'a> SyntaxConceals<'a> {
         match cached.reveal {
             Reveal::Configured => configured.reveals(text, selection, range),
             Reveal::Line => ConcealReveal::Line.reveals(text, selection, range),
+            Reveal::LineOrNeighbour => {
+                let line = text.char_to_line(range.start);
+                let lines = line.saturating_sub(1)..=line + 1;
+                selection
+                    .ranges()
+                    .iter()
+                    .any(|sel| lines.contains(&text.char_to_line(sel.cursor(text))))
+            }
         }
     }
 }
@@ -692,6 +717,45 @@ mod test {
         )
         .unwrap();
         assert_eq!(conceals.decorations(1..2), []);
+    }
+
+    #[test]
+    fn markdown_code_fences() {
+        let rust = crate::icons::file("main.rs");
+        assert_eq!(
+            markdown("```rust\nfn f() {}\n```\nText\n"),
+            format!("{rust} rust ─…\nfn f() {{}}\nText\n")
+        );
+        // the language's icon, by its name or its files, and the info after it
+        let python = crate::icons::file("main.py");
+        assert_eq!(
+            markdown("``` py {file=\"x.py\"}\nx\n```\n"),
+            format!("{python} py {{file=\"x.py\"}} ─…\nx\n")
+        );
+        let unknown = crate::icons::file("x.unknown-language");
+        assert_eq!(
+            markdown("~~~nope\nx\n~~~\n"),
+            format!("{unknown} nope ─…\nx\n")
+        );
+        // a fence without info is a rule, and one never closed keeps going
+        assert_eq!(markdown("```\nplain\n```\n"), "─…\nplain\n");
+        assert_eq!(markdown("```\nplain\n"), "─…\nplain\n");
+        // the grammar reads a fence without a line break at the end of the text as code
+        assert_eq!(markdown("```\nplain\n```"), "─…\nplain\n```");
+    }
+
+    #[test]
+    fn markdown_hidden_fences_are_revealed_next_to_cursors() {
+        let source = "```\nplain\n```\nText\n\nmore\n";
+        for (cursor, closing) in [(4, true), (10, true), (14, true), (20, false)] {
+            let selection = Selection::point(cursor);
+            let rendered = render("markdown", source, Some((&selection, ConcealReveal::Line)));
+            assert_eq!(
+                rendered.contains("```\nText"),
+                closing,
+                "{cursor}: {rendered}"
+            );
+        }
     }
 
     #[test]

@@ -578,6 +578,31 @@ fn hidden_conceals() {
 }
 
 #[test]
+fn conceals_of_no_text() {
+    // shown before their char like virtual text, in their order
+    let text = "ab\n";
+    let conceals = [
+        Conceal::new(1, 1, "X"),
+        Conceal::new(1, 1, Replacement::Fill("─")),
+    ];
+    assert_eq!(
+        concealed_text(text, false, &conceals, 0),
+        format!("aX{}b \n ", "─".repeat(14))
+    );
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .map(|g| (g.char_idx, g.visual_pos.col, g.is_virtual()))
+            .collect();
+    assert_eq!(
+        graphemes[..4],
+        [(0, 0, false), (1, 1, true), (1, 2, true), (1, 16, false)]
+    );
+}
+
+#[test]
 fn hidden_lines() {
     // a hidden line has no row, and the row after it belongs to the next line
     let text = "a\n```\nb\n";

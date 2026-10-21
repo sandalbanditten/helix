@@ -5,7 +5,7 @@ pub(crate) mod browser;
 pub(crate) mod edit;
 pub(crate) mod fs;
 pub(crate) mod git;
-pub(crate) mod icons;
+pub(crate) use helix_core::icons;
 mod keys;
 pub(crate) mod ls_colors;
 mod mouse;

@@ -58,9 +58,13 @@ pub enum GraphemeSource {
 }
 
 impl GraphemeSource {
-    /// Returns whether this grapheme is virtual inline text
+    /// Returns whether this grapheme is virtual inline text, which includes the replacement of a
+    /// conceal of no text
     pub fn is_virtual(self) -> bool {
-        matches!(self, GraphemeSource::VirtualText { .. })
+        matches!(
+            self,
+            GraphemeSource::VirtualText { .. } | GraphemeSource::Conceal { codepoints: 0, .. }
+        )
     }
 
     /// Returns whether this grapheme is the placeholder of a closed fold
@@ -347,12 +351,16 @@ impl<'t> DocumentFormatter<'t> {
                     GraphemeSource::Fold { codepoints },
                 )
             } else if let Some(conceal) = self.annotations.conceal_at(char_pos, len_chars) {
-                self.graphemes = self.text.slice(conceal.end..).graphemes();
-                self.annotations.skip_hidden(conceal.end);
+                // a conceal of no text hides nothing to skip
+                if conceal.end > conceal.start {
+                    self.graphemes = self.text.slice(conceal.end..).graphemes();
+                    self.annotations.skip_hidden(conceal.end);
+                }
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
                 let fill = matches!(conceal.replacement, Replacement::Fill(_));
                 let hides_line = conceal.replacement == Replacement::Hidden
+                    && conceal.end > conceal.start
                     && char_is_line_ending(self.text.char(conceal.end - 1));
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,

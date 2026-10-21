@@ -59,6 +59,11 @@ Captures a node whose text is not concealed, like a syntax error:
 | `markdown-wikilink` | Obsidian-style wikilinks, as an icon and their alias or note | `[[Note\|alias]]` → `󱗖 alias` |
 | `markdown-footnote` | Numeric footnote references, in superscript | `[^12]` → `¹²` |
 | `markdown-rule` | Thematic breaks, as a rule filling the row | `---` → `────` |
+| `markdown-heading` | ATX headings, with their `#`s as an icon of their level | `## Title` → ` 󰲣 Title` |
+| `markdown-list-marker` | List markers: bullets, numbers counted along the list and task checkboxes | `- [x] done` → `󰱒  done` |
+| `markdown-quote-marker` | The `>`s of quote markers and continuations, as bars | `> quote` → `▎ quote` |
+| `markdown-callout` | Block quotes starting with `[!KIND]`, with their kind as an icon and title | `> [!NOTE]` → `▎ 󰋽 Note` |
+| `markdown-code-fence` | Fenced code blocks, with their opening fence as their language's icon, info and a rule, and their closing fence hidden | ` ```rust ` → ` rust ────` |
 
 The `markdown-` tables draw Markdown rendered, as [`[editor.markdown]`](../editor.md#editormarkdown-section)
 says, and their conceals are revealed while the cursor is on their line.
