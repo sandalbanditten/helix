@@ -45,7 +45,7 @@ pub enum Element {
     Footnote,
     /// A thematic break, `---`, shown as a rule across the row.
     Rule,
-    /// An ATX heading, `## Title`, with its `#`s shown as an icon of its level in their place.
+    /// An ATX heading, `## Title`, with its `#`s shown as one in its level's color.
     Heading,
     /// The marker of a list item: a bullet, a number counted along the list, or a task's
     /// checkbox as an icon.
@@ -55,7 +55,7 @@ pub enum Element {
     /// A block quote that may be a callout, `> [!NOTE]`, whose kind is shown as an icon and title.
     Callout,
     /// A fenced code block, whose opening fence is shown as the icon of its language, its info
-    /// and a rule, and whose closing fence is hidden.
+    /// and a rule, and whose closing fence as a rule.
     CodeFence,
     /// A command of LaTeX math in Markdown shown as the symbol it stands for, like `\alpha` as
     /// `α`, with the script after it, like `\sum_{i=1}` as `∑ᵢ₌₁`.
@@ -102,14 +102,6 @@ mod icon {
     pub const IMAGE: &str = "\u{f0976} ";
     pub const EMAIL: &str = "\u{f0013} ";
     pub const WIKILINK: &str = "\u{f15d6} ";
-    pub const HEADINGS: [&str; 6] = [
-        "\u{f0ca1} ",
-        "\u{f0ca3} ",
-        "\u{f0ca5} ",
-        "\u{f0ca7} ",
-        "\u{f0ca9} ",
-        "\u{f0cab} ",
-    ];
     pub const UNCHECKED: &str = "\u{f0131} ";
     pub const CHECKED: &str = "\u{f0c52} ";
     pub const TODO: &str = "\u{f0954} ";
@@ -117,7 +109,6 @@ mod icon {
 
 /// Icons in plain Unicode, for fonts without Nerd Font glyphs.
 mod plain {
-    pub const HEADINGS: [&str; 6] = ["❶ ", "❷ ", "❸ ", "❹ ", "❺ ", "❻ "];
     pub const UNCHECKED: &str = "☐ ";
     pub const CHECKED: &str = "☑ ";
     pub const TODO: &str = "◐ ";
@@ -222,27 +213,6 @@ impl<'a> Renderer<'a> {
         });
     }
 
-    /// Hides the line `byte` is on with its line break, unless it is the last line, which only
-    /// has its text hidden. It is revealed while a cursor is on it or on a line next to it, so it
-    /// can be reached.
-    fn hide_line(&mut self, byte: usize) {
-        let text = self.text;
-        let line = text.byte_to_line(byte);
-        let start = text.line_to_char(line);
-        let end = if line + 1 < text.len_lines() {
-            text.line_to_char(line + 1)
-        } else {
-            text.len_chars()
-        };
-        if start < end {
-            let conceal = Conceal::new(start, end, Replacement::Hidden);
-            self.conceals.push(Cached {
-                conceal,
-                reveal: Reveal::LineOrNeighbour,
-            });
-        }
-    }
-
     /// Shows the bytes `bytes` as an `icon`, or hides them if icons are off.
     fn icon(&mut self, bytes: Range<usize>, icon: &'static str, scope: &'static str) {
         let replacement = if self.options.icons {
@@ -301,8 +271,8 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// Shows the `#`s of an ATX heading as the icon of its level, right-aligned in their place,
-    /// and hides its closing `#`s.
+    /// Shows the `#`s of an ATX heading as one, in its level's color, and hides its closing
+    /// `#`s.
     fn heading(&mut self, heading: &Node) {
         let Some(marker) = heading.child(0) else {
             return;
@@ -316,26 +286,14 @@ impl<'a> Renderer<'a> {
         else {
             return;
         };
-        let index = usize::from(level - 1);
         let marker = bytes_of(&marker);
         let line_end = self.line_end_byte(marker.start);
-        // the `#`s and the space after them
         let after = self.slice(marker.end..line_end);
-        let covered = if after.starts_with([' ', '\t']) {
-            marker.start..marker.end + 1
-        } else {
-            marker.clone()
-        };
-        let width = covered.len();
-        let icon = self.pick(icon::HEADINGS[index], plain::HEADINGS[index]);
-        let icon = if width < icon.width() {
-            icon.trim_end()
-        } else {
-            icon
-        };
-        let shown = format!("{}{icon}", " ".repeat(width.saturating_sub(icon.width())));
-        let scope = ConcealStyle::Scope(HEADING_SCOPES[index]);
-        self.conceal(covered.clone(), Replacement::from(shown), scope);
+        // the `#`s of every level are one, in the level's color
+        let written = self.slice(marker.clone());
+        let hashes = marker.start..marker.start + written.trim_end().len();
+        let scope = ConcealStyle::Scope(HEADING_SCOPES[usize::from(level - 1)]);
+        self.conceal(hashes.clone(), Replacement::from("#"), scope);
 
         // a closing sequence after a space, like the `##` of `## Title ##`
         let content = after.trim_end();
@@ -346,7 +304,7 @@ impl<'a> Renderer<'a> {
             let start = marker.end + without_closing.trim_end().len();
             let end = marker.end + content.len();
             self.conceal(
-                start.max(covered.end)..end,
+                start.max(hashes.end + 1)..end,
                 Replacement::Hidden,
                 ConcealStyle::Text,
             );
@@ -483,7 +441,7 @@ impl<'a> Renderer<'a> {
     }
 
     /// Shows the opening fence of a code block as the icon of its language, its info string and a
-    /// rule, or as a rule if it has no info string, and hides the closing fence.
+    /// rule, or as a rule if it has no info string, and the closing fence as a rule.
     fn code_fence(&mut self, block: &Node) {
         let mut children = block.children();
         let Some(open) = children
@@ -520,7 +478,8 @@ impl<'a> Renderer<'a> {
             .filter(|child| child.kind() == "fenced_code_block_delimiter")
             .last();
         if let Some(close) = close {
-            self.hide_line(close.start_byte() as usize);
+            let close = bytes_of(&close);
+            self.conceal(close, Replacement::Fill("─"), ConcealStyle::Guide);
         }
     }
 

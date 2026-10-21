@@ -81,9 +81,8 @@ impl Overlay {
     }
 }
 
-/// Document text within one line shown as something else, like `α` for `alpha`. A hidden conceal
-/// may also cover a whole line with its line break, which hides the line's row, and a conceal of
-/// no text shows its replacement before `start`, like virtual text.
+/// Document text within one line shown as something else, like `α` for `alpha`. A conceal of no
+/// text shows its replacement before `start`, like virtual text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conceal {
     /// The char index of the first concealed char.
@@ -127,8 +126,7 @@ pub enum Replacement {
     /// A grapheme repeated up to the end of the row, like a horizontal rule. The row's last
     /// column stays free, so it never wraps.
     Fill(&'static str),
-    /// Nothing, like the `**` around bold Markdown text. A conceal from the start of a line to
-    /// the start of the next one hides the line's row too.
+    /// Nothing, like the `**` around bold Markdown text.
     Hidden,
 }
 

@@ -21,7 +21,6 @@ use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 
 use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 
-use crate::chars::char_is_line_ending;
 use crate::graphemes::{grapheme_width, Grapheme, GraphemeStr};
 use crate::syntax::Highlight;
 use crate::text_annotations::{ConcealStyle, Replacement, TextAnnotations};
@@ -50,11 +49,6 @@ pub enum GraphemeSource {
         fill: bool,
         style: ConcealStyle,
     },
-    /// A hidden line: its text and line break, concealed as nothing. The row it is on belongs to
-    /// the line after it.
-    HiddenLine {
-        codepoints: u32,
-    },
 }
 
 impl GraphemeSource {
@@ -77,15 +71,8 @@ impl GraphemeSource {
     pub fn is_placeholder(self) -> bool {
         matches!(
             self,
-            GraphemeSource::Fold { .. }
-                | GraphemeSource::Conceal { .. }
-                | GraphemeSource::HiddenLine { .. }
+            GraphemeSource::Fold { .. } | GraphemeSource::Conceal { .. }
         )
-    }
-
-    /// Returns whether this grapheme is a hidden line, see [`GraphemeSource::HiddenLine`]
-    pub fn is_hidden_line(self) -> bool {
-        matches!(self, GraphemeSource::HiddenLine { .. })
     }
 
     pub fn is_eof(self) -> bool {
@@ -97,8 +84,7 @@ impl GraphemeSource {
         match self {
             GraphemeSource::Document { codepoints }
             | GraphemeSource::Fold { codepoints }
-            | GraphemeSource::Conceal { codepoints, .. }
-            | GraphemeSource::HiddenLine { codepoints } => codepoints as usize,
+            | GraphemeSource::Conceal { codepoints, .. } => codepoints as usize,
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
@@ -117,8 +103,7 @@ impl GraphemeSource {
     }
 
     fn is_whitespace(self, grapheme: &Grapheme) -> bool {
-        // a hidden line leaves the indentation to the line after it
-        self.is_hidden_line() || !self.is_fold() && grapheme.is_whitespace()
+        !self.is_fold() && grapheme.is_whitespace()
     }
 
     fn is_word_boundary(self, grapheme: &Grapheme) -> bool {
@@ -359,9 +344,6 @@ impl<'t> DocumentFormatter<'t> {
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
                 let fill = matches!(conceal.replacement, Replacement::Fill(_));
-                let hides_line = conceal.replacement == Replacement::Hidden
-                    && conceal.end > conceal.start
-                    && char_is_line_ending(self.text.char(conceal.end - 1));
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,
                     Replacement::Fill(g) => {
@@ -371,19 +353,10 @@ impl<'t> DocumentFormatter<'t> {
                     }
                     Replacement::Hidden => Cow::Borrowed(""),
                 };
-                let source = if hides_line {
-                    debug_assert_eq!(
-                        conceal.start,
-                        self.text
-                            .line_to_char(self.text.char_to_line(conceal.start))
-                    );
-                    GraphemeSource::HiddenLine { codepoints }
-                } else {
-                    GraphemeSource::Conceal {
-                        codepoints,
-                        fill,
-                        style: conceal.style,
-                    }
+                let source = GraphemeSource::Conceal {
+                    codepoints,
+                    fill,
+                    style: conceal.style,
                 };
                 (replacement.into(), source)
             } else if let Some(grapheme) = self.graphemes.next() {
@@ -618,9 +591,6 @@ impl<'t> Iterator for DocumentFormatter<'t> {
         if grapheme.source.is_fold() {
             // the row continues on the fold's last line
             self.line_pos = self.text.char_to_line(self.char_pos);
-        } else if grapheme.source.is_hidden_line() {
-            // the row belongs to the line after the hidden one
-            self.line_pos += 1;
         }
         if !grapheme.is_virtual() {
             self.annotations.process_virtual_text_anchors(&grapheme);

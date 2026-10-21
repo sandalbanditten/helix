@@ -59,13 +59,13 @@ Captures a node whose text is not concealed, like a syntax error:
 | `markdown-wikilink` | Obsidian-style wikilinks, as an icon and their alias or note | `[[Note\|alias]]` → `󱗖 alias` |
 | `markdown-footnote` | Numeric footnote references, in superscript | `[^12]` → `¹²` |
 | `markdown-rule` | Thematic breaks, as a rule filling the row | `---` → `────` |
-| `markdown-heading` | ATX headings, with their `#`s as an icon of their level | `## Title` → ` 󰲣 Title` |
+| `markdown-heading` | ATX headings, with their `#`s as one, in the color of their level | `## Title` → `# Title` |
 | `markdown-list-marker` | List markers: bullets, numbers counted along the list and task checkboxes | `- [x] done` → `󰱒  done` |
 | `markdown-quote-marker` | The `>`s of quote markers and continuations, as bars | `> quote` → `▎ quote` |
 | `markdown-callout` | Block quotes starting with `[!KIND]`, with their kind as an icon and title | `> [!NOTE]` → `▎ 󰋽 Note` |
 | `markdown-latex-command` | LaTeX math commands in Markdown, as their symbols, with the script after them | `\alpha` → `α`, `\mathbb{R}` → `ℝ`, `\sum_{i=1}` → `∑ᵢ₌₁` |
 | `markdown-latex-scripts` | The superscripts and subscripts of a word of LaTeX math in Markdown | `x^2` → `x²`, `a_1` → `a₁` |
-| `markdown-code-fence` | Fenced code blocks, with their opening fence as their language's icon, info and a rule, and their closing fence hidden | ` ```rust ` → ` rust ────` |
+| `markdown-code-fence` | Fenced code blocks, with their opening fence as their language's icon, info and a rule, and their closing fence as a rule | ` ```rust ` → ` rust ────` |
 
 The `markdown-` tables draw Markdown rendered, as [`[editor.markdown]`](../editor.md#editormarkdown-section)
 says, and their conceals are revealed while the cursor is on their line.

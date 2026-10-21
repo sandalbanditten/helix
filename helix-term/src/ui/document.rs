@@ -118,10 +118,6 @@ pub fn render_text<'a>(
         let Some(mut grapheme) = formatter.next() else {
             break;
         };
-        // a hidden line draws nothing, and its row belongs to the line after it
-        if grapheme.source.is_hidden_line() {
-            continue;
-        }
         let is_row_start = starts_row;
         if is_row_start {
             row_line = grapheme.line_idx;
@@ -208,7 +204,6 @@ pub fn render_text<'a>(
                 },
                 overlay_style: overlay_highlighter.style,
             },
-            GraphemeSource::HiddenLine { .. } => unreachable!("hidden lines are skipped"),
             GraphemeSource::Document { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter
                     .style

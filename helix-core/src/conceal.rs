@@ -186,9 +186,6 @@ enum Reveal {
     Configured,
     /// While a cursor is on its line, like rendered Markdown.
     Line,
-    /// While a cursor is on its line or on a line next to it, like a hidden line, which the
-    /// cursor could not reach otherwise.
-    LineOrNeighbour,
 }
 
 /// A conceal and when it is revealed.
@@ -461,14 +458,6 @@ impl<'a> SyntaxConceals<'a> {
         match cached.reveal {
             Reveal::Configured => configured.reveals(text, selection, range),
             Reveal::Line => ConcealReveal::Line.reveals(text, selection, range),
-            Reveal::LineOrNeighbour => {
-                let line = text.char_to_line(range.start);
-                let lines = line.saturating_sub(1)..=line + 1;
-                selection
-                    .ranges()
-                    .iter()
-                    .any(|sel| lines.contains(&text.char_to_line(sel.cursor(text))))
-            }
         }
     }
 }
@@ -646,13 +635,13 @@ mod test {
 
     #[test]
     fn markdown_headings() {
-        // icons right-aligned over the `#`s, closing sequences hidden
+        // one `#` for every level, and closing sequences hidden
         assert_eq!(
             markdown("# H1\n### H3\n###### Six\n## Closed ##\n#\n"),
-            "\u{f0ca1} H1\n  \u{f0ca5} H3\n     \u{f0cab} Six\n \u{f0ca3} Closed\n\u{f0ca1}\n"
+            "# H1\n# H3\n# Six\n# Closed\n#\n"
         );
         // a `#` in the text stays
-        assert_eq!(markdown("# C# rocks\n"), "\u{f0ca1} C# rocks\n");
+        assert_eq!(markdown("## C# rocks\n"), "# C# rocks\n");
     }
 
     #[test]
@@ -727,38 +716,24 @@ mod test {
         let rust = crate::icons::file("main.rs");
         assert_eq!(
             markdown("```rust\nfn f() {}\n```\nText\n"),
-            format!("{rust} rust ─…\nfn f() {{}}\nText\n")
+            format!("{rust} rust ─…\nfn f() {{}}\n─…\nText\n")
         );
         // the language's icon, by its name or its files, and the info after it
         let python = crate::icons::file("main.py");
         assert_eq!(
             markdown("``` py {file=\"x.py\"}\nx\n```\n"),
-            format!("{python} py {{file=\"x.py\"}} ─…\nx\n")
+            format!("{python} py {{file=\"x.py\"}} ─…\nx\n─…\n")
         );
         let unknown = crate::icons::file("x.unknown-language");
         assert_eq!(
             markdown("~~~nope\nx\n~~~\n"),
-            format!("{unknown} nope ─…\nx\n")
+            format!("{unknown} nope ─…\nx\n─…\n")
         );
         // a fence without info is a rule, and one never closed keeps going
-        assert_eq!(markdown("```\nplain\n```\n"), "─…\nplain\n");
+        assert_eq!(markdown("```\nplain\n```\n"), "─…\nplain\n─…\n");
         assert_eq!(markdown("```\nplain\n"), "─…\nplain\n");
         // the grammar reads a fence without a line break at the end of the text as code
         assert_eq!(markdown("```\nplain\n```"), "─…\nplain\n```");
-    }
-
-    #[test]
-    fn markdown_hidden_fences_are_revealed_next_to_cursors() {
-        let source = "```\nplain\n```\nText\n\nmore\n";
-        for (cursor, closing) in [(4, true), (10, true), (14, true), (20, false)] {
-            let selection = Selection::point(cursor);
-            let rendered = render("markdown", source, Some((&selection, ConcealReveal::Line)));
-            assert_eq!(
-                rendered.contains("```\nText"),
-                closing,
-                "{cursor}: {rendered}"
-            );
-        }
     }
 
     #[test]
