@@ -53,6 +53,7 @@ Captures a node whose text is not concealed, like a syntax error:
 | `typst-shorthand` | Typst's shorthands | `->` → `→`, `--` → `–` |
 | `typst-wikilink` | Obsidian-style wikilinks, without their brackets and escapes | `[[Note\#Heading]]` → `Note#Heading` |
 | `typst-rule` | Lines across the page, as a rule filling the row | `#line(length: 100%)` → `────` |
+| `markdown-table` | Markdown's pipe tables, with aligned columns and borders, from a captured `pipe_table` | `\| a \| bb \|` → `│ a  │ bb │` |
 
 The `conceals.scm` files in `runtime/queries` serve as examples.
 

@@ -665,7 +665,8 @@ Typst's `$2 alpha^2$` is shown as `$2 α^2$`.
 | `enable` | Whether text is concealed | `true` |
 | `reveal` | When the cursor shows concealed text as it is: `adjacent` while it is on or next to the text, `symbol` while it is on the text, `line` while it is on the text's line | `adjacent` |
 
-Concealed text is highlighted with the `ui.virtual.conceal` theme scope.
+Concealed text is highlighted with the `ui.virtual.conceal` theme scope. The borders of Markdown
+tables are drawn like the indent guides, and a cursor on a table's row shows the whole row as it is.
 
 Example:
 
