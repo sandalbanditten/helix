@@ -5,6 +5,7 @@
 //! it. [`SyntaxConceals`] hands the conceals of a syntax tree to the document formatter, except
 //! the ones the cursors reveal.
 
+mod latex;
 mod markdown;
 mod typst;
 
@@ -70,9 +71,9 @@ impl SymbolTable {
         }
     }
 
-    /// Whether the table renders Markdown.
+    /// Whether the table renders Markdown itself, rather than a language injected into it.
     pub(crate) fn renders_markdown(self) -> bool {
-        matches!(self, Self::Markdown(_))
+        matches!(self, Self::Markdown(element) if !element.is_injected())
     }
 
     /// The longest text, in bytes, that is looked up in the table.
@@ -346,7 +347,9 @@ impl<'a> SyntaxConceals<'a> {
                 continue;
             };
             if let SymbolTable::Markdown(element) = table {
-                if let Some(options) = self.options.markdown {
+                // what is injected into Markdown, like LaTeX math, only renders there
+                let rendered = !element.is_injected() || mat.in_markdown;
+                if let Some(options) = self.options.markdown.filter(|_| rendered) {
                     let mut renderer = markdown::Renderer::new(
                         text,
                         &self.loader,
@@ -756,6 +759,21 @@ mod test {
                 "{cursor}: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn markdown_latex() {
+        assert_eq!(
+            markdown("Let $x \\in \\mathbb{R}, \\alpha^2 \\to \\infty$ and $a_1 \\le x^{10}$.\n"),
+            "Let $x ∈ ℝ, α² → ∞$ and $a₁ ≤ x¹⁰$.\n"
+        );
+        assert_eq!(
+            markdown("$$\n\\sum_{i=1}^n \\frac{1}{i^{2}} \\implies x^y\n$$\n"),
+            "$$\n∑ᵢ₌₁ⁿ \\frac{1}{i²} ⟹   x^y\n$$\n"
+        );
+        // LaTeX documents are no Markdown
+        let source = "$\\alpha^2$\n";
+        assert_eq!(render("latex", source, None), source);
     }
 
     #[test]

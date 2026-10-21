@@ -63,6 +63,8 @@ Captures a node whose text is not concealed, like a syntax error:
 | `markdown-list-marker` | List markers: bullets, numbers counted along the list and task checkboxes | `- [x] done` → `󰱒  done` |
 | `markdown-quote-marker` | The `>`s of quote markers and continuations, as bars | `> quote` → `▎ quote` |
 | `markdown-callout` | Block quotes starting with `[!KIND]`, with their kind as an icon and title | `> [!NOTE]` → `▎ 󰋽 Note` |
+| `markdown-latex-command` | LaTeX math commands in Markdown, as their symbols, with the script after them | `\alpha` → `α`, `\mathbb{R}` → `ℝ`, `\sum_{i=1}` → `∑ᵢ₌₁` |
+| `markdown-latex-scripts` | The superscripts and subscripts of a word of LaTeX math in Markdown | `x^2` → `x²`, `a_1` → `a₁` |
 | `markdown-code-fence` | Fenced code blocks, with their opening fence as their language's icon, info and a rule, and their closing fence hidden | ` ```rust ` → ` rust ────` |
 
 The `markdown-` tables draw Markdown rendered, as [`[editor.markdown]`](../editor.md#editormarkdown-section)

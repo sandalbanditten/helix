@@ -11,7 +11,7 @@ use std::str::FromStr;
 use tree_house::tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
-use super::{Cached, ConcealDecoration, DecorationStyle, Reveal};
+use super::{latex, widened, Cached, ConcealDecoration, DecorationStyle, Reveal};
 use crate::chars::char_is_line_ending;
 use crate::icons;
 use crate::line_ending::line_end_char_index;
@@ -57,6 +57,19 @@ pub enum Element {
     /// A fenced code block, whose opening fence is shown as the icon of its language, its info
     /// and a rule, and whose closing fence is hidden.
     CodeFence,
+    /// A command of LaTeX math in Markdown shown as the symbol it stands for, like `\alpha` as
+    /// `α`, with the script after it, like `\sum_{i=1}` as `∑ᵢ₌₁`.
+    LatexCommand,
+    /// The scripts in a word of LaTeX math in Markdown shown as superscripts and subscripts, like
+    /// `x^2` as `x²`.
+    LatexScripts,
+}
+
+impl Element {
+    /// Whether the element is in a language injected into Markdown, which renders only there.
+    pub(super) fn is_injected(self) -> bool {
+        matches!(self, Self::LatexCommand | Self::LatexScripts)
+    }
 }
 
 impl FromStr for Element {
@@ -75,6 +88,8 @@ impl FromStr for Element {
             "quote-marker" => Ok(Self::QuoteMarker),
             "callout" => Ok(Self::Callout),
             "code-fence" => Ok(Self::CodeFence),
+            "latex-command" => Ok(Self::LatexCommand),
+            "latex-scripts" => Ok(Self::LatexScripts),
             _ => Err(()),
         }
     }
@@ -175,6 +190,8 @@ impl<'a> Renderer<'a> {
             Element::QuoteMarker => self.quote_marker(node),
             Element::Callout => self.callout(node),
             Element::CodeFence => self.code_fence(node),
+            Element::LatexCommand => self.latex_command(node),
+            Element::LatexScripts => self.latex_scripts(node),
         }
     }
 
@@ -525,6 +542,88 @@ impl<'a> Renderer<'a> {
         icons::file(&format!("code.{}", extension.unwrap_or(name)))
     }
 
+    /// Shows a LaTeX command as the symbol it stands for, and the script it ends with, like the
+    /// `_` of `\sum_{i=1}`, as a subscript.
+    fn latex_command(&mut self, command: &Node) {
+        let Some(name) = command
+            .child(0)
+            .filter(|name| name.kind() == "command_name")
+        else {
+            return;
+        };
+        let name_bytes = bytes_of(&name);
+        let written = self.slice(name_bytes.clone());
+        let base = written.trim_end_matches(['_', '^']);
+        let group = name
+            .next_sibling()
+            .filter(|group| group.kind() == "curly_group");
+        // a letter in an alphabet, like `\mathbb{R}`, as a whole
+        if base.len() == written.len() && latex::ALPHABETS.contains(&base) {
+            if let Some(group) = group {
+                let letter = self.slice(bytes_of(&group));
+                if let Some(symbol) = latex::symbol(&format!("{base}{letter}")) {
+                    let bytes = name_bytes.start..group.end_byte() as usize;
+                    self.conceal(bytes, Replacement::from(symbol), ConcealStyle::Text);
+                }
+            }
+            return;
+        }
+        if let Some(symbol) = latex::symbol(base) {
+            let bytes = name_bytes.start..name_bytes.start + base.len();
+            self.conceal(bytes, widened(symbol), ConcealStyle::Text);
+        }
+        // the grammar keeps the `_` or `^` after a command in its name
+        if let (Some(mark), Some(group)) = (written[base.len()..].chars().next(), group) {
+            let group_bytes = bytes_of(&group);
+            let script = self.slice(group_bytes.start + 1..group_bytes.end - 1);
+            if let Some(script) = latex::script(mark, &script) {
+                let bytes = name_bytes.start + base.len()..group_bytes.end;
+                self.conceal(bytes, Replacement::from(script), ConcealStyle::Text);
+            }
+        }
+    }
+
+    /// Shows the scripts of a word of LaTeX math, like `x^2` or `a_{ij}`, as superscripts and
+    /// subscripts, if Unicode has all their characters.
+    fn latex_scripts(&mut self, word: &Node) {
+        let bytes = bytes_of(word);
+        let written = self.slice(bytes.clone());
+        let marks: Vec<_> = written.match_indices(['^', '_']).map(|(i, _)| i).collect();
+        for i in marks {
+            let mark = written[i..].chars().next().unwrap_or('^');
+            let start = bytes.start + i;
+            match written[i + 1..].chars().next() {
+                // one character, like `x^2`
+                Some(c) if c != '^' && c != '_' => {
+                    if let Some(script) = latex::script(mark, &c.to_string()) {
+                        let end = start + 1 + c.len_utf8();
+                        self.conceal(start..end, Replacement::from(script), ConcealStyle::Text);
+                    }
+                }
+                // a group the grammar puts after the word, like `x^{10}`
+                None => {
+                    let group = word
+                        .next_sibling()
+                        .or_else(|| word.parent().and_then(|text| text.next_sibling()))
+                        .filter(|group| group.kind() == "curly_group");
+                    let Some(group) = group else {
+                        continue;
+                    };
+                    let group_bytes = bytes_of(&group);
+                    if group_bytes.start != bytes.end {
+                        continue;
+                    }
+                    let script = self.slice(group_bytes.start + 1..group_bytes.end - 1);
+                    if let Some(script) = latex::script(mark, &script) {
+                        let bytes = start..group_bytes.end;
+                        self.conceal(bytes, Replacement::from(script), ConcealStyle::Text);
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
     /// Shows the `[!KIND]` of a callout as its icon and title, or as its icon if it has a title
     /// of its own, which is drawn in the callout's color.
     fn callout(&mut self, quote: &Node) {
@@ -650,7 +749,9 @@ impl<'a> Renderer<'a> {
         else {
             return;
         };
-        let superscript: String = number.chars().map(superscript_digit).collect();
+        let Some(superscript) = latex::script('^', number) else {
+            return;
+        };
         self.conceal(
             bytes,
             Replacement::from(superscript),
@@ -756,21 +857,6 @@ fn character_reference(reference: &str) -> Option<Cow<'static, str>> {
             .chars()
             .any(|c| c.is_control() || char_is_line_ending(c));
     shows.then_some(shown)
-}
-
-fn superscript_digit(digit: char) -> char {
-    match digit {
-        '0' => '⁰',
-        '1' => '¹',
-        '2' => '²',
-        '3' => '³',
-        '4' => '⁴',
-        '5' => '⁵',
-        '6' => '⁶',
-        '7' => '⁷',
-        '8' => '⁸',
-        _ => '⁹',
-    }
 }
 
 #[cfg(test)]
