@@ -48,8 +48,6 @@ pub enum Element {
     Footnote,
     /// A thematic break, `---`, shown as a rule across the row.
     Rule,
-    /// An ATX heading, `## Title`, with its `#`s shown as one in its level's color.
-    Heading,
     /// The marker of a list item: a bullet, a number counted along the list, or a task's
     /// checkbox as an icon.
     ListMarker,
@@ -88,7 +86,6 @@ impl FromStr for Element {
             "wikilink" => Ok(Self::Wikilink),
             "footnote" => Ok(Self::Footnote),
             "rule" => Ok(Self::Rule),
-            "heading" => Ok(Self::Heading),
             "list-marker" => Ok(Self::ListMarker),
             "quote-marker" => Ok(Self::QuoteMarker),
             "callout" => Ok(Self::Callout),
@@ -119,16 +116,6 @@ mod plain {
     pub const CHECKED: &str = "☑ ";
     pub const TODO: &str = "◐ ";
 }
-
-/// The scopes headings are styled with, by level.
-const HEADING_SCOPES: [&str; 6] = [
-    "markup.heading.1.markdown",
-    "markup.heading.2.markdown",
-    "markup.heading.3.markdown",
-    "markup.heading.4.markdown",
-    "markup.heading.5.markdown",
-    "markup.heading.6.markdown",
-];
 
 /// What the bullets of lists nested in each other are shown as, from the outermost, in turn.
 const BULLETS: [&str; 3] = ["•", "‣", "–"];
@@ -180,7 +167,6 @@ impl<'a, 't> Renderer<'a, 't> {
                     ConcealStyle::Guide,
                 );
             }
-            Element::Heading => self.heading(node),
             Element::ListMarker => self.list_marker(node),
             Element::QuoteMarker => self.quote_marker(node),
             Element::Callout => self.callout(node),
@@ -273,46 +259,6 @@ impl<'a, 't> Renderer<'a, 't> {
                 break;
             }
             start = text.line_to_byte(next_line);
-        }
-    }
-
-    /// Shows the `#`s of an ATX heading as one, in its level's color, and hides its closing
-    /// `#`s.
-    fn heading(&mut self, heading: &Node) {
-        let Some(marker) = heading.child(0) else {
-            return;
-        };
-        let Some(level) = marker
-            .kind()
-            .strip_prefix("atx_h")
-            .and_then(|kind| kind.strip_suffix("_marker"))
-            .and_then(|level| level.parse::<u8>().ok())
-            .filter(|level| (1..=6).contains(level))
-        else {
-            return;
-        };
-        let marker = bytes_of(&marker);
-        let line_end = self.line_end_byte(marker.start);
-        let after = self.slice(marker.end..line_end);
-        // the `#`s of every level are one, in the level's color
-        let written = self.slice(marker.clone());
-        let hashes = marker.start..marker.start + written.trim_end().len();
-        let scope = ConcealStyle::Scope(HEADING_SCOPES[usize::from(level - 1)]);
-        self.conceal(hashes.clone(), Replacement::from("#"), scope);
-
-        // a closing sequence after a space, like the `##` of `## Title ##`
-        let content = after.trim_end();
-        let without_closing = content.trim_end_matches('#');
-        if without_closing.len() < content.len()
-            && (without_closing.is_empty() || without_closing.ends_with([' ', '\t']))
-        {
-            let start = marker.end + without_closing.trim_end().len();
-            let end = marker.end + content.len();
-            self.conceal(
-                start.max(hashes.end + 1)..end,
-                Replacement::Hidden,
-                ConcealStyle::Text,
-            );
         }
     }
 

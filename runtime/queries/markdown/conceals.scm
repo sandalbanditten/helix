@@ -2,10 +2,6 @@
 ((thematic_break) @conceal
   (#set! conceal.symbols "markdown-rule"))
 
-; ATX headings, `## Title`, with their `#`s as an icon of their level
-((atx_heading) @conceal
-  (#set! conceal.symbols "markdown-heading"))
-
 ; List markers: bullets, numbers counted along the list and task checkboxes
 ([
   (list_marker_minus)

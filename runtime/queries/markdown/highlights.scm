@@ -1,13 +1,13 @@
 
-(setext_heading (paragraph) @markup.heading.1.markdown (setext_h1_underline) @markup.heading.marker)
-(setext_heading (paragraph) @markup.heading.2.markdown (setext_h2_underline) @markup.heading.marker)
+(setext_heading (paragraph) @markup.heading.1 (setext_h1_underline) @markup.heading.marker)
+(setext_heading (paragraph) @markup.heading.2 (setext_h2_underline) @markup.heading.marker)
 
-(atx_heading (atx_h1_marker) @markup.heading.marker) @markup.heading.1.markdown
-(atx_heading (atx_h2_marker) @markup.heading.marker) @markup.heading.2.markdown
-(atx_heading (atx_h3_marker) @markup.heading.marker) @markup.heading.3.markdown
-(atx_heading (atx_h4_marker) @markup.heading.marker) @markup.heading.4.markdown
-(atx_heading (atx_h5_marker) @markup.heading.marker) @markup.heading.5.markdown
-(atx_heading (atx_h6_marker) @markup.heading.marker) @markup.heading.6.markdown
+(atx_heading (atx_h1_marker) @markup.heading.marker) @markup.heading.1
+(atx_heading (atx_h2_marker) @markup.heading.marker) @markup.heading.2
+(atx_heading (atx_h3_marker) @markup.heading.marker) @markup.heading.3
+(atx_heading (atx_h4_marker) @markup.heading.marker) @markup.heading.4
+(atx_heading (atx_h5_marker) @markup.heading.marker) @markup.heading.5
+(atx_heading (atx_h6_marker) @markup.heading.marker) @markup.heading.6
 
 [
   (indented_code_block)

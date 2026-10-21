@@ -770,17 +770,6 @@ mod test {
     }
 
     #[test]
-    fn markdown_headings() {
-        // one `#` for every level, and closing sequences hidden
-        assert_eq!(
-            markdown("# H1\n### H3\n###### Six\n## Closed ##\n#\n"),
-            "# H1\n# H3\n# Six\n# Closed\n#\n"
-        );
-        // a `#` in the text stays
-        assert_eq!(markdown("## C# rocks\n"), "# C# rocks\n");
-    }
-
-    #[test]
     fn markdown_lists() {
         // bullets in turn by how deeply their lists are nested
         assert_eq!(

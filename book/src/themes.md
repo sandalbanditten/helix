@@ -260,7 +260,6 @@ See also [#2380]
   - `heading`
     - `marker`
     - `1`, `2`, `3`, `4`, `5`, `6` - heading text for h1 through h6
-      - `markdown` - Markdown's headings. The levels the theme sets neither of are `heading` in the palette's `red`, `yellow`, `green`, `cyan` (or `aqua`, `teal`) and `blue`, deeper ones in `blue`: the plain name or the one with the lowest number, like `red0`, else the terminal's color
   - `list`
     - `unnumbered`
     - `numbered`
