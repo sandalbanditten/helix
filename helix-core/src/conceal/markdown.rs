@@ -11,8 +11,9 @@ use std::str::FromStr;
 use tree_house::tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
-use super::{Cached, Reveal};
+use super::{Cached, ConcealDecoration, DecorationStyle, Reveal};
 use crate::chars::char_is_line_ending;
+use crate::line_ending::line_end_char_index;
 use crate::text_annotations::{Conceal, ConcealStyle, Replacement};
 use crate::RopeSlice;
 
@@ -41,6 +42,15 @@ pub enum Element {
     Footnote,
     /// A thematic break, `---`, shown as a rule across the row.
     Rule,
+    /// An ATX heading, `## Title`, with its `#`s shown as an icon of its level in their place.
+    Heading,
+    /// The marker of a list item: a bullet, a number counted along the list, or a task's
+    /// checkbox as an icon.
+    ListMarker,
+    /// The `>`s of block quotes, shown as bars in the color of their quote or callout.
+    QuoteMarker,
+    /// A block quote that may be a callout, `> [!NOTE]`, whose kind is shown as an icon and title.
+    Callout,
 }
 
 impl FromStr for Element {
@@ -54,6 +64,10 @@ impl FromStr for Element {
             "wikilink" => Ok(Self::Wikilink),
             "footnote" => Ok(Self::Footnote),
             "rule" => Ok(Self::Rule),
+            "heading" => Ok(Self::Heading),
+            "list-marker" => Ok(Self::ListMarker),
+            "quote-marker" => Ok(Self::QuoteMarker),
+            "callout" => Ok(Self::Callout),
             _ => Err(()),
         }
     }
@@ -66,16 +80,52 @@ mod icon {
     pub const IMAGE: &str = "\u{f0976} ";
     pub const EMAIL: &str = "\u{f0013} ";
     pub const WIKILINK: &str = "\u{f15d6} ";
+    pub const HEADINGS: [&str; 6] = [
+        "\u{f0ca1} ",
+        "\u{f0ca3} ",
+        "\u{f0ca5} ",
+        "\u{f0ca7} ",
+        "\u{f0ca9} ",
+        "\u{f0cab} ",
+    ];
+    pub const UNCHECKED: &str = "\u{f0131} ";
+    pub const CHECKED: &str = "\u{f0c52} ";
+    pub const TODO: &str = "\u{f0954} ";
 }
+
+/// Icons in plain Unicode, for fonts without Nerd Font glyphs.
+mod plain {
+    pub const HEADINGS: [&str; 6] = ["❶ ", "❷ ", "❸ ", "❹ ", "❺ ", "❻ "];
+    pub const UNCHECKED: &str = "☐ ";
+    pub const CHECKED: &str = "☑ ";
+    pub const TODO: &str = "◐ ";
+}
+
+/// The scopes headings are styled with, by level.
+const HEADING_SCOPES: [&str; 6] = [
+    "markup.heading.1",
+    "markup.heading.2",
+    "markup.heading.3",
+    "markup.heading.4",
+    "markup.heading.5",
+    "markup.heading.6",
+];
+
+/// What a bullet is shown as.
+const BULLET: &str = "•";
+
+/// What the `>` of a block quote is shown as.
+const QUOTE_BAR: &str = "▎";
 
 /// The scope icons of links are styled with.
 const LINK_SCOPE: &str = "markup.link.text";
 
-/// Renders the captured Markdown of a query match into conceals.
+/// Renders the captured Markdown of a query match into conceals and decorations.
 pub(super) struct Renderer<'a> {
     text: RopeSlice<'a>,
     options: MarkdownRender,
     conceals: &'a mut Vec<Cached>,
+    decorations: &'a mut Vec<(usize, ConcealDecoration)>,
 }
 
 impl<'a> Renderer<'a> {
@@ -83,11 +133,13 @@ impl<'a> Renderer<'a> {
         text: RopeSlice<'a>,
         options: MarkdownRender,
         conceals: &'a mut Vec<Cached>,
+        decorations: &'a mut Vec<(usize, ConcealDecoration)>,
     ) -> Self {
         Self {
             text,
             options,
             conceals,
+            decorations,
         }
     }
 
@@ -108,6 +160,10 @@ impl<'a> Renderer<'a> {
                     ConcealStyle::Guide,
                 );
             }
+            Element::Heading => self.heading(node),
+            Element::ListMarker => self.list_marker(node),
+            Element::QuoteMarker => self.quote_marker(node),
+            Element::Callout => self.callout(node),
         }
     }
 
@@ -140,6 +196,262 @@ impl<'a> Renderer<'a> {
 
     fn slice(&self, bytes: Range<usize>) -> Cow<'a, str> {
         self.text.byte_slice(bytes).into()
+    }
+
+    /// The Nerd Font `icon`, or the `plain` one if icons are off.
+    fn pick(&self, icon: &'static str, plain: &'static str) -> &'static str {
+        if self.options.icons {
+            icon
+        } else {
+            plain
+        }
+    }
+
+    /// The end of the line that `byte` is on, before its line break.
+    fn line_end_byte(&self, byte: usize) -> usize {
+        let text = self.text;
+        let line = text.byte_to_line(byte);
+        text.char_to_byte(line_end_char_index(&text, line))
+    }
+
+    fn decorate(&mut self, byte: usize, decoration: ConcealDecoration) {
+        let line = self.text.byte_to_line(byte);
+        self.decorations.push((line, decoration));
+    }
+
+    /// Decorates the text of the bytes `bytes` line by line, without the whitespace and quote
+    /// markers that lines start with.
+    fn decorate_text(&mut self, bytes: Range<usize>, style: DecorationStyle) {
+        let text = self.text;
+        let mut start = bytes.start;
+        while start < bytes.end {
+            let line_end = self.line_end_byte(start).min(bytes.end);
+            let line = self.slice(start..line_end);
+            let content = line.trim_start_matches(|c: char| c.is_whitespace() || c == '>');
+            let content_start = start + line.len() - content.len();
+            let content_end = start + line.trim_end().len();
+            if content_start < content_end {
+                let range = text.byte_to_char(content_start)..text.byte_to_char(content_end);
+                self.decorate(content_start, ConcealDecoration { range, style });
+            }
+            let next_line = text.byte_to_line(start) + 1;
+            if next_line >= text.len_lines() {
+                break;
+            }
+            start = text.line_to_byte(next_line);
+        }
+    }
+
+    /// Shows the `#`s of an ATX heading as the icon of its level, right-aligned in their place,
+    /// and hides its closing `#`s.
+    fn heading(&mut self, heading: &Node) {
+        let Some(marker) = heading.child(0) else {
+            return;
+        };
+        let Some(level) = marker
+            .kind()
+            .strip_prefix("atx_h")
+            .and_then(|kind| kind.strip_suffix("_marker"))
+            .and_then(|level| level.parse::<u8>().ok())
+            .filter(|level| (1..=6).contains(level))
+        else {
+            return;
+        };
+        let index = usize::from(level - 1);
+        let marker = bytes_of(&marker);
+        let line_end = self.line_end_byte(marker.start);
+        // the `#`s and the space after them
+        let after = self.slice(marker.end..line_end);
+        let covered = if after.starts_with([' ', '\t']) {
+            marker.start..marker.end + 1
+        } else {
+            marker.clone()
+        };
+        let width = covered.len();
+        let icon = self.pick(icon::HEADINGS[index], plain::HEADINGS[index]);
+        let icon = if width < icon.width() {
+            icon.trim_end()
+        } else {
+            icon
+        };
+        let shown = format!("{}{icon}", " ".repeat(width.saturating_sub(icon.width())));
+        let scope = ConcealStyle::Scope(HEADING_SCOPES[index]);
+        self.conceal(covered.clone(), Replacement::from(shown), scope);
+
+        // a closing sequence after a space, like the `##` of `## Title ##`
+        let content = after.trim_end();
+        let without_closing = content.trim_end_matches('#');
+        if without_closing.len() < content.len()
+            && (without_closing.is_empty() || without_closing.ends_with([' ', '\t']))
+        {
+            let start = marker.end + without_closing.trim_end().len();
+            let end = marker.end + content.len();
+            self.conceal(
+                start.max(covered.end)..end,
+                Replacement::Hidden,
+                ConcealStyle::Text,
+            );
+        }
+    }
+
+    /// Shows a list marker as a bullet, a number counted along the list or a checkbox.
+    fn list_marker(&mut self, marker: &Node) {
+        let Some(item) = marker.parent() else {
+            return;
+        };
+        // a marker indented more than its list starts with the indentation
+        let bytes = bytes_of(marker);
+        let indentation = {
+            let written = self.slice(bytes.clone());
+            written.len() - written.trim_start().len()
+        };
+        let bytes = bytes.start + indentation..bytes.end;
+        let task = marker.next_sibling().filter(|task| {
+            matches!(
+                task.kind(),
+                "task_list_marker_checked" | "task_list_marker_unchecked"
+            )
+        });
+        // `[-]`, a task in progress, which the grammar reads as text
+        let is_todo = task.is_none() && {
+            let after = self.slice(bytes.end..self.line_end_byte(bytes.end));
+            after == "[-]" || after.starts_with("[-] ") || after.starts_with("[-]\t")
+        };
+        if let Some(task) = task {
+            let checked = task.kind() == "task_list_marker_checked";
+            let (icon, scope) = if checked {
+                (
+                    self.pick(icon::CHECKED, plain::CHECKED),
+                    "markup.list.checked",
+                )
+            } else {
+                let icon = self.pick(icon::UNCHECKED, plain::UNCHECKED);
+                (icon, "markup.list.unchecked")
+            };
+            self.conceal(
+                bytes.start..task.end_byte() as usize,
+                Replacement::from(icon),
+                ConcealStyle::Scope(scope),
+            );
+            let paragraph = task
+                .next_sibling()
+                .filter(|text| text.kind() == "paragraph");
+            if let Some(inline) = paragraph.filter(|_| checked).and_then(|text| text.child(0)) {
+                self.decorate_text(bytes_of(&inline), DecorationStyle::Done);
+            }
+        } else if is_todo {
+            self.conceal(
+                bytes.start..bytes.end + "[-]".len(),
+                Replacement::from(self.pick(icon::TODO, plain::TODO)),
+                ConcealStyle::Scope("markup.raw"),
+            );
+        } else if matches!(marker.kind(), "list_marker_dot" | "list_marker_parenthesis") {
+            let written = self.slice(bytes.clone());
+            let written = written.trim_end();
+            let Ok(number) = written.trim_end_matches(['.', ')']).parse::<u64>() else {
+                return;
+            };
+            // the position of the item in its list, unless a later number is written out
+            let shown = if number > 1 {
+                number
+            } else {
+                item.parent().map_or(1, |list| {
+                    let before = list.children().take_while(|other| other != &item);
+                    before.filter(|other| other.kind() == "list_item").count() as u64 + 1
+                })
+            };
+            self.conceal(
+                bytes.start..bytes.start + written.len(),
+                Replacement::from(format!("{shown}.")),
+                ConcealStyle::Scope("markup.list.numbered"),
+            );
+        } else {
+            self.conceal(
+                bytes.start..bytes.start + 1,
+                Replacement::from(BULLET),
+                ConcealStyle::Scope("markup.list.unnumbered"),
+            );
+        }
+    }
+
+    /// Shows the `>`s of a quote marker, or of the continuation of a line in a quote, as bars in
+    /// the color of the quotes they belong to: the outermost quote has the first `>`.
+    fn quote_marker(&mut self, marker: &Node) {
+        let mut quotes = Vec::new();
+        let mut ancestor = marker.parent();
+        while let Some(node) = ancestor {
+            if node.kind() == "block_quote" {
+                quotes.push(node.clone());
+            }
+            ancestor = node.parent();
+        }
+        quotes.reverse();
+        // a quote marker is the `>` of its own quote, the innermost
+        let first = match marker.kind() {
+            "block_quote_marker" => quotes.len().saturating_sub(1),
+            _ => 0,
+        };
+        let bytes = bytes_of(marker);
+        let markers = self.slice(bytes.clone());
+        let bars: Vec<_> = markers
+            .match_indices('>')
+            .map(|(i, _)| bytes.start + i)
+            .collect();
+        for (k, bar) in bars.into_iter().enumerate() {
+            let scope = quotes
+                .get(first + k)
+                .and_then(|quote| self.callout_kind(quote))
+                .map_or("markup.quote", |callout| callout.scope);
+            self.conceal(
+                bar..bar + 1,
+                Replacement::from(QUOTE_BAR),
+                ConcealStyle::Scope(scope),
+            );
+        }
+    }
+
+    /// The kind of callout `quote` is, if its first line starts with `[!KIND]`.
+    fn callout_kind(&self, quote: &Node) -> Option<&'static Callout> {
+        let marker = quote
+            .child(0)
+            .filter(|marker| marker.kind() == "block_quote_marker")?;
+        let start = marker.end_byte() as usize;
+        let line = self.slice(start..self.line_end_byte(start));
+        let kind = line.strip_prefix("[!")?.split_once(']')?.0;
+        CALLOUTS
+            .iter()
+            .find(|callout| callout.kind.eq_ignore_ascii_case(kind))
+    }
+
+    /// Shows the `[!KIND]` of a callout as its icon and title, or as its icon if it has a title
+    /// of its own, which is drawn in the callout's color.
+    fn callout(&mut self, quote: &Node) {
+        let Some(callout) = self.callout_kind(quote) else {
+            return;
+        };
+        let Some(marker) = quote.child(0) else {
+            return;
+        };
+        let start = marker.end_byte() as usize;
+        let line_end = self.line_end_byte(start);
+        let kind_end = start + "[!]".len() + callout.kind.len();
+        let title = self.slice(kind_end..line_end);
+        let icon = self.pick(callout.icon, "");
+        let style = ConcealStyle::Scope(callout.scope);
+        if title.trim().is_empty() {
+            let shown = format!("{icon}{}", callout.title);
+            self.conceal(start..kind_end, Replacement::from(shown), style);
+        } else {
+            let title_start = kind_end + (title.len() - title.trim_start().len());
+            let replacement = if icon.is_empty() {
+                Replacement::Hidden
+            } else {
+                Replacement::from(icon)
+            };
+            self.conceal(start..title_start, replacement, style);
+            let title_style = DecorationStyle::Scope(callout.scope);
+            self.decorate_text(title_start..line_end, title_style);
+        }
     }
 
     fn entity(&mut self, bytes: Range<usize>) {
@@ -244,6 +556,62 @@ impl<'a> Renderer<'a> {
         );
     }
 }
+
+/// A kind of callout, `> [!KIND]`, shown as its icon and title in the color of a theme scope.
+#[derive(Debug)]
+struct Callout {
+    kind: &'static str,
+    title: &'static str,
+    icon: &'static str,
+    scope: &'static str,
+}
+
+const fn callout(
+    kind: &'static str,
+    title: &'static str,
+    icon: &'static str,
+    scope: &'static str,
+) -> Callout {
+    Callout {
+        kind,
+        title,
+        icon,
+        scope,
+    }
+}
+
+/// The callouts of GitHub and Obsidian, as render-markdown.nvim shows them.
+const CALLOUTS: &[Callout] = &[
+    // GitHub
+    callout("NOTE", "Note", "\u{f02fd} ", "info"),
+    callout("TIP", "Tip", "\u{f0336} ", "diff.plus"),
+    callout("IMPORTANT", "Important", "\u{f017e} ", "hint"),
+    callout("WARNING", "Warning", "\u{f002a} ", "warning"),
+    callout("CAUTION", "Caution", "\u{f0ce6} ", "error"),
+    // Obsidian
+    callout("ABSTRACT", "Abstract", "\u{f0a38} ", "info"),
+    callout("SUMMARY", "Summary", "\u{f0a38} ", "info"),
+    callout("TLDR", "Tldr", "\u{f0a38} ", "info"),
+    callout("INFO", "Info", "\u{f02fd} ", "info"),
+    callout("TODO", "Todo", "\u{f05e1} ", "info"),
+    callout("HINT", "Hint", "\u{f0336} ", "diff.plus"),
+    callout("SUCCESS", "Success", "\u{f012c} ", "diff.plus"),
+    callout("CHECK", "Check", "\u{f012c} ", "diff.plus"),
+    callout("DONE", "Done", "\u{f012c} ", "diff.plus"),
+    callout("QUESTION", "Question", "\u{f0625} ", "warning"),
+    callout("HELP", "Help", "\u{f0625} ", "warning"),
+    callout("FAQ", "Faq", "\u{f0625} ", "warning"),
+    callout("ATTENTION", "Attention", "\u{f002a} ", "warning"),
+    callout("FAILURE", "Failure", "\u{f0156} ", "error"),
+    callout("FAIL", "Fail", "\u{f0156} ", "error"),
+    callout("MISSING", "Missing", "\u{f0156} ", "error"),
+    callout("DANGER", "Danger", "\u{f140c} ", "error"),
+    callout("ERROR", "Error", "\u{f140c} ", "error"),
+    callout("BUG", "Bug", "\u{f0a30} ", "error"),
+    callout("EXAMPLE", "Example", "\u{f0279} ", "hint"),
+    callout("QUOTE", "Quote", "\u{f11a8} ", "markup.quote"),
+    callout("CITE", "Cite", "\u{f11a8} ", "markup.quote"),
+];
 
 fn bytes_of(node: &Node) -> Range<usize> {
     node.start_byte() as usize..node.end_byte() as usize

@@ -325,8 +325,13 @@ fn build_theme_values(
     let mut warnings = Vec::new();
 
     // TODO: alert user of parsing failures in editor
-    let palette = values
-        .remove("palette")
+    let palette = values.remove("palette");
+    let own_colors: Vec<String> = palette
+        .as_ref()
+        .and_then(Value::as_table)
+        .map(|palette| palette.keys().cloned().collect())
+        .unwrap_or_default();
+    let palette = palette
         .map(|value| {
             ThemePalette::try_from(value).unwrap_or_else(|err| {
                 warnings.push(err);
@@ -370,6 +375,18 @@ fn build_theme_values(
         styles.insert(name.clone(), style);
         scopes.push(name);
         highlights.push(style);
+    }
+
+    // headings the theme leaves to `markup.heading` get a color of their level
+    let heading = styles.get("markup.heading").copied().unwrap_or_default();
+    for level in 1..=6 {
+        let name = format!("markup.heading.{level}");
+        if !styles.contains_key(&name) {
+            let style = heading.fg(palette.heading_color(level, &own_colors));
+            styles.insert(name.clone(), style);
+            scopes.push(name);
+            highlights.push(style);
+        }
     }
 
     (styles, scopes, highlights, rainbow_length, warnings)
@@ -547,6 +564,34 @@ impl ThemePalette {
         Self { palette: default }
     }
 
+    /// The color of headings of `level`, like Typst's in a vault: red, yellow, green, cyan and
+    /// blue for deeper ones. They are the theme's own colors of those names in `own_colors`, like
+    /// `red`, `red0` or `aqua` for cyan, or else the terminal's.
+    fn heading_color(&self, level: usize, own_colors: &[String]) -> Color {
+        const LEVELS: [(&[&str], Color); 5] = [
+            (&["red"], Color::Red),
+            (&["yellow"], Color::Yellow),
+            (&["green"], Color::Green),
+            (&["cyan", "aqua", "teal"], Color::Cyan),
+            (&["blue"], Color::Blue),
+        ];
+        let (names, ansi) = LEVELS[(level - 1).min(LEVELS.len() - 1)];
+        // the plain name, or else the one with the lowest number, like `red0`
+        let own = names.iter().find_map(|name| {
+            let numbered = |color: &&String| {
+                let number = color.strip_prefix(name)?;
+                (number.is_empty() || number.bytes().all(|b| b.is_ascii_digit()))
+                    .then(|| (number.len(), number.to_owned()))
+            };
+            let color = own_colors
+                .iter()
+                .filter_map(|c| Some((numbered(&c)?, c)))
+                .min()?;
+            self.palette.get(color.1).copied()
+        });
+        own.unwrap_or(ansi)
+    }
+
     pub fn string_to_rgb(s: &str) -> Result<Color, String> {
         if s.starts_with('#') {
             Color::from_hex(s).map_err(|e| format!("{e}: {s}"))
@@ -693,6 +738,35 @@ mod tests {
         palette.parse_style(&mut style, fg).unwrap();
 
         assert_eq!(style, Style::default().fg(Color::Rgb(255, 255, 255)));
+    }
+
+    #[test]
+    fn heading_colors() {
+        let theme: Theme = toml::from_str(
+            r##"
+            "markup.heading" = { fg = "white", modifiers = ["bold"] }
+            "markup.heading.2" = "gray"
+
+            [palette]
+            red1 = "#fb4934"
+            red0 = "#cc241d"
+            green = "#98971a"
+            aqua1 = "#8ec07c"
+            "##,
+        )
+        .unwrap();
+        let heading = |level| theme.get(&format!("markup.heading.{level}"));
+        // the palette's color of the level's name, with the lowest number, over `markup.heading`
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        assert_eq!(heading(1), bold.fg(Color::Rgb(0xcc, 0x24, 0x1d)));
+        // the theme's own heading color
+        assert_eq!(heading(2), Style::default().fg(Color::Gray));
+        assert_eq!(heading(3), bold.fg(Color::Rgb(0x98, 0x97, 0x1a)));
+        // `aqua` is cyan
+        assert_eq!(heading(4), bold.fg(Color::Rgb(0x8e, 0xc0, 0x7c)));
+        // the terminal's color when the palette has none of the name
+        assert_eq!(heading(5), bold.fg(Color::Blue));
+        assert_eq!(heading(6), bold.fg(Color::Blue));
     }
 
     #[test]

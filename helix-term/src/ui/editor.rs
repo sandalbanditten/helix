@@ -23,6 +23,7 @@ use crate::{
 };
 
 use helix_core::{
+    conceal::{ConcealDecoration, DecorationStyle},
     diagnostic::NumberOrString,
     fold::{self, Fold},
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
@@ -280,6 +281,16 @@ impl EditorView {
             overlays.push(overlay);
         }
 
+        // rendered Markdown drawn over the text, like the bands of headings
+        let lines = first..view.estimate_last_doc_line(doc) + 1;
+        let markdown = view.conceal_decorations(doc, is_focused, lines);
+        if !markdown.is_empty() {
+            if let Some(overlay) = Self::markdown_highlights(&markdown, theme) {
+                overlays.push(overlay);
+            }
+            decorations.add_decoration(text_decorations::Markdown::new(&markdown));
+        }
+
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
         // overlaid text like jump labels shows over the styles of the text it covers
@@ -441,6 +452,28 @@ impl EditorView {
             len: text.len_lines(),
             shared: viewport.right() == area.right(),
         })
+    }
+
+    /// The text of rendered Markdown drawn in the color of a theme scope, like the title of a
+    /// callout.
+    fn markdown_highlights(
+        decorations: &[(usize, ConcealDecoration)],
+        theme: &Theme,
+    ) -> Option<OverlayHighlights> {
+        let mut highlights: Vec<_> = decorations
+            .iter()
+            .filter_map(|(_, decoration)| match decoration.style {
+                DecorationStyle::Scope(scope) => {
+                    Some((theme.find_highlight(scope)?, decoration.range.clone()))
+                }
+                DecorationStyle::Done => None,
+            })
+            .collect();
+        if highlights.is_empty() {
+            return None;
+        }
+        highlights.sort_unstable_by_key(|(_, range)| range.start);
+        Some(OverlayHighlights::Heterogenous { highlights })
     }
 
     pub fn render_rulers(

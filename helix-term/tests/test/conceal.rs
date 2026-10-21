@@ -327,3 +327,50 @@ async fn markdown_in_commit_messages() -> anyhow::Result<()> {
         |app: &Application| assert_shows(app, &["See [the docs](https://x.org) for **why**."]);
     test_key_sequence(&mut app, Some("<esc>"), Some(&raw), false).await
 }
+
+/// The cells of the first row of the screen that shows `text`.
+fn row_cells(app: &Application, text: &str) -> Vec<tui::buffer::Cell> {
+    let screen = app.screen();
+    let width = screen.area.width as usize;
+    let rows = screen.content.chunks(width);
+    let row = rows
+        .into_iter()
+        .find(|row| {
+            let row: String = row.iter().map(|cell| cell.symbol.as_str()).collect();
+            row.contains(text)
+        })
+        .unwrap_or_else(|| panic!("{text:?} is not shown"));
+    row.to_vec()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_checked_tasks() -> anyhow::Result<()> {
+    use helix_view::graphics::Modifier;
+
+    let mut app = markdown_app(
+        "foo.md",
+        "#[x|]#\n- [x] done\n",
+        ConcealConfig::default(),
+        MarkdownConfig::default(),
+    )?;
+    let is_done = |app: &Application, text: &str| {
+        let task = row_cells(app, text);
+        let first = task
+            .iter()
+            .find(|cell| cell.symbol.as_str() == "d")
+            .unwrap();
+        first
+            .modifier
+            .contains(Modifier::DIM | Modifier::CROSSED_OUT)
+    };
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some("<esc>"), Some(&|app| assert!(is_done(app, "done")))),
+            // the cursor's line is drawn as it is
+            (Some("j"), Some(&|app| assert!(!is_done(app, "- [x] done")))),
+        ],
+        false,
+    )
+    .await
+}

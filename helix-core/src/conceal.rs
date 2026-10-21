@@ -194,12 +194,39 @@ struct Cached {
     reveal: Reveal,
 }
 
+/// Rendered Markdown drawn over the text of a line rather than instead of it, unless a cursor
+/// reveals the line: the chars `range` drawn as `style` says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConcealDecoration {
+    pub range: ops::Range<usize>,
+    pub style: DecorationStyle,
+}
+
+/// How a [`ConcealDecoration::Text`] is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecorationStyle {
+    /// Dimmed and struck through, like the text of a checked task.
+    Done,
+    /// In the color of a theme scope, like the title of a callout.
+    Scope(&'static str),
+}
+
+/// What the Markdown of a window of lines is rendered as.
+#[derive(Debug, Default)]
+struct Rendered {
+    conceals: Vec<Cached>,
+    /// The decorations and their lines.
+    decorations: Vec<(usize, ConcealDecoration)>,
+}
+
 /// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
 /// whenever the tree changes.
 #[derive(Debug, Default)]
 pub struct ConcealCache {
     /// The conceals of each line computed so far, sorted and disjoint.
     lines: HashMap<usize, Vec<Cached>>,
+    /// The decorations of the lines in `lines` that have any.
+    decorations: HashMap<usize, Vec<ConcealDecoration>>,
     /// What was concealed in `lines`.
     options: ConcealOptions,
 }
@@ -207,6 +234,7 @@ pub struct ConcealCache {
 impl ConcealCache {
     pub fn clear(&mut self) {
         self.lines.clear();
+        self.decorations.clear();
     }
 
     /// The window of lines around `line` whose conceals are computed together, leaving out lines
@@ -272,7 +300,7 @@ impl<'a> SyntaxConceals<'a> {
         })
     }
 
-    /// Computes the conceals of the lines `lines` into `cache`.
+    /// Computes the conceals and decorations of the lines `lines` into `cache`.
     fn fetch(&self, cache: &mut ConcealCache, lines: ops::Range<usize>) {
         let text = self.text;
         let end = if lines.end < text.len_lines() {
@@ -282,19 +310,32 @@ impl<'a> SyntaxConceals<'a> {
         };
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
+            cache.decorations.remove(&line);
         }
-        for cached in self.conceals(text.line_to_char(lines.start)..end) {
+        // what a match renders on lines it reaches outside the window, like the title of a
+        // callout above it, is left to the window of those lines
+        let rendered = self.render(text.line_to_char(lines.start)..end);
+        for cached in rendered.conceals {
             let line = text.char_to_line(cached.conceal.start);
-            cache.lines.entry(line).or_default().push(cached);
+            if lines.contains(&line) {
+                cache.lines.entry(line).or_default().push(cached);
+            }
+        }
+        for (line, decoration) in rendered.decorations {
+            if lines.contains(&line) {
+                cache.decorations.entry(line).or_default().push(decoration);
+            }
         }
     }
 
-    /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint.
-    fn conceals(&self, range: ops::Range<usize>) -> Vec<Cached> {
+    /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint, and the
+    /// decorations of rendered Markdown.
+    fn render(&self, range: ops::Range<usize>) -> Rendered {
         let text = self.text;
         let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
         let mut noconceal = Vec::new();
         let mut conceals = Vec::new();
+        let mut decorations = Vec::new();
         for mat in self.syntax.conceal_matches(text, &self.loader, bytes) {
             let bytes = mat.bytes.start as usize..mat.bytes.end as usize;
             let Some(table) = mat.table else {
@@ -303,7 +344,8 @@ impl<'a> SyntaxConceals<'a> {
             };
             if let SymbolTable::Markdown(element) = table {
                 if let Some(options) = self.options.markdown {
-                    let mut renderer = markdown::Renderer::new(text, options, &mut conceals);
+                    let mut renderer =
+                        markdown::Renderer::new(text, options, &mut conceals, &mut decorations);
                     renderer.render(element, &mat.node, bytes);
                 }
                 continue;
@@ -354,7 +396,39 @@ impl<'a> SyntaxConceals<'a> {
                 outermost.push(cached);
             }
         }
-        outermost
+        Rendered {
+            conceals: outermost,
+            decorations,
+        }
+    }
+
+    /// The decorations of the lines `lines` that the cursors don't reveal, and their lines.
+    pub fn decorations(&self, lines: ops::Range<usize>) -> Vec<(usize, ConcealDecoration)> {
+        let text = self.text;
+        let lines = lines.start.min(text.len_lines())..lines.end.min(text.len_lines());
+        let mut cache = self.cache.borrow_mut();
+        let mut decorations = Vec::new();
+        for line in lines {
+            if !cache.lines.contains_key(&line) {
+                let window = cache.window(line, text.len_lines());
+                self.fetch(&mut cache, window);
+            }
+            let Some(line_decorations) = cache.decorations.get(&line) else {
+                continue;
+            };
+            let line_start = text.line_to_char(line);
+            let revealed = self.reveal.is_some_and(|(selection, _)| {
+                ConcealReveal::Line.reveals(text, selection, line_start..line_start + 1)
+            });
+            if !revealed {
+                decorations.extend(
+                    line_decorations
+                        .iter()
+                        .map(|decoration| (line, decoration.clone())),
+                );
+            }
+        }
+        decorations
     }
 
     /// Whether the cursors show the concealed text of `cached` as it is.
@@ -540,6 +614,84 @@ mod test {
         // frontmatter and setext underlines are no rules
         let source = "---\ntitle: x\n---\n\nTitle\n---\n";
         assert_eq!(markdown(source), source);
+    }
+
+    #[test]
+    fn markdown_headings() {
+        // icons right-aligned over the `#`s, closing sequences hidden
+        assert_eq!(
+            markdown("# H1\n### H3\n###### Six\n## Closed ##\n#\n"),
+            "\u{f0ca1} H1\n  \u{f0ca5} H3\n     \u{f0cab} Six\n \u{f0ca3} Closed\n\u{f0ca1}\n"
+        );
+        // a `#` in the text stays
+        assert_eq!(markdown("# C# rocks\n"), "\u{f0ca1} C# rocks\n");
+    }
+
+    #[test]
+    fn markdown_lists() {
+        assert_eq!(markdown("- a\n* b\n  + c\n"), "• a\n• b\n  • c\n");
+        // a marker indented more than its list needs
+        assert_eq!(markdown("* a\n    * b\n"), "• a\n    • b\n");
+        // numbers counted along the list unless written out
+        assert_eq!(
+            markdown("1. a\n1. b\n1. c\n\ntext\n\n5. x\n7. y\n\ntext\n\n1) z\n"),
+            "1. a\n2. b\n3. c\n\ntext\n\n5. x\n7. y\n\ntext\n\n1. z\n"
+        );
+        assert_eq!(
+            markdown("- [ ] todo\n- [x] done\n- [-] doing\n- plain\n"),
+            "\u{f0131}  todo\n\u{f0c52}  done\n\u{f0954}  doing\n• plain\n"
+        );
+    }
+
+    #[test]
+    fn markdown_quotes() {
+        assert_eq!(
+            markdown("> a\n> b\n> > c\n> - d\n>   e\n"),
+            "▎ a\n▎ b\n▎ ▎ c\n▎ • d\n▎   e\n"
+        );
+        assert_eq!(
+            markdown("> [!NOTE]\n> body\n\n> [!warning] Custom\n> x\n\n> [!nope]\n"),
+            "▎ \u{f02fd} Note\n▎ body\n\n▎ \u{f002a} Custom\n▎ x\n\n▎ [!nope]\n"
+        );
+    }
+
+    #[test]
+    fn markdown_decorations() {
+        let source = "# Title\n- [x] done\n  more\n> [!TIP] Hint\n";
+        let text = Rope::from(source);
+        let syntax = parse("markdown", &text);
+        let cache = RefCell::default();
+        let conceals = SyntaxConceals::new(
+            text.slice(..),
+            &syntax,
+            LOADER.clone(),
+            None,
+            OPTIONS,
+            &cache,
+        )
+        .unwrap();
+        let decoration = |range, style| ConcealDecoration { range, style };
+        assert_eq!(
+            conceals.decorations(0..text.len_lines()),
+            [
+                (1, decoration(14..18, DecorationStyle::Done)),
+                (2, decoration(21..25, DecorationStyle::Done)),
+                (3, decoration(35..39, DecorationStyle::Scope("diff.plus"))),
+            ]
+        );
+        // the cursor's line has none
+        let selection = Selection::point(9);
+        let reveal = Some((&selection, ConcealReveal::Adjacent));
+        let conceals = SyntaxConceals::new(
+            text.slice(..),
+            &syntax,
+            LOADER.clone(),
+            reveal,
+            OPTIONS,
+            &cache,
+        )
+        .unwrap();
+        assert_eq!(conceals.decorations(1..2), []);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::{
 
 use helix_core::{
     anchor_at_visual_offset, char_idx_at_visual_offset,
-    conceal::ConcealOptions,
+    conceal::{ConcealDecoration, ConcealOptions, SyntaxConceals},
     doc_formatter::TextFormat,
     fold,
     movement::{move_vertically_visual, Direction, Movement},
@@ -606,6 +606,35 @@ impl View {
             .unwrap_or_else(|| doc.selection(self.id))
     }
 
+    /// The conceals the view draws `doc` with, except those its cursors reveal if it is `focused`.
+    fn conceals<'a>(&self, doc: &'a Document, focused: bool) -> Option<SyntaxConceals<'a>> {
+        // jump labels are placed on the words of the text as it is, and the panes of the diff
+        // view show the text that changed
+        if doc.jump_labels.contains_key(&self.id) || doc.diff_view.is_some() {
+            return None;
+        }
+        let config = doc.config.load();
+        let options = ConcealOptions {
+            symbols: config.conceal.enable,
+            markdown: config.markdown.render(),
+        };
+        let reveal = focused.then(|| (doc.selection(self.id), config.conceal.reveal));
+        doc.conceals(reveal, options)
+    }
+
+    /// The decorations of rendered Markdown that the view draws over the document lines `lines`
+    /// of `doc`, except on the lines with a cursor if it is `focused`.
+    pub fn conceal_decorations(
+        &self,
+        doc: &Document,
+        focused: bool,
+        lines: std::ops::Range<usize>,
+    ) -> Vec<(usize, ConcealDecoration)> {
+        self.conceals(doc, focused)
+            .map(|conceals| conceals.decorations(lines))
+            .unwrap_or_default()
+    }
+
     /// The text annotations to draw the view with at its [render offset](Self::render_offset).
     /// Only a `focused` view reveals concealed text at its cursors.
     pub fn render_text_annotations<'a>(
@@ -799,18 +828,8 @@ impl View {
             config.folding.placeholder.clone(),
         );
 
-        // jump labels are placed on the words of the text as it is, and the panes of the diff
-        // view show the text that changed
-        let conceal = &config.conceal;
-        let options = ConcealOptions {
-            symbols: conceal.enable,
-            markdown: config.markdown.render(),
-        };
-        if !doc.jump_labels.contains_key(&self.id) && doc.diff_view.is_none() {
-            let reveal = focused.then(|| (doc.selection(self.id), conceal.reveal));
-            if let Some(conceals) = doc.conceals(reveal, options) {
-                text_annotations.add_conceals(conceals);
-            }
+        if let Some(conceals) = self.conceals(doc, focused) {
+            text_annotations.add_conceals(conceals);
         }
 
         if config.lsp.display_color_swatches {
