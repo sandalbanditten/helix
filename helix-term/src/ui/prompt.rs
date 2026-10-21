@@ -6,9 +6,12 @@ use helix_view::document::Mode;
 use helix_view::input::KeyEvent;
 use helix_view::keyboard::KeyCode;
 use std::sync::Arc;
-use std::{borrow::Cow, ops::RangeFrom};
+use std::{
+    borrow::Cow,
+    ops::{Range, RangeFrom},
+};
 use tui::buffer::Buffer as Surface;
-use tui::text::Span;
+use tui::text::{Span, Spans};
 use tui::widgets::{Block, Widget};
 
 use helix_core::{
@@ -18,7 +21,7 @@ use helix_core::{
 };
 use helix_view::{
     graphics::{CursorKind, Margin, Rect},
-    Editor,
+    Editor, Theme,
 };
 
 type PromptCharHandler = Box<dyn Fn(&mut Prompt, char, &Context)>;
@@ -39,6 +42,8 @@ pub struct Prompt {
     truncate_end: bool,
     // ---
     completion: Vec<Completion>,
+    /// The line `completion` was computed for.
+    completion_line: String,
     selection: Option<usize>,
     history_register: Option<char>,
     history_pos: Option<usize>,
@@ -95,6 +100,7 @@ impl Prompt {
             truncate_start: false,
             truncate_end: false,
             completion: Vec::new(),
+            completion_line: String::new(),
             selection: None,
             history_register,
             history_pos: None,
@@ -157,6 +163,7 @@ impl Prompt {
     pub fn recalculate_completion(&mut self, editor: &Editor) {
         self.exit_selection();
         self.completion = (self.completion_fn)(editor, &self.line);
+        self.completion_line.clone_from(&self.line);
     }
 
     /// Compute the cursor position after applying movement
@@ -408,6 +415,7 @@ impl Prompt {
         let selected_color = theme.get("ui.menu.selected");
         let suggestion_color = theme.get("ui.text.inactive");
         let background = theme.get("ui.background");
+        let prompt_completion = cx.editor.config().prompt_completion;
         // completion
 
         let max_len = self
@@ -421,10 +429,14 @@ impl Prompt {
         let cols = std::cmp::max(1, area.width / max_len);
         let col_width = (area.width.saturating_sub(cols)) / cols;
 
-        let height = (self.completion.len() as u16)
-            .div_ceil(cols)
-            .min(10) // at most 10 rows (or less)
-            .min(area.height.saturating_sub(1));
+        let height = if prompt_completion.popup() {
+            (self.completion.len() as u16)
+                .div_ceil(cols)
+                .min(10) // at most 10 rows (or less)
+                .min(area.height.saturating_sub(1))
+        } else {
+            0
+        };
 
         let completion_area = Rect::new(
             area.x,
@@ -599,6 +611,106 @@ impl Prompt {
                 |_| prompt_color,
             );
         }
+
+        if prompt_completion.inline() && !self.line.is_empty() && !self.completion.is_empty() {
+            let line_width = self.line[self.anchor..].width();
+            if line_width < self.line_area.width as usize {
+                let x = self.line_area.x + line_width as u16;
+                let area = Rect::new(x, self.line_area.y, area.right().saturating_sub(x), 1);
+                self.render_inline_completion(area, surface, &cx.editor.theme);
+            }
+        }
+    }
+
+    /// Renders the completions greyed out after the line, like Emacs' icomplete:
+    /// `:co{mpile | mpile! | nfig-open | …}`.
+    fn render_inline_completion(&self, area: Rect, surface: &mut Surface, theme: &Theme) {
+        let inactive = theme.get("ui.text.inactive");
+        let selected = theme.get("ui.menu.selected");
+
+        let mut spans = Vec::new();
+        let mut width = area.width as usize;
+        // Tab wrote the selected completion into the line, so set the list apart from it.
+        if self.selection.is_some() {
+            spans.push(Span::styled(" ", inactive));
+            width = width.saturating_sub(1);
+        }
+
+        let page = inline_page(
+            self.completion.len(),
+            |i| self.inline_label(&self.completion[i]).width(),
+            self.selection.unwrap_or(0),
+            width,
+        );
+
+        spans.push(Span::styled("{", inactive));
+        if page.start > 0 {
+            spans.push(Span::styled(ELLIPSIS, inactive));
+            spans.push(Span::styled(SEPARATOR, inactive));
+        }
+        for i in page.clone() {
+            if i > page.start {
+                spans.push(Span::styled(SEPARATOR, inactive));
+            }
+            let style = if Some(i) == self.selection {
+                selected
+            } else {
+                inactive
+            };
+            spans.push(Span::styled(self.inline_label(&self.completion[i]), style));
+        }
+        if page.end < self.completion.len() {
+            spans.push(Span::styled(SEPARATOR, inactive));
+            spans.push(Span::styled(ELLIPSIS, inactive));
+        }
+        spans.push(Span::styled("}", inactive));
+
+        surface.set_spans(area.x, area.y, &Spans::from(spans), area.width);
+    }
+
+    /// The part of a completion shown inline: the rest after the typed text, or the whole
+    /// completion when it doesn't start with the typed text (a fuzzy match).
+    fn inline_label<'a>(&self, (range, completion): &'a Completion) -> &'a str {
+        let content = completion.content.as_ref();
+        self.completion_line
+            .get(range.clone())
+            .and_then(|typed| content.strip_prefix(typed))
+            .unwrap_or(content)
+    }
+}
+
+const SEPARATOR: &str = " | ";
+const ELLIPSIS: &str = "…";
+
+/// Splits `len` inline completions into pages fitting `width` columns, like `{a | b | …}`,
+/// `{… | c | d | …}` and `{… | e}`, and returns the items of the page holding `selected`.
+/// A page holds at least one item, even one too wide for it.
+fn inline_page(
+    len: usize,
+    item_width: impl Fn(usize) -> usize,
+    selected: usize,
+    width: usize,
+) -> Range<usize> {
+    let braces = "{}".width();
+    let more = SEPARATOR.width() + ELLIPSIS.width();
+    let mut start = 0;
+    loop {
+        let mut used = braces + if start > 0 { more } else { 0 };
+        let mut end = start;
+        while end < len {
+            let separator = if end > start { SEPARATOR.width() } else { 0 };
+            let next = used + separator + item_width(end);
+            let reserved = if end + 1 < len { more } else { 0 };
+            if end > start && next + reserved > width {
+                break;
+            }
+            used = next;
+            end += 1;
+        }
+        if selected < end || end == len {
+            return start..end;
+        }
+        start = end;
     }
 }
 
@@ -738,6 +850,7 @@ impl Component for Prompt {
                     .iter_preview()
                     .map(|(ch, preview)| (0.., format!("{} {}", ch, &preview).into()))
                     .collect();
+                self.completion_line.clone_from(&self.line);
                 self.next_char_handler = Some(Box::new(|prompt, c, context| {
                     prompt.insert_str(
                         &context
@@ -796,5 +909,49 @@ impl Component for Prompt {
             Some(Position::new(area.y as usize + line, col)),
             editor.config().cursor_shape.from_mode(Mode::Insert),
         )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Lays out items of the given widths, like `inline_page` does on screen.
+    fn pages(widths: &[usize], width: usize) -> Vec<Range<usize>> {
+        let mut pages = Vec::new();
+        let mut selected = 0;
+        while selected < widths.len() {
+            let page = inline_page(widths.len(), |i| widths[i], selected, width);
+            selected = page.end;
+            pages.push(page);
+        }
+        pages
+    }
+
+    #[test]
+    fn inline_page_fits_everything() {
+        // `{ab | cd}` is 9 columns.
+        assert_eq!(pages(&[2, 2], 9), vec![0..2]);
+    }
+
+    #[test]
+    fn inline_page_reserves_ellipses() {
+        // `{ab | cd | …}` is 13 columns, `{… | ef}` 8.
+        assert_eq!(pages(&[2, 2, 2], 13), vec![0..2, 2..3]);
+        // `{ab | …}`, `{… | cd | …}`, `{… | ef}`
+        assert_eq!(pages(&[2, 2, 2], 12), vec![0..1, 1..2, 2..3]);
+    }
+
+    #[test]
+    fn inline_page_holds_wide_items() {
+        assert_eq!(pages(&[20, 2], 10), vec![0..1, 1..2]);
+    }
+
+    #[test]
+    fn inline_page_follows_selection() {
+        let widths = [2, 2, 2];
+        assert_eq!(inline_page(3, |i| widths[i], 0, 12), 0..1);
+        assert_eq!(inline_page(3, |i| widths[i], 1, 12), 1..2);
+        assert_eq!(inline_page(3, |i| widths[i], 2, 12), 2..3);
     }
 }

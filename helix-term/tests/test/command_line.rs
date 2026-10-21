@@ -1,6 +1,8 @@
 use super::*;
 
 use helix_core::diagnostic::Severity;
+use helix_term::application::Application;
+use helix_view::editor::PromptCompletion;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn history_completion() -> anyhow::Result<()> {
@@ -157,4 +159,99 @@ async fn percent_escaping() -> anyhow::Result<()> {
     )
     .await?;
     Ok(())
+}
+
+fn prompt_completion_app(prompt_completion: PromptCompletion) -> anyhow::Result<Application> {
+    let mut config = test_config();
+    config.editor.prompt_completion = prompt_completion;
+    AppBuilder::new().with_config(config).build()
+}
+
+/// The screen row `rows_up` rows above the bottom one, which holds the prompt.
+fn screen_row(app: &Application, rows_up: usize) -> String {
+    let screen = app.screen();
+    let width = screen.area.width as usize;
+    let start = screen.content.len() - (rows_up + 1) * width;
+    screen.content[start..start + width]
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_completion() -> anyhow::Result<()> {
+    test_key_sequences(
+        &mut prompt_completion_app(PromptCompletion::Inline)?,
+        vec![
+            (
+                Some(":comp"),
+                Some(&|app| {
+                    assert_eq!(
+                        screen_row(app, 0),
+                        ":comp{ile | ile! | ile-test | ile-test! | ile-any | ile-any! | ile-kill}"
+                    );
+                    // no menu, only the command's documentation box
+                    assert!(!screen_row(app, 1).contains("compile-kill"));
+                }),
+            ),
+            (
+                Some("<tab><tab>"),
+                Some(&|app| {
+                    assert_eq!(
+                        screen_row(app, 0),
+                        ":compile! {ile | ile! | ile-test | ile-test! | ile-any | ile-any! | ile-kill}"
+                    );
+                }),
+            ),
+            (
+                Some("<C-u>compile-k"),
+                Some(&|app| assert_eq!(screen_row(app, 0), ":compile-k{ill}")),
+            ),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_completion_pages() -> anyhow::Result<()> {
+    test_key_sequences(
+        &mut prompt_completion_app(PromptCompletion::Inline)?,
+        vec![
+            (
+                Some(":c"),
+                Some(&|app| {
+                    let row = screen_row(app, 0);
+                    assert!(row.starts_with(":c{"), "{row}");
+                    assert!(row.ends_with(" | …}"), "{row}");
+                }),
+            ),
+            (
+                // Selecting past the first page shows the next one.
+                Some(&"<tab>".repeat(30)),
+                Some(&|app| {
+                    let row = screen_row(app, 0);
+                    assert!(row.contains(" {… | "), "{row}");
+                }),
+            ),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn both_completions() -> anyhow::Result<()> {
+    test_key_sequence(
+        &mut prompt_completion_app(PromptCompletion::Both)?,
+        Some(":compile-k"),
+        Some(&|app| {
+            assert_eq!(screen_row(app, 0), ":compile-k{ill}");
+            assert!(screen_row(app, 1).starts_with("compile-kill"));
+        }),
+        false,
+    )
+    .await
 }

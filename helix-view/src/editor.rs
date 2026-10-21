@@ -713,6 +713,8 @@ pub struct Config {
     pub smart_tab: Option<SmartTabConfig>,
     /// Draw border around popups.
     pub popup_border: PopupBorderConfig,
+    /// Where prompts show their completions. Defaults to `popup`.
+    pub prompt_completion: PromptCompletion,
     /// Which indent heuristic to use when a new line is inserted
     #[serde(default)]
     pub indent_heuristic: IndentationHeuristic,
@@ -1668,6 +1670,29 @@ pub enum PopupBorderConfig {
     Menu,
 }
 
+/// Where prompts show their completions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PromptCompletion {
+    /// In a menu above the prompt
+    #[default]
+    Popup,
+    /// Greyed out after the input, like Emacs' icomplete: `:co{mpile | nfig-open | …}`
+    Inline,
+    /// In both places
+    Both,
+}
+
+impl PromptCompletion {
+    pub fn popup(self) -> bool {
+        matches!(self, Self::Popup | Self::Both)
+    }
+
+    pub fn inline(self) -> bool {
+        matches!(self, Self::Inline | Self::Both)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WordCompletion {
@@ -1753,6 +1778,7 @@ impl Default for Config {
             trim_trailing_whitespace: false,
             smart_tab: Some(SmartTabConfig::default()),
             popup_border: PopupBorderConfig::None,
+            prompt_completion: PromptCompletion::default(),
             indent_heuristic: IndentationHeuristic::default(),
             jump_label_alphabet: ('a'..='z').collect(),
             inline_diagnostics: InlineDiagnosticsConfig::default(),
