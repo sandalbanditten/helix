@@ -782,9 +782,13 @@ mod test {
 
     #[test]
     fn markdown_lists() {
-        assert_eq!(markdown("- a\n* b\n  + c\n"), "• a\n• b\n  • c\n");
+        // bullets in turn by how deeply their lists are nested
+        assert_eq!(
+            markdown("- a\n* b\n  + c\n    - d\n      - e\n"),
+            "• a\n• b\n  ‣ c\n    – d\n      • e\n"
+        );
         // a marker indented more than its list needs
-        assert_eq!(markdown("* a\n    * b\n"), "• a\n    • b\n");
+        assert_eq!(markdown("* a\n    * b\n"), "• a\n    ‣ b\n");
         // numbers counted along the list unless written out
         assert_eq!(
             markdown("1. a\n1. b\n1. c\n\ntext\n\n5. x\n7. y\n\ntext\n\n1) z\n"),

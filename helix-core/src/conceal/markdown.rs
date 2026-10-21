@@ -5,6 +5,7 @@
 mod entities;
 
 use std::borrow::Cow;
+use std::iter;
 use std::ops::Range;
 use std::str::FromStr;
 
@@ -121,16 +122,16 @@ mod plain {
 
 /// The scopes headings are styled with, by level.
 const HEADING_SCOPES: [&str; 6] = [
-    "markup.heading.1",
-    "markup.heading.2",
-    "markup.heading.3",
-    "markup.heading.4",
-    "markup.heading.5",
-    "markup.heading.6",
+    "markup.heading.1.markdown",
+    "markup.heading.2.markdown",
+    "markup.heading.3.markdown",
+    "markup.heading.4.markdown",
+    "markup.heading.5.markdown",
+    "markup.heading.6.markdown",
 ];
 
-/// What a bullet is shown as.
-const BULLET: &str = "•";
+/// What the bullets of lists nested in each other are shown as, from the outermost, in turn.
+const BULLETS: [&str; 3] = ["•", "‣", "–"];
 
 /// What the `>` of a block quote is shown as.
 const QUOTE_BAR: &str = "▎";
@@ -387,9 +388,13 @@ impl<'a, 't> Renderer<'a, 't> {
                 ConcealStyle::Scope("markup.list.numbered"),
             );
         } else {
+            let depth = iter::successors(item.parent(), |node| node.parent())
+                .filter(|node| node.kind() == "list")
+                .count();
+            let bullet = BULLETS[depth.saturating_sub(1) % BULLETS.len()];
             self.conceal(
                 bytes.start..bytes.start + 1,
-                Replacement::from(BULLET),
+                Replacement::from(bullet),
                 ConcealStyle::Scope("markup.list.unnumbered"),
             );
         }

@@ -377,11 +377,11 @@ fn build_theme_values(
         highlights.push(style);
     }
 
-    // headings the theme leaves to `markup.heading` get a color of their level
+    // the headings of Markdown the theme leaves to `markup.heading` get a color of their level
     let heading = styles.get("markup.heading").copied().unwrap_or_default();
     for level in 1..=6 {
-        let name = format!("markup.heading.{level}");
-        if !styles.contains_key(&name) {
+        let name = format!("markup.heading.{level}.markdown");
+        if !styles.contains_key(&name) && !styles.contains_key(&format!("markup.heading.{level}")) {
             let style = heading.fg(palette.heading_color(level, &own_colors));
             styles.insert(name.clone(), style);
             scopes.push(name);
@@ -564,8 +564,8 @@ impl ThemePalette {
         Self { palette: default }
     }
 
-    /// The color of headings of `level`, like Typst's in a vault: red, yellow, green, cyan and
-    /// blue for deeper ones. They are the theme's own colors of those names in `own_colors`, like
+    /// The color of Markdown's headings of `level`, like those of a Typst vault's pages: red,
+    /// yellow, green, cyan and blue for deeper ones. They are the theme's own colors of those names in `own_colors`, like
     /// `red`, `red0` or `aqua` for cyan, or else the terminal's.
     fn heading_color(&self, level: usize, own_colors: &[String]) -> Color {
         const LEVELS: [(&[&str], Color); 5] = [
@@ -755,7 +755,7 @@ mod tests {
             "##,
         )
         .unwrap();
-        let heading = |level| theme.get(&format!("markup.heading.{level}"));
+        let heading = |level| theme.get(&format!("markup.heading.{level}.markdown"));
         // the palette's color of the level's name, with the lowest number, over `markup.heading`
         let bold = Style::default().add_modifier(Modifier::BOLD);
         assert_eq!(heading(1), bold.fg(Color::Rgb(0xcc, 0x24, 0x1d)));
@@ -767,6 +767,12 @@ mod tests {
         // the terminal's color when the palette has none of the name
         assert_eq!(heading(5), bold.fg(Color::Blue));
         assert_eq!(heading(6), bold.fg(Color::Blue));
+        // only Markdown's headings: those of other languages stay `markup.heading`
+        assert_eq!(theme.try_get_exact("markup.heading.1"), None);
+        let heading = Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD);
+        assert_eq!(theme.get("markup.heading.1"), heading);
     }
 
     #[test]
