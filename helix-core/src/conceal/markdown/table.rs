@@ -7,6 +7,7 @@
 //! rows of their own below their row.
 
 use std::borrow::Cow;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter;
 use std::ops::Range;
 
@@ -15,7 +16,7 @@ use tree_house::tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
 use super::{bytes_of, Renderer};
-use crate::conceal::{RowStyle, VirtualRow};
+use crate::conceal::{Cached, RowStyle, TableWidths, VirtualRow};
 use crate::graphemes::grapheme_width;
 use crate::text_annotations::{Conceal, ConcealStyle, Replacement};
 
@@ -58,22 +59,31 @@ struct Unit {
     space: bool,
 }
 
-/// The content of a cell: its chars, without the whitespace around them, and its units.
+/// The content of a cell, without the whitespace around it: the hash of its text, and its chars
+/// and units if its row is rendered.
 struct Cell {
+    key: u64,
     content: Range<usize>,
     units: Vec<Unit>,
 }
 
-impl Cell {
-    fn width(&self) -> usize {
-        self.units.iter().map(|unit| unit.width).sum()
-    }
+fn units_width(units: &[Unit]) -> usize {
+    units.iter().map(|unit| unit.width).sum()
 }
 
 impl Renderer<'_, '_> {
-    /// Shows the rows of the pipe table `table` with their columns aligned and borders around
-    /// them, its cells wrapped to fit `wrap` columns if the text soft-wraps there.
-    pub(in crate::conceal) fn table(&mut self, table: &Node, wrap: Option<u16>) {
+    /// Shows the rows of the pipe table `table` in the chars `window` with their columns aligned
+    /// and borders around them, its cells wrapped to fit `wrap` columns if the text soft-wraps
+    /// there. The widths of its columns come from `table_widths`, or else those of its cells, and
+    /// those of the cells not known yet from the conceals that `measure` renders of their chars.
+    pub(in crate::conceal) fn table(
+        &mut self,
+        table: &Node,
+        wrap: Option<u16>,
+        window: Range<usize>,
+        table_widths: &mut TableWidths,
+        measure: impl FnOnce(Range<usize>) -> Vec<Cached>,
+    ) {
         let text = self.text;
         let rows: Vec<_> = table
             .children()
@@ -89,24 +99,34 @@ impl Renderer<'_, '_> {
         };
         let first_line = text.byte_to_line(first.start_byte() as usize);
         let last_line = text.byte_to_line(last.start_byte() as usize);
-        let around = first_line.saturating_sub(1)..(last_line + 2).min(text.len_lines());
-        self.rendered.table_lines.push(around);
+        let window_lines = text.char_to_line(window.start)..=text.char_to_line(window.end);
+        let in_window =
+            |row: &Node| window_lines.contains(&text.byte_to_line(row.start_byte() as usize));
 
         // the conceals of the cells, which are drawn as their replacements
-        let table_chars = text.byte_to_char(first.start_byte() as usize)
-            ..text.byte_to_char(last.end_byte() as usize);
-        let mut inline: Vec<Conceal> = self
-            .rendered
-            .conceals
-            .iter()
-            .map(|cached| cached.conceal.clone())
-            .filter(|conceal| table_chars.start <= conceal.start && conceal.end <= table_chars.end)
-            .collect();
-        inline.sort_by_key(|conceal| (conceal.start, conceal.end));
+        let inline = |conceals: &[Cached]| {
+            let mut inline: Vec<Conceal> = conceals
+                .iter()
+                .map(|cached| cached.conceal.clone())
+                .collect();
+            inline.sort_by_key(|conceal| (conceal.start, conceal.end));
+            inline
+        };
+        let window_inline = inline(&self.rendered.conceals);
 
+        let table_key = {
+            let mut hasher = DefaultHasher::new();
+            for chunk in text.byte_slice(bytes_of(table)).chunks() {
+                hasher.write(chunk.as_bytes());
+            }
+            hasher.finish()
+        };
+        let known = table_widths.columns.contains_key(&table_key);
+        let cell_widths = &mut table_widths.cells;
         let mut aligns = Vec::new();
-        let mut widths: Vec<usize> = Vec::new();
         let mut row_cells = Vec::with_capacity(rows.len());
+        // the cells outside the window whose width is not known yet
+        let mut unknown: Vec<(u64, Range<usize>)> = Vec::new();
         for row in &rows {
             if row.kind() == "pipe_table_delimiter_row" {
                 aligns = row
@@ -117,23 +137,65 @@ impl Renderer<'_, '_> {
                 row_cells.push(Vec::new());
                 continue;
             }
+            // the rows outside the window are only measured, and only once for a tree
+            let rendered = in_window(row);
+            if !rendered && known {
+                row_cells.push(Vec::new());
+                continue;
+            }
             let cells: Vec<_> = row
                 .children()
                 .filter(|cell| cell.kind() == "pipe_table_cell")
                 .map(|cell| {
-                    let content = self.content(&cell);
-                    let units = self.units(content.clone(), &inline);
-                    Cell { content, units }
+                    let (bytes, key) = self.content(&cell);
+                    let chars = || text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end);
+                    if rendered {
+                        let content = chars();
+                        let units = self.units(content.clone(), &window_inline);
+                        cell_widths.insert(key, units_width(&units));
+                        Cell {
+                            key,
+                            content,
+                            units,
+                        }
+                    } else {
+                        if !cell_widths.contains_key(&key) {
+                            unknown.push((key, chars()));
+                        }
+                        Cell {
+                            key,
+                            content: 0..0,
+                            units: Vec::new(),
+                        }
+                    }
                 })
                 .collect();
-            for (column, cell) in cells.iter().enumerate() {
-                match widths.get_mut(column) {
-                    Some(widest) => *widest = (*widest).max(cell.width()),
-                    None => widths.push(cell.width()),
-                }
-            }
             row_cells.push(cells);
         }
+        if let (Some((_, first)), Some((_, last))) = (unknown.first(), unknown.last()) {
+            let measured = inline(&measure(first.start..last.end));
+            for (key, content) in unknown {
+                let units = self.units(content, &measured);
+                cell_widths.insert(key, units_width(&units));
+            }
+        }
+        let mut widths = match table_widths.columns.get(&table_key) {
+            Some(widths) => widths.clone(),
+            None => {
+                let mut widths: Vec<usize> = Vec::new();
+                for cells in &row_cells {
+                    for (column, cell) in cells.iter().enumerate() {
+                        let width = table_widths.cells.get(&cell.key).copied().unwrap_or(0);
+                        match widths.get_mut(column) {
+                            Some(widest) => *widest = (*widest).max(width),
+                            None => widths.push(width),
+                        }
+                    }
+                }
+                table_widths.columns.insert(table_key, widths.clone());
+                widths
+            }
+        };
         widths.resize(widths.len().max(aligns.len()), 0);
         for width in &mut widths {
             *width = (*width).max(1);
@@ -147,6 +209,9 @@ impl Renderer<'_, '_> {
         let align = |column: usize| aligns.get(column).copied().unwrap_or(Align::None);
 
         for (row, cells) in rows.iter().zip(&row_cells) {
+            if !in_window(row) {
+                continue;
+            }
             let bytes = bytes_of(row);
             if row.kind() == "pipe_table_delimiter_row" {
                 let border = border(&widths, DELIMITER, &aligns);
@@ -245,14 +310,16 @@ impl Renderer<'_, '_> {
         }
     }
 
-    /// The chars of the content of a cell, without the whitespace around it.
-    fn content(&self, cell: &Node) -> Range<usize> {
-        let text = self.text;
+    /// The bytes of the content of a cell, without the whitespace around it, and a hash of its
+    /// text.
+    fn content(&self, cell: &Node) -> (Range<usize>, u64) {
         let bytes = bytes_of(cell);
         let written = self.slice(bytes.clone());
+        let content = written.trim();
         let start = bytes.start + (written.len() - written.trim_start().len());
-        let end = bytes.start + written.trim_end().len();
-        text.byte_to_char(start)..text.byte_to_char(end.max(start))
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        (start..start + content.len(), hasher.finish())
     }
 
     /// The units of the chars `range` as they are drawn, with the conceals in `inline`.

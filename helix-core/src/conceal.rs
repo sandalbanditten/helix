@@ -253,9 +253,19 @@ pub struct LineRows {
     pub below: Vec<VirtualRow>,
 }
 
-/// The most lines a window of lines whose conceals are computed together grows to, to take in
-/// the whole of its tables.
-const MAX_TABLE_LINES: usize = 2048;
+/// The widths of tables as they are drawn.
+#[derive(Debug, Default)]
+struct TableWidths {
+    /// The widths of cells by a hash of their text, which alone decides them. They outlive edits,
+    /// so a table is measured whole only once: measuring it takes a query of each of its cells,
+    /// which are layers of their own.
+    cells: HashMap<u64, usize>,
+    /// The widths of the columns of tables by a hash of their text, which outlive edits too.
+    columns: HashMap<u64, Vec<usize>>,
+}
+
+/// The most cell widths kept, past which they are measured anew.
+const MAX_CELL_WIDTHS: usize = 1 << 16;
 
 /// What the Markdown of a window of lines is rendered as.
 #[derive(Debug, Default)]
@@ -267,8 +277,6 @@ struct Rendered<'t> {
     rows: Vec<(usize, bool, VirtualRow)>,
     /// The tables to lay out once the conceals of their cells are known.
     tables: Vec<Node<'t>>,
-    /// The lines of the tables laid out, with the lines around them.
-    table_lines: Vec<ops::Range<usize>>,
 }
 
 /// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
@@ -284,6 +292,8 @@ pub struct ConcealCache {
     rows: HashMap<usize, LineRows>,
     /// What was concealed in `lines`.
     options: ConcealOptions,
+    /// The widths of tables measured so far.
+    table_widths: TableWidths,
 }
 
 impl ConcealCache {
@@ -291,6 +301,9 @@ impl ConcealCache {
         self.lines.clear();
         self.decorations.clear();
         self.rows.clear();
+        if self.table_widths.cells.len() > MAX_CELL_WIDTHS {
+            self.table_widths = TableWidths::default();
+        }
     }
 
     /// The window of lines around `line` whose conceals are computed together, leaving out lines
@@ -343,6 +356,7 @@ impl<'a> SyntaxConceals<'a> {
         let mut cache_mut = cache.borrow_mut();
         if cache_mut.options != options {
             cache_mut.clear();
+            cache_mut.table_widths = TableWidths::default();
             cache_mut.options = options;
         }
         drop(cache_mut);
@@ -357,32 +371,17 @@ impl<'a> SyntaxConceals<'a> {
     }
 
     /// Computes the conceals and decorations of the lines `lines` into `cache`.
-    fn fetch(&self, cache: &mut ConcealCache, mut lines: ops::Range<usize>) {
+    fn fetch(&self, cache: &mut ConcealCache, lines: ops::Range<usize>) {
         let text = self.text;
-        let chars = |lines: &ops::Range<usize>| {
-            let end = if lines.end < text.len_lines() {
-                text.line_to_char(lines.end)
-            } else {
-                text.len_chars()
-            };
-            text.line_to_char(lines.start)..end
+        let end = if lines.end < text.len_lines() {
+            text.line_to_char(lines.end)
+        } else {
+            text.len_chars()
         };
-        // the window takes in the whole of its tables, whose columns are as wide as their widest
-        // cell, and the lines around them, where their borders go
-        let mut rendered = self.render(chars(&lines));
-        loop {
-            let wanted = rendered
-                .table_lines
-                .iter()
-                .fold(lines.clone(), |lines, table| {
-                    lines.start.min(table.start)..lines.end.max(table.end)
-                });
-            if wanted == lines || wanted.len() > MAX_TABLE_LINES {
-                break;
-            }
-            lines = wanted;
-            rendered = self.render(chars(&lines));
-        }
+        let rendered = self.render(
+            text.line_to_char(lines.start)..end,
+            Some(&mut cache.table_widths),
+        );
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
             cache.decorations.remove(&line);
@@ -415,8 +414,12 @@ impl<'a> SyntaxConceals<'a> {
     }
 
     /// The conceals of the chars `range`, which covers whole lines, sorted and disjoint, and the
-    /// decorations of rendered Markdown.
-    fn render(&self, range: ops::Range<usize>) -> Rendered<'a> {
+    /// decorations of rendered Markdown. Its tables are laid out with `table_widths`, if given.
+    fn render(
+        &self,
+        range: ops::Range<usize>,
+        table_widths: Option<&mut TableWidths>,
+    ) -> Rendered<'a> {
         let text = self.text;
         let bytes = text.char_to_byte(range.start) as u32..text.char_to_byte(range.end) as u32;
         let mut noconceal = Vec::new();
@@ -465,18 +468,25 @@ impl<'a> SyntaxConceals<'a> {
             });
         }
 
-        // tables, measured with the conceals of their cells
-        if let Some(options) = self.options.markdown {
+        // tables, measured with the conceals of their cells, or those of the widths known
+        if let (Some(options), Some(table_widths)) = (self.options.markdown, table_widths) {
+            let measure = |chars: ops::Range<usize>| self.render(chars, None).conceals;
             for table in std::mem::take(&mut rendered.tables) {
-                markdown::Renderer::new(text, &self.loader, options, &mut rendered)
-                    .table(&table, self.options.wrap);
+                let mut renderer =
+                    markdown::Renderer::new(text, &self.loader, options, &mut rendered);
+                renderer.table(
+                    &table,
+                    self.options.wrap,
+                    range.clone(),
+                    table_widths,
+                    measure,
+                );
             }
         }
         let Rendered {
             mut conceals,
             decorations,
             rows,
-            table_lines,
             ..
         } = rendered;
 
@@ -512,7 +522,6 @@ impl<'a> SyntaxConceals<'a> {
             decorations,
             rows,
             tables: Vec::new(),
-            table_lines,
         }
     }
 
