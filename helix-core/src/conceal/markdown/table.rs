@@ -16,7 +16,7 @@ use tree_house::tree_sitter::Node;
 use unicode_width::UnicodeWidthStr;
 
 use super::{bytes_of, Renderer};
-use crate::conceal::{Cached, RowStyle, TableWidths, VirtualRow};
+use crate::conceal::{Cached, Reveal, RowStyle, TableWidths, VirtualRow};
 use crate::graphemes::grapheme_width;
 use crate::text_annotations::{Conceal, ConcealStyle, Replacement};
 
@@ -228,6 +228,15 @@ impl Renderer<'_, '_> {
             let height = lines.iter().map(Vec::len).max().unwrap_or(1).max(1);
             // a wrapped row is revealed as a whole, its cells being on several rows
             let wrapped = (height > 1).then(|| row_chars.clone());
+            // and so are the conceals in its cells, some of which are hidden in the borders
+            if let Some(row) = &wrapped {
+                let in_row = |cached: &&mut Cached| {
+                    row.start <= cached.conceal.start && cached.conceal.end <= row.end
+                };
+                for cached in self.rendered.conceals.iter_mut().filter(in_row) {
+                    cached.reveal = Reveal::Element(row.clone());
+                }
+            }
 
             // everything but what the cells show on the row is concealed, from one cell to the
             // next, and is revealed with the cells on both sides of it

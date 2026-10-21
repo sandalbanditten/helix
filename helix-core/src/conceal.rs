@@ -1017,6 +1017,17 @@ mod test {
             rows(Some((&selection, ConcealReveal::Line))),
             Vec::<String>::new()
         );
+        // with the conceals in its cells
+        assert_eq!(
+            render_with(
+                "markdown",
+                source,
+                Some((&selection, ConcealReveal::Line)),
+                options
+            ),
+            "│ Name │ Description  │\n├──────┼──────────────┤\n\
+             | hx | A post-modern modal **text** editor |\n└──────┴──────────────┘"
+        );
     }
 
     #[test]
