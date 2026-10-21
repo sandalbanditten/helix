@@ -496,7 +496,7 @@ pub fn char_idx_at_visual_block_offset(
 mod test {
     use super::*;
     use crate::fold::{Fold, Folds};
-    use crate::text_annotations::{Conceal, ConcealSource, InlineAnnotation};
+    use crate::text_annotations::{Conceal, ConcealSource, InlineAnnotation, Replacement};
     use crate::Rope;
 
     #[test]
@@ -1081,6 +1081,36 @@ mod test {
         );
         assert_eq!(char_at(0, 1, 3), (24, 0), "down");
         assert_eq!(char_at(24, -1, 4), (8, 0), "up");
+    }
+
+    #[test]
+    fn test_positions_across_hidden_conceals() {
+        // `**` is hidden and so is the line with the fence
+        let text = Rope::from("**a** b\n```\nc d\n");
+        let slice = text.slice(..);
+        let text_fmt = TextFormat::default();
+        let conceals = [
+            Conceal::new(0, 2, Replacement::Hidden),
+            Conceal::new(3, 5, Replacement::Hidden),
+            Conceal::new(8, 12, Replacement::Hidden),
+        ];
+        let mut annotations = TextAnnotations::default();
+        annotations.add_conceals(&conceals[..]);
+
+        let offset =
+            |anchor, pos| visual_offset_from_block(slice, anchor, pos, &text_fmt, &annotations);
+        assert_eq!(offset(0, 2), (Position::new(0, 0), 0));
+        assert_eq!(offset(0, 6), (Position::new(0, 2), 0));
+        assert_eq!(offset(0, 14), (Position::new(1, 2), 0));
+        // a block starting on the hidden line starts with it
+        assert_eq!(offset(9, 14), (Position::new(0, 2), 8));
+
+        let char_at = |anchor, rows, col| {
+            char_idx_at_visual_offset(slice, anchor, rows, col, &text_fmt, &annotations)
+        };
+        assert_eq!(char_at(0, 0, 0), (2, 0), "hidden text is passed over");
+        assert_eq!(char_at(0, 1, 0), (12, 0), "the hidden line is passed over");
+        assert_eq!(char_at(12, -1, 2), (6, 0), "up across the hidden line");
     }
 
     #[test]

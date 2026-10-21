@@ -245,12 +245,15 @@ impl<'a> SyntaxConceals<'a> {
             if concealed.contains(char_is_line_ending) {
                 continue;
             }
-            let Some(replacement) = table.resolve(&concealed).filter(|replacement| {
-                is_visible(match replacement {
-                    Replacement::Text(text) => text,
-                    Replacement::Fill(g) => g,
-                })
-            }) else {
+            let Some(replacement) =
+                table
+                    .resolve(&concealed)
+                    .filter(|replacement| match replacement {
+                        Replacement::Text(text) => is_visible(text),
+                        Replacement::Fill(g) => is_visible(g),
+                        Replacement::Hidden => true,
+                    })
+            else {
                 continue;
             };
             let start = text.byte_to_char(bytes.start);
@@ -355,6 +358,7 @@ mod test {
                 rendered.extend(slice.slice(pos..conceal.start).chars());
                 match conceal.replacement {
                     Replacement::Text(text) => rendered.push_str(&text),
+                    Replacement::Hidden => {}
                     Replacement::Fill(g) => rendered.push_str(&format!("{g}…")),
                 }
                 pos = conceal.end;

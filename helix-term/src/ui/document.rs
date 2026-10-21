@@ -5,7 +5,7 @@ use helix_core::doc_formatter::{DocumentFormatter, FormattedGrapheme, GraphemeSo
 use helix_core::graphemes::{grapheme_width, Grapheme};
 use helix_core::str_utils::char_to_byte_idx;
 use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
-use helix_core::text_annotations::TextAnnotations;
+use helix_core::text_annotations::{ConcealStyle, TextAnnotations};
 use helix_core::unicode::segmentation::UnicodeSegmentation;
 use helix_core::{anchor_row, Position, RopeSlice, Syntax};
 use helix_stdx::rope::RopeSliceExt;
@@ -118,6 +118,10 @@ pub fn render_text<'a>(
         let Some(mut grapheme) = formatter.next() else {
             break;
         };
+        // a hidden line draws nothing, and its row belongs to the line after it
+        if grapheme.source.is_hidden_line() {
+            continue;
+        }
         let is_row_start = starts_row;
         if is_row_start {
             row_line = grapheme.line_idx;
@@ -192,19 +196,19 @@ pub fn render_text<'a>(
                 syntax_style: renderer.fold_style,
                 overlay_style: overlay_highlighter.style,
             },
-            // a rule is drawn like the indent guides
-            GraphemeSource::Conceal { fill: true, .. } => GraphemeStyle {
-                syntax_style: renderer.indent_guide_style,
+            GraphemeSource::Conceal { style, .. } => GraphemeStyle {
+                syntax_style: match style {
+                    // a rule or a table's border is drawn like the indent guides
+                    ConcealStyle::Guide => renderer.indent_guide_style,
+                    ConcealStyle::Text => syntax_highlighter
+                        .style
+                        .patch(span_styler.style_at(grapheme.char_idx))
+                        .patch(renderer.conceal_style),
+                    ConcealStyle::Scope(scope) => renderer.text_style.patch(theme.get(scope)),
+                },
                 overlay_style: overlay_highlighter.style,
             },
-            // a conceal is styled like the start of the text it conceals
-            GraphemeSource::Conceal { .. } => GraphemeStyle {
-                syntax_style: syntax_highlighter
-                    .style
-                    .patch(span_styler.style_at(grapheme.char_idx))
-                    .patch(renderer.conceal_style),
-                overlay_style: overlay_highlighter.style,
-            },
+            GraphemeSource::HiddenLine { .. } => unreachable!("hidden lines are skipped"),
             GraphemeSource::Document { .. } => GraphemeStyle {
                 syntax_style: syntax_highlighter
                     .style

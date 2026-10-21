@@ -556,6 +556,67 @@ fn conceal_placeholders() {
 }
 
 #[test]
+fn hidden_conceals() {
+    // hidden text takes no column
+    let text = "**bold** x\n";
+    let conceals = [
+        Conceal::new(0, 2, Replacement::Hidden),
+        Conceal::new(6, 8, Replacement::Hidden),
+    ];
+    for softwrap in [false, true] {
+        assert_eq!(concealed_text(text, softwrap, &conceals, 0), "bold x \n ");
+    }
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .map(|g| (g.char_idx, g.visual_pos.col, g.width()))
+            .collect();
+    assert_eq!(graphemes[..3], [(0, 0, 0), (2, 0, 1), (3, 1, 1)]);
+    assert_eq!(graphemes[5..7], [(6, 4, 0), (8, 4, 1)]);
+}
+
+#[test]
+fn hidden_lines() {
+    // a hidden line has no row, and the row after it belongs to the next line
+    let text = "a\n```\nb\n";
+    let conceals = [Conceal::new(2, 6, Replacement::Hidden)];
+    for softwrap in [false, true] {
+        assert_eq!(concealed_text(text, softwrap, &conceals, 0), "a \nb \n ");
+        // a formatter starting on the hidden line starts with it
+        assert_eq!(concealed_text(text, softwrap, &conceals, 3), "b \n ");
+    }
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals[..]);
+    let text_fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &text_fmt, &annotations, 0)
+            .map(|g| {
+                let hidden = g.source.is_hidden_line();
+                (g.char_idx, g.line_idx, g.visual_pos, hidden)
+            })
+            .collect();
+    assert_eq!(
+        graphemes[2..4],
+        [
+            (2, 1, Position::new(1, 0), true),
+            (6, 2, Position::new(1, 0), false)
+        ]
+    );
+    // the last line can be hidden too
+    let conceals = [Conceal::new(2, 6, Replacement::Hidden)];
+    assert_eq!(concealed_text("a\n```\n", false, &conceals, 0), "a \n ");
+    // a soft-wrapped line after a hidden one keeps its own indentation
+    let text = "x\n```\n  some long words to wrap\n";
+    let conceals = [Conceal::new(2, 6, Replacement::Hidden)];
+    assert_eq!(
+        concealed_text(text, true, &conceals, 0),
+        concealed_text("x\n  some long words to wrap\n", true, &[], 0)
+    );
+}
+
+#[test]
 fn conceal_and_annotations() {
     let inline = [
         InlineAnnotation::new(3, "A"),
