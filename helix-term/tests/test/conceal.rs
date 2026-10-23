@@ -432,3 +432,31 @@ async fn markdown_tables_wrap_to_fit() -> anyhow::Result<()> {
     };
     test_key_sequence(&mut app, Some("<esc>"), Some(&wrapped), false).await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_strikethrough_across_spaces() -> anyhow::Result<()> {
+    let mut app = markdown_app(
+        "foo.md",
+        "#[x|]#\nsome ~~two words~~ here\n",
+        ConcealConfig::default(),
+        MarkdownConfig::default(),
+    )?;
+    // the line through the space between the words is in the words' color
+    let struck = |app: &Application| {
+        let row = row_cells(app, "two words");
+        let start = row
+            .windows(3)
+            .position(|cells| {
+                cells
+                    .iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .eq(["t", "w", "o"])
+            })
+            .unwrap();
+        let (word, space) = (&row[start], &row[start + 3]);
+        assert_eq!(space.symbol.as_str(), " ");
+        assert_eq!(space.fg, word.fg);
+        assert_eq!(space.modifier, word.modifier);
+    };
+    test_key_sequence(&mut app, Some("<esc>"), Some(&struck), false).await
+}

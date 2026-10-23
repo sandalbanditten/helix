@@ -416,13 +416,7 @@ impl<'a> TextRenderer<'a> {
         let cut_off_start = self.offset.col.saturating_sub(position.col);
         let is_whitespace = grapheme.is_whitespace();
 
-        // TODO is it correct to apply the whitespace style to all unicode white spaces?
         let mut style = grapheme_style.syntax_style;
-        if is_whitespace {
-            style = style.patch(self.whitespace_style);
-        }
-        style = style.patch(grapheme_style.overlay_style);
-
         let width = grapheme.width();
         let is_placeholder = grapheme.source.is_placeholder();
         let mut is_tab = false;
@@ -447,6 +441,13 @@ impl<'a> TextRenderer<'a> {
             Grapheme::Other { ref g } => g,
             Grapheme::Newline => &self.newline,
         };
+        // TODO is it correct to apply the whitespace style to all unicode white spaces?
+        // Only a marker drawn for whitespace is styled as such: a blank keeps the style of its
+        // text, whose strikethrough or underline runs across it in the text's color.
+        if is_whitespace && !grapheme.chars().all(char::is_whitespace) {
+            style = style.patch(self.whitespace_style);
+        }
+        style = style.patch(grapheme_style.overlay_style);
 
         let in_bounds = self.column_in_bounds(position.col, width);
 
