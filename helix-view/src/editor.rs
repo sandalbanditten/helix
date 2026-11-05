@@ -2809,26 +2809,29 @@ impl Editor {
         Ok(doc_id)
     }
 
-    /// Shows `output` in place of the text of the pager document `doc_id`, the way
-    /// [`Document::page`] does, with the views showing it at the same share of the text.
-    pub fn repage(&mut self, doc_id: DocumentId, output: &str) {
+    /// Shows `text` with `page`, as [`pager::page`](crate::pager::page) reads terminal output, in
+    /// place of the text of the pager document `doc_id`, with the views showing it at the same
+    /// share of the text. A document showing that already stays as it is.
+    pub fn repage(&mut self, doc_id: DocumentId, text: String, page: crate::pager::Page) {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
             return;
         };
-        let text = doc.text().slice(..);
-        let len = text.len_lines();
+        let shown = doc.text().slice(..);
+        let len = shown.len_lines();
         let lines: Vec<_> = self
             .tree
             .views()
             .filter(|(view, _)| view.doc == doc_id)
             .map(|(view, _)| {
                 let first =
-                    text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars()));
-                let cursor = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+                    shown.char_to_line(doc.view_offset(view.id).anchor.min(shown.len_chars()));
+                let cursor = shown.char_to_line(doc.selection(view.id).primary().cursor(shown));
                 (view.id, first, cursor)
             })
             .collect();
-        doc.repage(output);
+        if !doc.repage(text, page) {
+            return;
+        }
         self.reset_history(doc_id);
         let doc = doc_mut!(self, &doc_id);
         let text = doc.text().clone();

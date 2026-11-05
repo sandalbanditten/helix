@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use helix_term::application::Application;
-use helix_view::{doc, graphics::Color};
+use helix_view::{doc, graphics::Color, pager};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -135,7 +135,8 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     // The cursor halfway, then the page formatted narrower, in twice the lines.
     session.keys("100gg").await?;
     let doc = doc!(session.app.editor).id();
-    session.app.editor.repage(doc, &page(400));
+    let (text, formatted) = pager::page(&page(400));
+    session.app.editor.repage(doc, text, formatted);
     session.keys("").await?;
     let (view, doc) = helix_view::current_ref!(session.app.editor);
     let text = doc.text().slice(..);
@@ -144,6 +145,22 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     assert!((195..=202).contains(&cursor), "{cursor}");
     assert!(!doc.is_modified());
     assert!(!doc.page.as_ref().unwrap().man.is_empty());
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_formatted_the_same_stay_as_they_are() -> anyhow::Result<()> {
+    let mut session = pager(&output_file()?)?;
+    session.keys("jwl").await?;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    let (id, version) = (doc.id(), doc.version());
+    let selection = doc.selection(view.id).clone();
+    let (text, formatted) = pager::page(OUTPUT);
+    session.app.editor.repage(id, text, formatted);
+    session.keys("").await?;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    assert_eq!(doc.version(), version);
+    assert_eq!(doc.selection(view.id), &selection);
     session.quit().await
 }
 

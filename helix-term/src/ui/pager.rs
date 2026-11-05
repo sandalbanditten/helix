@@ -2,7 +2,10 @@
 
 use std::{collections::HashMap, process::Stdio};
 
-use helix_view::{pager::ManPage, DocumentId, Editor};
+use helix_view::{
+    pager::{self, ManPage},
+    DocumentId, Editor,
+};
 
 use crate::job;
 
@@ -40,7 +43,7 @@ pub fn fit_man_pages(editor: &mut Editor) {
             move || {
                 // `MANPAGER=cat` keeps `man` from starting the pager again, and
                 // `MAN_KEEP_FORMATTING` keeps its overstrikes in output to a pipe.
-                std::process::Command::new("man")
+                let output = std::process::Command::new("man")
                     .args(&args)
                     .env("MANPAGER", "cat")
                     .env("MANWIDTH", width.to_string())
@@ -48,13 +51,13 @@ pub fn fit_man_pages(editor: &mut Editor) {
                     .stdin(Stdio::null())
                     .stderr(Stdio::null())
                     .output()
-            },
-            move |editor, _, output| {
-                let page = output
                     .ok()
-                    .filter(|output| output.status.success() && !output.stdout.is_empty());
-                if let Some(page) = page {
-                    editor.repage(doc, &String::from_utf8_lossy(&page.stdout));
+                    .filter(|output| output.status.success() && !output.stdout.is_empty())?;
+                Some(pager::page(&String::from_utf8_lossy(&output.stdout)))
+            },
+            move |editor, _, page| {
+                if let Some((text, page)) = page {
+                    editor.repage(doc, text, page);
                 }
                 // Not again for this width, even if `man` failed.
                 if let Some(page) = man_page_mut(editor, doc) {

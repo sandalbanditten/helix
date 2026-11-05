@@ -227,6 +227,20 @@ fn overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
+/// The text terminal output `output` shows, and its page: the styles of its chars, as [`format`]
+/// reads them, and the parts of a man page.
+pub fn page(output: &str) -> (String, Page) {
+    let (text, mut page) = if is_formatted(output) {
+        format(output)
+    } else {
+        (output.to_owned(), Page::default())
+    };
+    if is_man_page(&text) {
+        page.man = man_parts(&text, &page.styles);
+    }
+    (text, page)
+}
+
 /// Whether `output` has formatting for [`format`] to take out.
 pub fn is_formatted(output: &str) -> bool {
     output.contains(['\x1b', '\x08'])
