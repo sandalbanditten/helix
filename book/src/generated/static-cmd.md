@@ -129,10 +129,10 @@
 | `select_mode` | Enter selection extend mode | normal: `` v `` |
 | `block_select_mode` | Enter block selection mode | normal: `` <A-v> ``, select: `` <A-v> `` |
 | `exit_select_mode` | Exit selection mode | select: `` <esc> `` |
-| `terminal` | Open a terminal | normal: `` <space>t ``, select: `` <space>t `` |
-| `terminal_in_current_buffer_directory` | Open a terminal at current buffer's directory | normal: `` <space>T ``, select: `` <space>T `` |
-| `terminal_hsplit` | Open a terminal (hsplit) | normal: `` <C-w>t ``, `` <space>wt ``, select: `` <C-w>t ``, `` <space>wt `` |
-| `terminal_vsplit` | Open a terminal (vsplit) | normal: `` <C-w>T ``, `` <space>wT ``, select: `` <C-w>T ``, `` <space>wT `` |
+| `terminal` | Open terminal | normal: `` <space>t ``, select: `` <space>t `` |
+| `terminal_in_current_buffer_directory` | Open terminal at current buffer's directory | normal: `` <space>T ``, select: `` <space>T `` |
+| `terminal_hsplit` | Open terminal (hsplit) | normal: `` <C-w>t ``, `` <space>wt ``, select: `` <C-w>t ``, `` <space>wt `` |
+| `terminal_vsplit` | Open terminal (vsplit) | normal: `` <C-w>T ``, `` <space>wT ``, select: `` <C-w>T ``, `` <space>wT `` |
 | `goto_definition` | Goto definition | normal: `` gd ``, select: `` gd `` |
 | `goto_declaration` | Goto declaration | normal: `` gD ``, select: `` gD `` |
 | `add_newline_above` | Add newline above | normal: `` [<space> ``, select: `` [<space> `` |

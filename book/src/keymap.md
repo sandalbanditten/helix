@@ -176,7 +176,7 @@ These sub-modes are accessible from normal mode and typically switch back to nor
 | Key      | Description                                        | Command        |
 | -----    | -----------                                        | -------        |
 | `v`      | Enter [select (extend) mode](#select--extend-mode) | `select_mode`  |
-| `Alt-v`  | Enter [block select mode](#block-select-mode)     | `block_select_mode` |
+| `Alt-v`  | Enter [block select mode](#block-select-mode)      | `block_select_mode` |
 | `g`      | Enter [goto mode](#goto-mode)                      | N/A            |
 | `m`      | Enter [match mode](#match-mode)                    | N/A            |
 | `:`      | Enter command mode                                 | `command_mode` |
@@ -278,8 +278,8 @@ This layer is similar to Vim keybindings as Kakoune does not support windows.
 | `v`, `Ctrl-v`          | Vertical right split                                 | `vsplit`          |
 | `s`, `Ctrl-s`          | Horizontal bottom split                              | `hsplit`          |
 | `Ctrl-t`               | Transpose the two adjacent splits                    | `transpose_view`  |
-| `t`                    | Open a [terminal](./terminal.md) in a horizontal split | `terminal_hsplit` |
-| `T`                    | Open a [terminal](./terminal.md) in a vertical split | `terminal_vsplit` |
+| `t`                    | Open terminal in horizontal split                    | `terminal_hsplit` |
+| `T`                    | Open terminal in vertical split                      | `terminal_vsplit` |
 | `f`                    | Go to files/URLs in selections in horizontal splits  | `goto_file_hsplit`|
 | `F`                    | Go to files/URLs in selections in vertical splits    | `goto_file_vsplit`|
 | `h`, `Ctrl-h`, `Left`  | Move to left split                                   | `jump_view_left`  |
@@ -334,8 +334,8 @@ This layer is a kludge of mappings, mostly pickers.
 | `Y`     | Yank main selection to clipboard                                        | `yank_main_selection_to_clipboard`         |
 | `R`     | Replace selections by clipboard contents                                | `replace_selections_with_clipboard`        |
 | `/`     | Global search in workspace folder                                       | `global_search`                            |
-| `t`     | Open a [terminal](./terminal.md)                                        | `terminal`                                 |
-| `T`     | Open a [terminal](./terminal.md) at current buffer's directory          | `terminal_in_current_buffer_directory`     |
+| `t`     | Open terminal                                                           | `terminal`                                 |
+| `T`     | Open terminal at current buffer's directory                             | `terminal_in_current_buffer_directory`     |
 | `?`     | Open command palette                                                    | `command_palette`                          |
 
 > 💡 Global search displays results in a fuzzy picker, use `Space + '` to bring it back up after opening a file.

@@ -842,14 +842,12 @@ scrollback = 100000
 
 ### `[editor.debugger]` Section
 
-The external terminal the debugger runs programs in, when a debug adapter asks for one. It
-defaults to a split of tmux or WezTerm when Helix runs in one, and to Windows Terminal or `conhost`
-on Windows.
+Options for the debugger.
 
-| Key | Description |
-| --- | --- |
-| `terminal.command` | The terminal emulator to run |
-| `terminal.args` | Its arguments, before the program's |
+| Key | Description | Default |
+| --- | --- | --- |
+| `terminal.command` | The external terminal debug adapters run programs in | A split of tmux or WezTerm when running in one, Windows Terminal or `conhost` on Windows |
+| `terminal.args` | The arguments of the external terminal, before the program's | |
 
 ```toml
 [editor.debugger.terminal]
