@@ -30,6 +30,7 @@ mod test {
     mod smooth_scroll;
     mod spelling;
     mod splits;
+    mod terminal;
     mod undo_files;
     mod undo_tree;
 }
