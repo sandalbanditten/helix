@@ -35,6 +35,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "E" => move_next_long_word_end,
 
         "v" => select_mode,
+        "A-v" => block_select_mode,
         "G" => goto_line,
         "g" => { "Goto"
             "g" => goto_file_start,
@@ -389,6 +390,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "esc" => exit_select_mode,
 
         "v" => normal_mode,
+        "A-v" => block_select_mode,
         "g" => { "Goto"
             "g" => extend_to_file_start,
             "|" => extend_to_column,

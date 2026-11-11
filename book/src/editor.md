@@ -143,6 +143,7 @@ The `[editor.statusline]` key takes the following sub-keys:
 | `mode.normal` | The text shown in the `mode` element for normal mode | `"NOR"` |
 | `mode.insert` | The text shown in the `mode` element for insert mode | `"INS"` |
 | `mode.select` | The text shown in the `mode` element for select mode | `"SEL"` |
+| `mode.block` | The text shown in the `mode` element for block select mode | `"BLK"` |
 | `diagnostics` | A list of severities which are displayed for the current buffer | `["warning", "error"]` |
 | `workspace-diagnostics` | A list of severities which are displayed for the workspace | `["warning", "error"]` |
 
@@ -150,7 +151,7 @@ The following statusline elements can be configured:
 
 | Key    | Description |
 | ------ | ----------- |
-| `mode` | The current editor mode (`mode.normal`/`mode.insert`/`mode.select`) |
+| `mode` | The current editor mode (`mode.normal`/`mode.insert`/`mode.select`/`mode.block`) |
 | `spinner` | A progress spinner indicating LSP activity |
 | `file-name` | The path/name of the opened file |
 | `breadcrumbs` | The functions, types and sections enclosing the cursor |

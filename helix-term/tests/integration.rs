@@ -17,6 +17,7 @@ mod test {
 
     mod auto_pairs;
     mod auto_reload;
+    mod block_select;
     mod bufferline;
     mod command_line;
     mod commands;

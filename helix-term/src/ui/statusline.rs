@@ -188,6 +188,7 @@ where
     let modenames = &config.statusline.mode;
     let mode_str = match context.editor.mode() {
         Mode::Insert => &modenames.insert,
+        Mode::Select if context.editor.block_select.is_some() => &modenames.block,
         Mode::Select => &modenames.select,
         Mode::Normal => &modenames.normal,
     };

@@ -1030,6 +1030,7 @@ pub struct ModeConfig {
     pub normal: String,
     pub insert: String,
     pub select: String,
+    pub block: String,
 }
 
 impl Default for ModeConfig {
@@ -1038,6 +1039,7 @@ impl Default for ModeConfig {
             normal: String::from("NOR"),
             insert: String::from("INS"),
             select: String::from("SEL"),
+            block: String::from("BLK"),
         }
     }
 }
@@ -1857,9 +1859,24 @@ use futures_util::stream::{Flatten, Once};
 
 type Diagnostics = BTreeMap<Uri, Vec<(lsp::Diagnostic, DiagnosticProvider)>>;
 
+/// The corners of a block selection, by line and visual column.
+#[derive(Debug, Clone)]
+pub struct BlockSelect {
+    pub anchor: Position,
+    /// The corner motions move. Its column is the one vertical motions keep.
+    pub head: Position,
+    /// Whether the lines are selected to their ends.
+    pub ragged: bool,
+    /// The selection of the block, whose anchors motions keep.
+    pub selection: Selection,
+    pub version: i32,
+}
+
 pub struct Editor {
     /// Current editing mode.
     pub mode: Mode,
+    /// The rectangle of block select, a variant of select mode.
+    pub block_select: Option<BlockSelect>,
     pub tree: Tree,
     pub next_document_id: DocumentId,
     pub documents: BTreeMap<DocumentId, Document>,
@@ -2023,6 +2040,7 @@ impl Editor {
 
         Self {
             mode: Mode::Normal,
+            block_select: None,
             tree: Tree::new(area),
             next_document_id: DocumentId::default(),
             documents: BTreeMap::new(),

@@ -176,6 +176,7 @@ These sub-modes are accessible from normal mode and typically switch back to nor
 | Key      | Description                                        | Command        |
 | -----    | -----------                                        | -------        |
 | `v`      | Enter [select (extend) mode](#select--extend-mode) | `select_mode`  |
+| `Alt-v`  | Enter [block select mode](#block-select-mode)     | `block_select_mode` |
 | `g`      | Enter [goto mode](#goto-mode)                      | N/A            |
 | `m`      | Enter [match mode](#match-mode)                    | N/A            |
 | `:`      | Enter command mode                                 | `command_mode` |
@@ -478,6 +479,18 @@ selection and select the next instance of the search term. Toggling this
 mode before pressing `n` or `N` makes it possible to keep the current
 selection. Toggling it on and off during your iterative searching allows
 you to selectively add search terms to your selections.
+
+### Block select mode
+
+Accessed by typing `Alt-v` in normal or select mode, and left with `Esc`,
+`v` or `Alt-v`. Motions move a corner of a rectangle, which is selected as
+one range per line between the columns of its corners. Lines too short to
+reach the rectangle are left out. `gl` selects each line to its end, and
+`Alt-;` swaps the corners.
+
+Other commands act on the ranges as in select mode: `d` deletes the block,
+`i` and `a` insert before and after it on each line. Commands that change
+the ranges otherwise, like `s` or `%`, leave block select mode.
 
 ## Picker
 
