@@ -15,7 +15,7 @@ use std::{
 
 use helix_stdx::{
     process::{self, Leader, ProcessGroup},
-    pty::Pty,
+    pty::{self, Pty},
 };
 use helix_view::{graphics::Style, DocumentId, Editor};
 use tokio::runtime::Handle;
@@ -195,6 +195,7 @@ pub fn spawn(
         .stdin(Stdio::null());
     let (output, terminal, screen): (Box<dyn Read + Send>, _, _) = match Pty::open(cols, rows) {
         Ok((terminal, end)) => {
+            pty::raw_output(&end)?;
             process.stdout(end.try_clone()?).stderr(end).envs(TERMINAL);
             let output = terminal.reader()?;
             (
