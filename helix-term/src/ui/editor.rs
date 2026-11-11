@@ -243,6 +243,7 @@ impl EditorView {
             .compilation
             .as_ref()
             .map(|compilation| &compilation.styles)
+            .or(doc.terminal.as_ref().map(|terminal| &terminal.styles))
             .or(doc.page.as_ref().map(|page| &page.styles))
         {
             // The colors of the output or the pager's text on the lines shown.
@@ -1987,7 +1988,12 @@ impl Component for EditorView {
             jobs: context.jobs,
         };
 
+        let typing = cx.editor.mode == Mode::Insert && doc!(cx.editor).terminal.is_some();
         match event {
+            Event::Paste(contents) if typing => {
+                super::terminal::paste(cx.editor, contents);
+                EventResult::Consumed(None)
+            }
             Event::Paste(contents) => {
                 self.undo_tree.unfocus(cx.editor);
                 self.diff_view.unfocus_tree();
@@ -2087,6 +2093,11 @@ impl Component for EditorView {
                     if matches!(result, EventResult::Consumed(_)) {
                         return result;
                     }
+                }
+
+                if typing {
+                    super::terminal::key(cx.editor, key);
+                    return EventResult::Consumed(None);
                 }
 
                 let mode = cx.editor.mode();
@@ -2303,6 +2314,7 @@ impl Component for EditorView {
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
         super::compilation::follow_size(cx.editor);
+        super::terminal::follow_size(cx.editor);
         super::pager::fit_pages(cx.editor);
         self.diff_view.follow_size(cx.editor);
         cx.editor.update_smooth_scroll();

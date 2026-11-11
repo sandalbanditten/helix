@@ -26,6 +26,7 @@ pub(crate) mod search;
 mod select;
 mod spinner;
 mod statusline;
+pub(crate) mod terminal;
 mod text;
 mod text_decorations;
 pub(crate) mod undo_tree;

@@ -431,6 +431,7 @@ impl MappableCommand {
         normal_mode, "Enter normal mode",
         select_mode, "Enter selection extend mode",
         exit_select_mode, "Exit selection mode",
+        terminal, "Open a terminal or go to the last one",
         goto_definition, "Goto definition",
         goto_declaration, "Goto declaration",
         add_newline_above, "Add newline above",
@@ -3115,6 +3116,9 @@ fn enter_insert_mode(cx: &mut Context) {
 
 // inserts at the start of each selection
 fn insert_mode(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     enter_insert_mode(cx);
     let (view, doc) = current!(cx.editor);
 
@@ -3134,6 +3138,9 @@ fn insert_mode(cx: &mut Context) {
 
 // inserts at the end of each selection
 fn append_mode(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     enter_insert_mode(cx);
     let (view, doc) = current!(cx.editor);
     doc.restore_cursor = true;
@@ -3754,12 +3761,18 @@ enum IndentFallbackPos {
 // `I` inserts at the first nonwhitespace character of each line with a selection.
 // If the line is empty, automatically indent.
 fn insert_at_line_start(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     insert_with_indent(cx, IndentFallbackPos::LineStart);
 }
 
 // `A` inserts at the end of each line with a selection.
 // If the line is empty, automatically indent.
 fn insert_at_line_end(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     insert_with_indent(cx, IndentFallbackPos::LineEnd);
 }
 
@@ -4217,6 +4230,12 @@ fn select_mode(cx: &mut Context) {
     doc.set_selection(view.id, selection);
 
     cx.editor.mode = Mode::Select;
+}
+
+fn terminal(cx: &mut Context) {
+    if let Err(err) = ui::terminal::show_last(cx.editor) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 fn exit_select_mode(cx: &mut Context) {

@@ -80,6 +80,24 @@ impl Shown {
         (chars, bytes)
     }
 
+    /// Keeps the first `chars` chars.
+    pub fn truncate(&mut self, chars: usize) {
+        if chars >= self.chars {
+            return;
+        }
+        let byte = self
+            .text
+            .char_indices()
+            .nth(chars)
+            .map_or(self.text.len(), |(byte, _)| byte);
+        self.text.truncate(byte);
+        self.styles.retain_mut(|(range, _)| {
+            range.end = range.end.min(chars);
+            range.start < range.end
+        });
+        self.chars = chars;
+    }
+
     /// Splits off the text from the char `chars`, at the byte `bytes`, which starts a line.
     pub fn split_off(&mut self, chars: usize, bytes: usize) -> Shown {
         let text = self.text.split_off(bytes);

@@ -21,6 +21,7 @@ pub mod pager;
 pub mod register;
 pub mod sgr;
 pub mod smooth_scroll;
+pub mod terminal;
 pub mod theme;
 pub mod tree;
 pub mod undo_file;

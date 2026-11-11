@@ -301,6 +301,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "c" => toggle_comments,
             "C" => toggle_block_comments,
             "A-c" => toggle_line_comments,
+            "t" => terminal,
             "?" => command_palette,
         },
         "z" => { "View"

@@ -337,6 +337,31 @@ fn compile_any_impl(
     Ok(())
 }
 
+fn term(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    term_impl(cx, args, event, Action::Replace)
+}
+
+fn vterm(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    term_impl(cx, args, event, Action::VerticalSplit)
+}
+
+fn hterm(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    term_impl(cx, args, event, Action::HorizontalSplit)
+}
+
+fn term_impl(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+    action: Action,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let command = (!args.is_empty()).then(|| args.join(" "));
+    ui::terminal::open(cx.editor, action, command)
+}
+
 fn compile_kill(
     cx: &mut compositor::Context,
     _args: Args,
@@ -3211,6 +3236,11 @@ pub const SHELL_SIGNATURE: Signature = Signature {
     ..Signature::DEFAULT
 };
 
+const TERM_SIGNATURE: Signature = Signature {
+    positionals: (0, Some(2)),
+    ..SHELL_SIGNATURE
+};
+
 pub const SHELL_COMPLETER: CommandCompleter = CommandCompleter::positional(&[
     // Command name
     completers::program,
@@ -3380,6 +3410,30 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: force_compile_any,
         completer: SHELL_COMPLETER,
         signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "term",
+        aliases: &[],
+        doc: "Open a terminal running the shell, or a command, in the current split.",
+        fun: term,
+        completer: SHELL_COMPLETER,
+        signature: TERM_SIGNATURE,
+    },
+    TypableCommand {
+        name: "vterm",
+        aliases: &[],
+        doc: "Open a terminal running the shell, or a command, in a vertical split.",
+        fun: vterm,
+        completer: SHELL_COMPLETER,
+        signature: TERM_SIGNATURE,
+    },
+    TypableCommand {
+        name: "hterm",
+        aliases: &[],
+        doc: "Open a terminal running the shell, or a command, in a horizontal split.",
+        fun: hterm,
+        completer: SHELL_COMPLETER,
+        signature: TERM_SIGNATURE,
     },
     TypableCommand {
         name: "compile-kill",

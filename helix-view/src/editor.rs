@@ -665,6 +665,8 @@ pub struct Config {
     pub dired: DiredConfig,
     /// The compilation buffer, which shows the output of `:compile` and the like.
     pub compilation: CompilationConfig,
+    /// The shell of terminal buffers and its arguments. Defaults to `$SHELL`, else `sh`.
+    pub terminal_shell: Vec<String>,
     /// The undo history: undo files, which keep it between sessions.
     pub undo: UndoConfig,
     /// The diff view, which shows two texts side by side.
@@ -1785,6 +1787,7 @@ impl Default for Config {
             file_tree: FileTreeConfig::default(),
             dired: DiredConfig::default(),
             compilation: CompilationConfig::default(),
+            terminal_shell: Vec::new(),
             undo: UndoConfig::default(),
             diff: DiffConfig::default(),
             statusline: StatusLineConfig::default(),
@@ -2640,8 +2643,9 @@ impl Editor {
                 let remove_empty_scratch = !doc.is_modified()
                     // If the buffer has no path and is not modified, it is an empty scratch buffer.
                     && doc.path().is_none()
-                    // The compilation buffer is never modified, but holds output.
+                    // The compilation buffer and terminals are never modified, but hold output.
                     && doc.compilation.is_none()
+                    && doc.terminal.is_none()
                     // If the buffer we are changing to is not this buffer
                     && id != doc.id
                     // Ensure the buffer is not displayed in any other splits.
