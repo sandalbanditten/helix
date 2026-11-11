@@ -128,7 +128,10 @@
 | `normal_mode` | Enter normal mode | normal: `` <esc> ``, select: `` v ``, insert: `` <esc> `` |
 | `select_mode` | Enter selection extend mode | normal: `` v `` |
 | `exit_select_mode` | Exit selection mode | select: `` <esc> `` |
-| `terminal` | Open a terminal or go to the last one | normal: `` <space>t ``, select: `` <space>t `` |
+| `terminal` | Open a terminal | normal: `` <space>t ``, select: `` <space>t `` |
+| `terminal_in_current_buffer_directory` | Open a terminal at current buffer's directory | normal: `` <space>T ``, select: `` <space>T `` |
+| `terminal_hsplit` | Open a terminal (hsplit) | normal: `` <C-w>t ``, `` <space>wt ``, select: `` <C-w>t ``, `` <space>wt `` |
+| `terminal_vsplit` | Open a terminal (vsplit) | normal: `` <C-w>T ``, `` <space>wT ``, select: `` <C-w>T ``, `` <space>wT `` |
 | `goto_definition` | Goto definition | normal: `` gd ``, select: `` gd `` |
 | `goto_declaration` | Goto declaration | normal: `` gD ``, select: `` gD `` |
 | `add_newline_above` | Add newline above | normal: `` [<space> ``, select: `` [<space> `` |
@@ -251,7 +254,7 @@
 | `swap_view_left` | Swap with left split | normal: `` <C-w>H ``, `` <space>wH ``, select: `` <C-w>H ``, `` <space>wH `` |
 | `swap_view_up` | Swap with split above | normal: `` <C-w>K ``, `` <space>wK ``, select: `` <C-w>K ``, `` <space>wK `` |
 | `swap_view_down` | Swap with split below | normal: `` <C-w>J ``, `` <space>wJ ``, select: `` <C-w>J ``, `` <space>wJ `` |
-| `transpose_view` | Transpose splits | normal: `` <C-w>t ``, `` <space>wt ``, `` <C-w><C-t> ``, `` <space>w<C-t> ``, select: `` <C-w>t ``, `` <space>wt ``, `` <C-w><C-t> ``, `` <space>w<C-t> `` |
+| `transpose_view` | Transpose splits | normal: `` <C-w><C-t> ``, `` <space>w<C-t> ``, select: `` <C-w><C-t> ``, `` <space>w<C-t> `` |
 | `rotate_view` | Goto next window | normal: `` <C-w>w ``, `` <space>ww ``, `` <C-w><C-w> ``, `` <space>w<C-w> ``, select: `` <C-w>w ``, `` <space>ww ``, `` <C-w><C-w> ``, `` <space>w<C-w> `` |
 | `rotate_view_reverse` | Goto previous window |  |
 | `hsplit` | Horizontal bottom split | normal: `` <C-w>s ``, `` <space>ws ``, `` <C-w><C-s> ``, `` <space>w<C-s> ``, select: `` <C-w>s ``, `` <space>ws ``, `` <C-w><C-s> ``, `` <space>w<C-s> `` |

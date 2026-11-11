@@ -359,7 +359,8 @@ fn term_impl(
         return Ok(());
     }
     let command = (!args.is_empty()).then(|| args.join(" "));
-    ui::terminal::open(cx.editor, action, command)
+    let dir = helix_stdx::env::current_working_dir();
+    ui::terminal::open(cx.editor, action, command, dir)
 }
 
 fn compile_kill(

@@ -4,7 +4,10 @@
 mod keys;
 mod run;
 
-use std::{path::Path, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use helix_core::{Rope, Selection, Transaction};
 use helix_view::{
@@ -22,12 +25,14 @@ use jiff::Zoned;
 
 use super::compilation::output;
 
-/// The lines of text kept above the screen, which a thousand more push away.
-const SCROLLBACK: usize = 10_000;
-
-/// Opens a terminal of `command` run by the shell, or of the shell, in the focused split or a new
-/// one as `action` says, and types into it.
-pub fn open(editor: &mut Editor, action: Action, command: Option<String>) -> anyhow::Result<()> {
+/// Opens a terminal of `command` run by the shell, or of the shell, in `dir`, in the focused split
+/// or a new one as `action` says, and types into it.
+pub fn open(
+    editor: &mut Editor,
+    action: Action,
+    command: Option<String>,
+    dir: PathBuf,
+) -> anyhow::Result<()> {
     let (command, name) = match command {
         Some(command) => {
             let mut shell = editor.config().shell.clone();
@@ -42,7 +47,6 @@ pub fn open(editor: &mut Editor, action: Action, command: Option<String>) -> any
             (shell, name)
         }
     };
-    let dir = helix_stdx::env::current_working_dir();
     let mut doc = Document::from(
         Rope::new(),
         None,
@@ -58,32 +62,9 @@ pub fn open(editor: &mut Editor, action: Action, command: Option<String>) -> any
     Ok(())
 }
 
-/// Focuses the terminal used last, shown beside the focused split if hidden, or opens one there.
-pub fn show_last(editor: &mut Editor) -> anyhow::Result<()> {
-    let last = editor
-        .documents()
-        .filter_map(|doc| Some((doc.terminal.as_ref()?.used, doc.id())))
-        .max()
-        .map(|(_, doc)| doc);
-    let Some(doc_id) = last else {
-        return open(editor, Action::VerticalSplit, None);
-    };
-    let view = editor
-        .tree
-        .views()
-        .find(|(view, _)| view.doc == doc_id)
-        .map(|(view, _)| view.id);
-    match view {
-        Some(view) => editor.focus(view),
-        None => editor.switch(doc_id, Action::VerticalSplit),
-    }
-    input(editor);
-    Ok(())
-}
-
 /// The shell of terminals: the configured one, else `$SHELL`, else `sh`.
 fn shell(editor: &Editor) -> Vec<String> {
-    let shell = &editor.config().terminal_shell;
+    let shell = &editor.config().terminal.shell;
     if !shell.is_empty() {
         return shell.clone();
     }
@@ -136,9 +117,12 @@ fn size(view: &View, doc: &Document) -> (u16, u16) {
     (view.inner_width(doc).saturating_sub(1).max(1), rows)
 }
 
-/// Gives terminals the size of the views showing them.
+/// Gives terminals the size of the views showing them, the focused one's if there are more.
 pub fn follow_size(editor: &Editor) {
-    for (view, _) in editor.tree.views() {
+    let mut views: Vec<_> = editor.tree.views().collect();
+    views.sort_by_key(|&(_, focused)| !focused);
+    let mut sized = Vec::new();
+    for (view, _) in views {
         let doc = doc!(editor, &view.doc);
         let Some(pty) = doc
             .terminal
@@ -147,6 +131,10 @@ pub fn follow_size(editor: &Editor) {
         else {
             continue;
         };
+        if sized.contains(&view.doc) {
+            continue;
+        }
+        sized.push(view.doc);
         let size = size(view, doc);
         if pty.size().is_ok_and(|shown| shown != size) {
             // The kernel tells the program.
@@ -170,11 +158,7 @@ pub fn input(editor: &mut Editor) -> bool {
     }
     editor.mode = Mode::Insert;
     let view = editor.tree.focus;
-    let doc = doc_mut!(editor);
-    if let Some(terminal) = doc.terminal.as_mut() {
-        terminal.used = Instant::now();
-    }
-    follow(doc, view);
+    follow(doc_mut!(editor), view);
     true
 }
 
@@ -203,7 +187,6 @@ pub fn key(editor: &mut Editor, key: KeyEvent) {
     let Some(terminal) = doc.terminal.as_mut() else {
         return;
     };
-    terminal.used = Instant::now();
     let verbatim = std::mem::take(&mut terminal.verbatim);
     match (key.code, key.modifiers) {
         (KeyCode::Esc, KeyModifiers::NONE) if !verbatim => editor.enter_normal_mode(),
@@ -264,12 +247,13 @@ fn show(editor: &mut Editor, doc_id: DocumentId, run: u64, output: run::Output) 
     let doc = doc_mut!(editor, &doc_id);
     let end = doc.text().len_chars();
     let screen = end - output.screen.min(end);
-    // What scrolled away goes, as the program asked or past the lines kept.
+    // What scrolled away goes, as the program asked or past the lines kept, a tenth more at once.
+    let scrollback = doc.config.load().terminal.scrollback;
     let lines = doc.text().char_to_line(screen);
     let gone = if output.cleared {
         screen
-    } else if lines > SCROLLBACK + SCROLLBACK / 10 {
-        doc.text().line_to_char(lines - SCROLLBACK)
+    } else if lines > scrollback + scrollback / 10 {
+        doc.text().line_to_char(lines - scrollback)
     } else {
         0
     };

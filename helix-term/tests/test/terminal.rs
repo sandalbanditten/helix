@@ -1,13 +1,29 @@
 use helix_term::application::Application;
-use helix_view::{current_ref, doc, document::Mode};
+use helix_view::{current_ref, doc, document::Mode, editor::TerminalConfig};
 
 use super::*;
 
 fn session() -> anyhow::Result<Session> {
+    session_with(|_| {})
+}
+
+fn session_with(configure: impl FnOnce(&mut TerminalConfig)) -> anyhow::Result<Session> {
     let mut config = test_config();
-    config.editor.terminal_shell = vec!["sh".to_owned()];
+    config.editor.terminal.shell = vec!["sh".to_owned()];
+    configure(&mut config.editor.terminal);
     let app = AppBuilder::new().with_config(config).build()?;
     Ok(Session::new(app))
+}
+
+/// The text of each terminal, in the order of their splits.
+fn terminals(app: &Application) -> Vec<String> {
+    app.editor
+        .tree
+        .views()
+        .map(|(view, _)| app.editor.document(view.doc).unwrap())
+        .filter(|doc| doc.terminal.is_some())
+        .map(|doc| doc.text().to_string())
+        .collect()
 }
 
 fn text(app: &Application) -> String {
@@ -132,19 +148,60 @@ async fn programs_see_the_size_of_the_view() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn old_lines_go() -> anyhow::Result<()> {
-    let mut session = session()?;
-    session.keys(":term seq 1 12000<ret>").await?;
+    let mut session = session_with(|terminal| terminal.scrollback = 1000)?;
+    session.keys(":term seq 1 3000<ret>").await?;
     session
         .until("the end", |app| text(app).contains("Finished at "))
         .await;
     let text = text(&session.app);
-    assert!(
-        text.lines().count() <= 11_000 + 3,
-        "{}",
-        text.lines().count()
-    );
-    assert!(text.contains("\n12000\n"));
+    assert!(text.lines().count() <= 1100 + 3, "{}", text.lines().count());
+    assert!(text.contains("\n3000\n"));
     assert!(!text.starts_with("1\n"));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn terminals_open_in_splits() -> anyhow::Result<()> {
+    let mut session = session()?;
+    session.keys(":vterm echo left<ret>").await?;
+    session.keys("<esc>:hterm echo below<ret>").await?;
+    session
+        .until("both commands", |app| {
+            let texts = terminals(app);
+            texts.len() == 2 && texts[0].starts_with("left\n") && texts[1].starts_with("below\n")
+        })
+        .await;
+    assert_eq!(session.app.editor.tree.views().count(), 3);
+    // `C-w t` and `C-w T` open shells in splits, `Space t` in the focused one.
+    session.keys("<esc><C-w>t<esc><C-w>T").await?;
+    assert_eq!(session.app.editor.tree.views().count(), 5);
+    session.keys("<esc><space>t").await?;
+    assert_eq!(session.app.editor.tree.views().count(), 5);
+    assert_eq!(session.app.editor.documents().count(), 6);
+    assert_eq!(terminals(&session.app).len(), 4);
+    assert_eq!(session.app.editor.mode, Mode::Insert);
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn terminals_open_beside_the_buffer() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let dir = helix_stdx::path::canonicalize(dir.path());
+    let file = dir.join("file.txt");
+    std::fs::write(&file, "text\n")?;
+    let mut config = test_config();
+    config.editor.terminal.shell = vec!["sh".to_owned()];
+    let app = AppBuilder::new()
+        .with_file(&file, None)
+        .with_config(config)
+        .build()?;
+    let mut session = Session::new(app);
+    session.keys("<space>T").await?;
+    session.send("pwd<ret>")?;
+    let shown = format!("\n{}\n", dir.display());
+    session
+        .until("the directory", |app| text(app).contains(&shown))
+        .await;
     session.quit().await
 }
 

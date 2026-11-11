@@ -98,6 +98,7 @@ pub fn spawn(
     process
         .args(args)
         .current_dir(dir)
+        .env("PWD", dir)
         .stdin(terminal.try_clone()?)
         .stdout(terminal.try_clone()?)
         .stderr(terminal)

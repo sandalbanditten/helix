@@ -431,7 +431,10 @@ impl MappableCommand {
         normal_mode, "Enter normal mode",
         select_mode, "Enter selection extend mode",
         exit_select_mode, "Exit selection mode",
-        terminal, "Open a terminal or go to the last one",
+        terminal, "Open a terminal",
+        terminal_in_current_buffer_directory, "Open a terminal at current buffer's directory",
+        terminal_hsplit, "Open a terminal (hsplit)",
+        terminal_vsplit, "Open a terminal (vsplit)",
         goto_definition, "Goto definition",
         goto_declaration, "Goto declaration",
         add_newline_above, "Add newline above",
@@ -4233,7 +4236,35 @@ fn select_mode(cx: &mut Context) {
 }
 
 fn terminal(cx: &mut Context) {
-    if let Err(err) = ui::terminal::show_last(cx.editor) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::Replace, cwd);
+}
+
+fn terminal_in_current_buffer_directory(cx: &mut Context) {
+    let doc_dir = doc!(cx.editor)
+        .path()
+        .and_then(|path| path.parent().map(|path| path.to_path_buf()));
+    let dir = doc_dir.unwrap_or_else(|| {
+        cx.editor.set_error(
+            "Current buffer has no parent, opening terminal in current working directory",
+        );
+        helix_stdx::env::current_working_dir()
+    });
+    terminal_impl(cx, Action::Replace, dir);
+}
+
+fn terminal_hsplit(cx: &mut Context) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::HorizontalSplit, cwd);
+}
+
+fn terminal_vsplit(cx: &mut Context) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::VerticalSplit, cwd);
+}
+
+fn terminal_impl(cx: &mut Context, action: Action, dir: PathBuf) {
+    if let Err(err) = ui::terminal::open(cx.editor, action, None, dir) {
         cx.editor.set_error(err.to_string());
     }
 }

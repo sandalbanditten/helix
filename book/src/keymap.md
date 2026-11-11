@@ -276,7 +276,9 @@ This layer is similar to Vim keybindings as Kakoune does not support windows.
 | `w`, `Ctrl-w`          | Switch to next window                                | `rotate_view`     |
 | `v`, `Ctrl-v`          | Vertical right split                                 | `vsplit`          |
 | `s`, `Ctrl-s`          | Horizontal bottom split                              | `hsplit`          |
-| `t`, `Ctrl-t`          | Transpose the two adjacent splits                    | `transpose_view`  |
+| `Ctrl-t`               | Transpose the two adjacent splits                    | `transpose_view`  |
+| `t`                    | Open a [terminal](./terminal.md) in a horizontal split | `terminal_hsplit` |
+| `T`                    | Open a [terminal](./terminal.md) in a vertical split | `terminal_vsplit` |
 | `f`                    | Go to files/URLs in selections in horizontal splits  | `goto_file_hsplit`|
 | `F`                    | Go to files/URLs in selections in vertical splits    | `goto_file_vsplit`|
 | `h`, `Ctrl-h`, `Left`  | Move to left split                                   | `jump_view_left`  |
@@ -331,7 +333,8 @@ This layer is a kludge of mappings, mostly pickers.
 | `Y`     | Yank main selection to clipboard                                        | `yank_main_selection_to_clipboard`         |
 | `R`     | Replace selections by clipboard contents                                | `replace_selections_with_clipboard`        |
 | `/`     | Global search in workspace folder                                       | `global_search`                            |
-| `t`     | Open a [terminal](./terminal.md) or go to the last one                  | `terminal`                                 |
+| `t`     | Open a [terminal](./terminal.md)                                        | `terminal`                                 |
+| `T`     | Open a [terminal](./terminal.md) at current buffer's directory          | `terminal_in_current_buffer_directory`     |
 | `?`     | Open command palette                                                    | `command_palette`                          |
 
 > 💡 Global search displays results in a fuzzy picker, use `Space + '` to bring it back up after opening a file.

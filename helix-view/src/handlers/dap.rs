@@ -478,7 +478,7 @@ impl Editor {
                 let reply = match Request::parse(&request.command, request.arguments) {
                     Ok(Request::RunInTerminal(arguments)) => {
                         let config = self.config();
-                        let Some(config) = config.terminal.as_ref() else {
+                        let Some(config) = config.debugger.terminal.as_ref() else {
                             self.set_error("No external terminal defined");
                             return true;
                         };
