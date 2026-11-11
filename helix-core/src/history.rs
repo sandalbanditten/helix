@@ -1,8 +1,8 @@
 use crate::{Assoc, ChangeSet, Range, Rope, Selection, Transaction};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::sync::LazyLock;
 use std::time::{Duration, SystemTime};
 
 pub mod undo_file;
@@ -443,14 +443,15 @@ const TIME_UNITS: &[(&[&str], &str, u64)] = &[
 ///  * `5 min`
 ///  * `5 hr`
 ///  * `5 days`
-static DURATION_VALIDATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(?:\d+\s*[a-z]+\s*)+$").unwrap());
+static DURATION_VALIDATION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:\d+\s*[a-z]+\s*)+$").unwrap());
 
 /// A number of file writes, like `2f`.
-static FILE_WRITES_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)\s*f$").unwrap());
+static FILE_WRITES_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)\s*f$").unwrap());
 
 /// Captures both the number and unit as separate capture groups.
-static NUMBER_UNIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+)\s*([a-z]+)").unwrap());
+static NUMBER_UNIT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+)\s*([a-z]+)").unwrap());
 
 /// Parse a string (e.g. "5 sec") and try to convert it into a [`Duration`].
 fn parse_human_duration(s: &str) -> Result<Duration, String> {

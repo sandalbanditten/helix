@@ -7,7 +7,7 @@ use std::{
     io,
     iter::Peekable,
     ops::{ControlFlow, Range},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -33,7 +33,6 @@ use helix_view::{
     },
     Dictionary, Document, DocumentId, Editor,
 };
-use once_cell::sync::Lazy;
 use parking_lot::{RwLock, RwLockReadGuard};
 use spellbook::{ParseDictionaryError, ParseDictionaryErrorSource};
 use tokio::time::Instant;
@@ -476,13 +475,13 @@ fn spell_check_regions(
 
 /// A word: a run of letters, marks and digits, up to a camelCase hump.
 const WORD: &str = r"[\p{Lu}\p{Lt}\p{Nd}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:['’-][\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*|[\p{Lu}\p{Lt}\p{Nd}]+";
-static WORDS: Lazy<Regex> = Lazy::new(|| Regex::new(WORD).unwrap());
+static WORDS: LazyLock<Regex> = LazyLock::new(|| Regex::new(WORD).unwrap());
 /// Words joined by dots and ending in one, like `f.eks.`, `Dvs.` or the end of a sentence, which a
 /// dictionary may know as a whole, as an abbreviation.
-static DOTTED_WORDS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(&format!(r"(?:{WORD})+(?:\.(?:{WORD})+)*\.")).unwrap());
+static DOTTED_WORDS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"(?:{WORD})+(?:\.(?:{WORD})+)*\.")).unwrap());
 /// URLs and email addresses, whose words are skipped.
-static IGNORED_SPANS: Lazy<Regex> = Lazy::new(|| {
+static IGNORED_SPANS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[a-zA-Z][a-zA-Z0-9+.-]*://\S+|[\w.+-]+@[A-Za-z0-9-]+\.[\w.-]+").unwrap()
 });
 
@@ -676,13 +675,13 @@ mod tests {
 
     /// The `en_US` dictionary vendored under `runtime/dictionaries/`.
     fn en_us() -> Arc<RwLock<Dictionary>> {
-        static EN_US: Lazy<Arc<RwLock<Dictionary>>> = Lazy::new(|| dictionary("en_US"));
+        static EN_US: LazyLock<Arc<RwLock<Dictionary>>> = LazyLock::new(|| dictionary("en_US"));
         EN_US.clone()
     }
 
     /// The `da_DK` dictionary vendored under `runtime/dictionaries/`.
     fn da_dk() -> Arc<RwLock<Dictionary>> {
-        static DA_DK: Lazy<Arc<RwLock<Dictionary>>> = Lazy::new(|| dictionary("da_DK"));
+        static DA_DK: LazyLock<Arc<RwLock<Dictionary>>> = LazyLock::new(|| dictionary("da_DK"));
         DA_DK.clone()
     }
 

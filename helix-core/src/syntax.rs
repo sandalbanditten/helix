@@ -18,8 +18,8 @@ use config::{Configuration, FileType, LanguageConfiguration, LanguageServerConfi
 use foldhash::HashSet;
 use helix_loader::grammar::get_language;
 use helix_stdx::rope::RopeSliceExt as _;
-use once_cell::sync::OnceCell;
 use ropey::RopeSlice;
+use std::sync::OnceLock;
 use tree_house::{
     highlighter,
     query_iter::QueryIter,
@@ -44,30 +44,30 @@ pub use tree_house::{
 #[derive(Debug)]
 pub struct LanguageData {
     config: Arc<LanguageConfiguration>,
-    syntax: OnceCell<Option<SyntaxConfig>>,
-    indent_query: OnceCell<Option<IndentQuery>>,
-    textobject_query: OnceCell<Option<TextObjectQuery>>,
-    tag_query: OnceCell<Option<TagQuery>>,
-    rainbow_query: OnceCell<Option<RainbowQuery>>,
-    breadcrumb_query: OnceCell<Option<BreadcrumbQuery>>,
-    fold_query: OnceCell<Option<FoldQuery>>,
-    spellcheck_query: OnceCell<Option<SpellcheckQuery>>,
-    conceal_query: OnceCell<Option<ConcealQuery>>,
+    syntax: OnceLock<Option<SyntaxConfig>>,
+    indent_query: OnceLock<Option<IndentQuery>>,
+    textobject_query: OnceLock<Option<TextObjectQuery>>,
+    tag_query: OnceLock<Option<TagQuery>>,
+    rainbow_query: OnceLock<Option<RainbowQuery>>,
+    breadcrumb_query: OnceLock<Option<BreadcrumbQuery>>,
+    fold_query: OnceLock<Option<FoldQuery>>,
+    spellcheck_query: OnceLock<Option<SpellcheckQuery>>,
+    conceal_query: OnceLock<Option<ConcealQuery>>,
 }
 
 impl LanguageData {
     fn new(config: LanguageConfiguration) -> Self {
         Self {
             config: Arc::new(config),
-            syntax: OnceCell::new(),
-            indent_query: OnceCell::new(),
-            textobject_query: OnceCell::new(),
-            tag_query: OnceCell::new(),
-            rainbow_query: OnceCell::new(),
-            breadcrumb_query: OnceCell::new(),
-            fold_query: OnceCell::new(),
-            spellcheck_query: OnceCell::new(),
-            conceal_query: OnceCell::new(),
+            syntax: OnceLock::new(),
+            indent_query: OnceLock::new(),
+            textobject_query: OnceLock::new(),
+            tag_query: OnceLock::new(),
+            rainbow_query: OnceLock::new(),
+            breadcrumb_query: OnceLock::new(),
+            fold_query: OnceLock::new(),
+            spellcheck_query: OnceLock::new(),
+            conceal_query: OnceLock::new(),
         }
     }
 
@@ -525,9 +525,9 @@ impl Loader {
         // NOTE: this is slightly different than the one for injection markers in tree-house. It
         // is anchored at the beginning.
         use helix_stdx::rope::Regex;
-        use once_cell::sync::Lazy;
+        use std::sync::LazyLock;
         const SHEBANG: &str = r"^#!\s*(?:\S*[/\\](?:env\s+(?:\-\S+\s+)*)?)?([^\s\.\d]+)";
-        static SHEBANG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(SHEBANG).unwrap());
+        static SHEBANG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(SHEBANG).unwrap());
 
         let marker = SHEBANG_REGEX
             .captures_iter(regex_cursor::Input::new(text))
@@ -1800,12 +1800,12 @@ fn flatten_breadcrumb_text(text: RopeSlice) -> String {
 
 #[cfg(test)]
 mod test {
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::{Rope, Transaction};
 
-    static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
+    static LOADER: LazyLock<Loader> = LazyLock::new(crate::config::default_lang_loader);
 
     #[test]
     fn conceal_query_tables() {

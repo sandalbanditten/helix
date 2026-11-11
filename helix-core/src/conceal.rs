@@ -700,12 +700,13 @@ fn is_visible(symbol: &str) -> bool {
 
 #[cfg(test)]
 mod test {
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::{Range, Rope};
 
-    static LOADER: Lazy<Arc<Loader>> = Lazy::new(|| Arc::new(crate::config::default_lang_loader()));
+    static LOADER: LazyLock<Arc<Loader>> =
+        LazyLock::new(|| Arc::new(crate::config::default_lang_loader()));
 
     const OPTIONS: ConcealOptions = ConcealOptions {
         symbols: true,

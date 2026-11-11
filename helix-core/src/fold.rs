@@ -785,12 +785,12 @@ pub fn visible_ranges(
 
 #[cfg(test)]
 mod test {
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::{Rope, Transaction};
 
-    static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
+    static LOADER: LazyLock<Loader> = LazyLock::new(crate::config::default_lang_loader);
 
     fn parse(language: &str, text: &Rope) -> Syntax {
         let language = LOADER.language_for_name(language).unwrap();
