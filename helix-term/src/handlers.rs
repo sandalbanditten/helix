@@ -17,6 +17,7 @@ use self::document_links::DocumentLinksHandler;
 
 pub(crate) mod auto_reload;
 mod auto_save;
+pub(crate) mod block_select;
 mod code_action_hint;
 pub mod completion;
 pub mod diagnostics;
@@ -67,6 +68,7 @@ pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
     document_highlight::register_hooks(&handlers);
     code_action_hint::register_hooks(&handlers);
     auto_save::register_hooks(&handlers);
+    block_select::register_hooks(&handlers);
     auto_reload::register_hooks(&handlers);
     diagnostics::register_hooks(&handlers);
     snippet::register_hooks(&handlers);

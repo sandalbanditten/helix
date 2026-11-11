@@ -64,7 +64,7 @@ use movement::Movement;
 
 use crate::{
     compositor::{self, Component, Compositor},
-    filter_picker_entry,
+    filter_picker_entry, handlers,
     job::Callback,
     ui::{self, overlay::overlaid, Picker, PickerColumn, Popup, Prompt, PromptEvent},
 };
@@ -430,6 +430,7 @@ impl MappableCommand {
         open_above, "Open new line above selection",
         normal_mode, "Enter normal mode",
         select_mode, "Enter selection extend mode",
+        block_select_mode, "Enter block selection mode",
         exit_select_mode, "Exit selection mode",
         goto_definition, "Goto definition",
         goto_declaration, "Goto declaration",
@@ -4217,6 +4218,15 @@ fn select_mode(cx: &mut Context) {
     doc.set_selection(view.id, selection);
 
     cx.editor.mode = Mode::Select;
+}
+
+fn block_select_mode(cx: &mut Context) {
+    if cx.editor.block_select.is_some() {
+        normal_mode(cx);
+        return;
+    }
+    cx.editor.mode = Mode::Select;
+    handlers::block_select::start(cx.editor);
 }
 
 fn exit_select_mode(cx: &mut Context) {

@@ -93,6 +93,7 @@ Shows two versions side by side, aligned by difftastic when `difft` is installed
 
 ## Small tweaks
 
+- `Alt-v` enters block select mode (`BLK`): motions move a corner of a rectangle, selected as one range per line, and `gl` takes each line to its end.
 - `gf` opens `path:line:column` at that position.
 - `:move` accepts a bare file name, which renames the file in its own directory.
 - With a count, `j`/`k` move by lines rather than soft-wrapped rows, so `20k` matches the relative line numbers. Without a count they still move by rows.

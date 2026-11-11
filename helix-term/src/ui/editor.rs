@@ -2252,6 +2252,7 @@ impl Component for EditorView {
 
         self.dired.follow(cx.editor);
         self.diff_view.follow(cx.editor);
+        crate::handlers::block_select::follow(cx.editor, None, 1);
         crate::handlers::viewport::follow(cx.editor, &mut self.viewport);
         // A split covers the editor only while it shows its dired or compilation buffer, or a
         // pane of the diff view.

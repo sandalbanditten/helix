@@ -127,6 +127,7 @@
 | `open_above` | Open new line above selection | normal: `` O ``, select: `` O `` |
 | `normal_mode` | Enter normal mode | normal: `` <esc> ``, select: `` v ``, insert: `` <esc> `` |
 | `select_mode` | Enter selection extend mode | normal: `` v `` |
+| `block_select_mode` | Enter block selection mode | normal: `` <A-v> ``, select: `` <A-v> `` |
 | `exit_select_mode` | Exit selection mode | select: `` <esc> `` |
 | `goto_definition` | Goto definition | normal: `` gd ``, select: `` gd `` |
 | `goto_declaration` | Goto declaration | normal: `` gD ``, select: `` gD `` |
