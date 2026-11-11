@@ -12,17 +12,32 @@ use std::{
 /// Spawns `command` leading a process group of its own: the leader to wait for, and the handle
 /// that stops the group.
 pub fn spawn_group(command: &mut Command) -> io::Result<(Leader, ProcessGroup)> {
+    spawn(command, false)
+}
+
+/// Spawns `command` like [`spawn_group`], with its stdin, a terminal, as its controlling
+/// terminal, as a shell in a terminal emulator has.
+pub fn spawn_terminal(command: &mut Command) -> io::Result<(Leader, ProcessGroup)> {
+    spawn(command, true)
+}
+
+fn spawn(command: &mut Command, controlling: bool) -> io::Result<(Leader, ProcessGroup)> {
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: `setsid` is async-signal-safe, and touches no memory of the parent.
+        use std::os::{fd::BorrowedFd, unix::process::CommandExt};
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe, and touch no memory of the parent.
         unsafe {
-            command.pre_exec(|| match rustix::process::setsid() {
-                Ok(_) => Ok(()),
-                Err(err) => Err(err.into()),
+            command.pre_exec(move || {
+                rustix::process::setsid()?;
+                if controlling {
+                    rustix::process::ioctl_tiocsctty(BorrowedFd::borrow_raw(0))?;
+                }
+                Ok(())
             });
         }
     }
+    #[cfg(not(unix))]
+    let _ = controlling;
     let child = command.spawn()?;
     let status = Arc::new(GroupStatus::default());
     let group = ProcessGroup {
@@ -55,6 +70,23 @@ impl ProcessGroup {
         }
         self.status.killed.store(true, Ordering::Release);
         kill_group(self.pid, false)
+    }
+
+    /// Tells the processes of the group that their terminal went away, as closing a terminal
+    /// does, which stops them like [`kill`](Self::kill).
+    pub fn hang_up(&self) -> io::Result<()> {
+        if self.status.reaped.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.status.killed.store(true, Ordering::Release);
+        #[cfg(unix)]
+        {
+            signal_group(self.pid, rustix::process::Signal::HUP)
+        }
+        #[cfg(not(unix))]
+        {
+            kill_group(self.pid, false)
+        }
     }
 
     /// Tells the processes of the group that their terminal changed size.

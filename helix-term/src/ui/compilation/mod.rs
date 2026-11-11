@@ -3,8 +3,7 @@
 
 mod locus;
 pub(crate) mod output;
-mod run;
-pub(crate) mod screen;
+pub(crate) mod run;
 
 use std::{path::PathBuf, time::Instant};
 

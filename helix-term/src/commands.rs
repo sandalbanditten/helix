@@ -432,6 +432,10 @@ impl MappableCommand {
         select_mode, "Enter selection extend mode",
         block_select_mode, "Enter block selection mode",
         exit_select_mode, "Exit selection mode",
+        terminal, "Open a terminal",
+        terminal_in_current_buffer_directory, "Open a terminal at current buffer's directory",
+        terminal_hsplit, "Open a terminal (hsplit)",
+        terminal_vsplit, "Open a terminal (vsplit)",
         goto_definition, "Goto definition",
         goto_declaration, "Goto declaration",
         add_newline_above, "Add newline above",
@@ -3116,6 +3120,9 @@ fn enter_insert_mode(cx: &mut Context) {
 
 // inserts at the start of each selection
 fn insert_mode(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     enter_insert_mode(cx);
     let (view, doc) = current!(cx.editor);
 
@@ -3135,6 +3142,9 @@ fn insert_mode(cx: &mut Context) {
 
 // inserts at the end of each selection
 fn append_mode(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     enter_insert_mode(cx);
     let (view, doc) = current!(cx.editor);
     doc.restore_cursor = true;
@@ -3755,12 +3765,18 @@ enum IndentFallbackPos {
 // `I` inserts at the first nonwhitespace character of each line with a selection.
 // If the line is empty, automatically indent.
 fn insert_at_line_start(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     insert_with_indent(cx, IndentFallbackPos::LineStart);
 }
 
 // `A` inserts at the end of each line with a selection.
 // If the line is empty, automatically indent.
 fn insert_at_line_end(cx: &mut Context) {
+    if ui::terminal::input(cx.editor) {
+        return;
+    }
     insert_with_indent(cx, IndentFallbackPos::LineEnd);
 }
 
@@ -4227,6 +4243,40 @@ fn block_select_mode(cx: &mut Context) {
     }
     cx.editor.mode = Mode::Select;
     handlers::block_select::start(cx.editor);
+}
+
+fn terminal(cx: &mut Context) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::Replace, cwd);
+}
+
+fn terminal_in_current_buffer_directory(cx: &mut Context) {
+    let doc_dir = doc!(cx.editor)
+        .path()
+        .and_then(|path| path.parent().map(|path| path.to_path_buf()));
+    let dir = doc_dir.unwrap_or_else(|| {
+        cx.editor.set_error(
+            "Current buffer has no parent, opening terminal in current working directory",
+        );
+        helix_stdx::env::current_working_dir()
+    });
+    terminal_impl(cx, Action::Replace, dir);
+}
+
+fn terminal_hsplit(cx: &mut Context) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::HorizontalSplit, cwd);
+}
+
+fn terminal_vsplit(cx: &mut Context) {
+    let cwd = helix_stdx::env::current_working_dir();
+    terminal_impl(cx, Action::VerticalSplit, cwd);
+}
+
+fn terminal_impl(cx: &mut Context, action: Action, dir: PathBuf) {
+    if let Err(err) = ui::terminal::open(cx.editor, action, None, dir) {
+        cx.editor.set_error(err.to_string());
+    }
 }
 
 fn exit_select_mode(cx: &mut Context) {

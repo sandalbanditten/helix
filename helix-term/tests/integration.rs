@@ -32,6 +32,7 @@ mod test {
     mod spelling;
     mod splits;
     mod start_screen;
+    mod terminal;
     mod undo_files;
     mod undo_tree;
 }

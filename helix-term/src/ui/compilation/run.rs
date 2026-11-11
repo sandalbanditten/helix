@@ -15,17 +15,20 @@ use std::{
 
 use helix_stdx::{
     process::{self, Leader, ProcessGroup},
-    pty::Pty,
+    pty::{self, Pty},
 };
 use helix_view::{graphics::Style, DocumentId, Editor};
 use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
-    output::{End, Shown},
-    screen::Screen,
+    output::End,
 };
-use crate::{compositor::Compositor, job};
+use crate::{
+    compositor::Compositor,
+    job,
+    ui::screen::{Screen, Shown},
+};
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
@@ -143,9 +146,9 @@ struct Shared {
 /// A callback appends at most this much output, so that keys wait for no more than that.
 const BATCH: usize = 256 * 1024;
 /// The reader waits while this much output is pending.
-const PENDING: usize = 4 * 1024 * 1024;
+pub(crate) const PENDING: usize = 4 * 1024 * 1024;
 /// How often the reader looks at the leader when no output arrives.
-const TICK: Duration = Duration::from_millis(50);
+pub(crate) const TICK: Duration = Duration::from_millis(50);
 /// The screen shows anew at most this often, as a progress bar is redrawn say.
 const REFRESH: Duration = Duration::from_millis(100);
 /// How long what keeps running has before it is stopped by force, after a kill or after the
@@ -192,6 +195,7 @@ pub fn spawn(
         .stdin(Stdio::null());
     let (output, terminal, screen): (Box<dyn Read + Send>, _, _) = match Pty::open(cols, rows) {
         Ok((terminal, end)) => {
+            pty::raw_output(&end)?;
             process.stdout(end.try_clone()?).stderr(end).envs(TERMINAL);
             let output = terminal.reader()?;
             (
@@ -235,7 +239,7 @@ pub fn spawn(
 }
 
 /// Reads `output` until it ends, sending what it reads to `chunks`.
-fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
+pub(crate) fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
     let mut buf = vec![0; 64 * 1024];
     loop {
         match output.read(&mut buf) {
@@ -245,7 +249,7 @@ fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => {
-                log::warn!("cannot read compilation output: {err}");
+                log::warn!("cannot read output: {err}");
                 return;
             }
         }
@@ -256,7 +260,7 @@ fn read(mut output: impl Read, chunks: &SyncSender<Vec<u8>>) {
 #[allow(clippy::too_many_arguments)]
 fn follow(
     chunks: &Receiver<Vec<u8>>,
-    mut leader: Leader,
+    leader: Leader,
     mut screen: Screen,
     size: Option<Pty>,
     mut finder: Finder,
@@ -271,9 +275,7 @@ fn follow(
     let mut shown_at: Option<Instant> = None;
     let mut changed = false;
     let mut open = true;
-    let mut exited: Option<Instant> = None;
-    let mut killed: Option<Instant> = None;
-    let mut forced = false;
+    let mut lifetime = Lifetime::new(leader);
     loop {
         if open {
             // Until the screen is due to show again, once it changed.
@@ -311,37 +313,14 @@ fn follow(
             changed = false;
         }
 
-        if exited.is_none() && leader.has_exited().unwrap_or(true) {
-            exited = Some(Instant::now());
-            // What it left running would keep the output, and the run, going.
-            let _ = leader.stop(false);
-        }
-        if killed.is_none() && leader.killed() {
-            killed = Some(Instant::now());
-        }
-        let overdue = |since: Option<Instant>| since.is_some_and(|since| since.elapsed() >= GRACE);
-        if !forced && (overdue(killed) || open && overdue(exited)) {
-            let _ = leader.stop(true);
-            forced = true;
-        }
-        // Processes of other groups may keep the output open longer.
-        let given_up = exited.is_some_and(|exited| exited.elapsed() >= 2 * GRACE);
-        if exited.is_some() && (!open || given_up) {
+        if lifetime.is_over(open) {
             break;
         }
     }
 
     let (replace, text, mut loci) =
         change(&mut shown, screen.finish(), Shown::default(), &mut finder);
-    let killed = leader.killed();
-    let end = match leader.reap() {
-        _ if killed => End::Killed,
-        Ok(exit) => exit_end(exit),
-        Err(err) => {
-            log::warn!("cannot wait for the compilation: {err}");
-            End::Exited(-1)
-        }
-    };
+    let end = lifetime.end();
     hand_over(&mut |output| {
         output.push(replace, &text, mem::take(&mut loci));
         output.end = Some(end);
@@ -373,6 +352,61 @@ fn change(
     let replace = shown.chars - chars;
     *shown = screen;
     (replace, text, loci)
+}
+
+/// The leader of a run, followed until the run is over. What it leaves running is stopped once it
+/// exited, by force after a while, as is a run that was killed.
+pub(crate) struct Lifetime {
+    leader: Leader,
+    exited: Option<Instant>,
+    killed: Option<Instant>,
+    forced: bool,
+}
+
+impl Lifetime {
+    pub fn new(leader: Leader) -> Self {
+        Self {
+            leader,
+            exited: None,
+            killed: None,
+            forced: false,
+        }
+    }
+
+    /// Whether the run is over, given whether its output is still `open`.
+    pub fn is_over(&mut self, open: bool) -> bool {
+        if self.exited.is_none() && self.leader.has_exited().unwrap_or(true) {
+            self.exited = Some(Instant::now());
+            // What it left running would keep the output, and the run, going.
+            let _ = self.leader.stop(false);
+        }
+        if self.killed.is_none() && self.leader.killed() {
+            self.killed = Some(Instant::now());
+        }
+        let overdue = |since: Option<Instant>| since.is_some_and(|since| since.elapsed() >= GRACE);
+        if !self.forced && (overdue(self.killed) || open && overdue(self.exited)) {
+            let _ = self.leader.stop(true);
+            self.forced = true;
+        }
+        // Processes of other groups may keep the output open longer.
+        let given_up = self
+            .exited
+            .is_some_and(|exited| exited.elapsed() >= 2 * GRACE);
+        self.exited.is_some() && (!open || given_up)
+    }
+
+    /// Waits for the leader, and tells how the run ended.
+    pub fn end(self) -> End {
+        let killed = self.leader.killed();
+        match self.leader.reap() {
+            _ if killed => End::Killed,
+            Ok(exit) => exit_end(exit),
+            Err(err) => {
+                log::warn!("cannot wait for the run: {err}");
+                End::Exited(-1)
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

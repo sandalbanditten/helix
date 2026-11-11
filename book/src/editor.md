@@ -36,6 +36,8 @@
 - [`[editor.word-completion]` Section](#editorword-completion-section)
 - [`[editor.spelling]` Section](#editorspelling-section)
 - [`[editor.workspace-trust]` Section](#editorworkspace-trust-section)
+- [`[editor.terminal]` Section](#editorterminal-section)
+- [`[editor.debugger]` Section](#editordebugger-section)
 
 ### `[editor]` Section
 
@@ -821,4 +823,36 @@ level = "servers"
 # Discouraged: skips .helix/ change detection and trusts anything that lands
 # under a matching path. `~` and environment variables are expanded.
 trusted = ["~/src/github.com/me/*"]
+```
+
+### `[editor.terminal]` Section
+
+Options for [terminals](./terminal.md).
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `shell` | The shell and its arguments | `$SHELL`, else `sh` |
+| `scrollback` | The lines kept above the screen | `65536` |
+
+```toml
+[editor.terminal]
+shell = ["fish"]
+scrollback = 100000
+```
+
+### `[editor.debugger]` Section
+
+The external terminal the debugger runs programs in, when a debug adapter asks for one. It
+defaults to a split of tmux or WezTerm when Helix runs in one, and to Windows Terminal or `conhost`
+on Windows.
+
+| Key | Description |
+| --- | --- |
+| `terminal.command` | The terminal emulator to run |
+| `terminal.args` | Its arguments, before the program's |
+
+```toml
+[editor.debugger.terminal]
+command = "tmux"
+args = ["split-window"]
 ```

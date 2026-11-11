@@ -51,18 +51,23 @@ impl Compilation {
 
     /// Maps the styles of the output over `changes` to the buffer.
     pub fn map(&mut self, changes: &ChangeSet) {
-        let Some((first, ..)) = changes.changes_iter().next() else {
-            return;
-        };
-        let at = self.styles.partition_point(|(range, _)| range.end <= first);
-        let mut moved = self.styles.split_off(at);
-        changes.update_positions(moved.iter_mut().flat_map(|(range, _)| {
-            let Range { start, end } = range;
-            [(start, Assoc::After), (end, Assoc::Before)]
-        }));
-        moved.retain(|(range, _)| range.start < range.end);
-        self.styles.append(&mut moved);
+        map_styles(&mut self.styles, changes);
     }
+}
+
+/// Maps the styles of char ranges, in order and apart, over `changes`.
+pub fn map_styles(styles: &mut Vec<(Range<usize>, Style)>, changes: &ChangeSet) {
+    let Some((first, ..)) = changes.changes_iter().next() else {
+        return;
+    };
+    let at = styles.partition_point(|(range, _)| range.end <= first);
+    let mut moved = styles.split_off(at);
+    changes.update_positions(moved.iter_mut().flat_map(|(range, _)| {
+        let Range { start, end } = range;
+        [(start, Assoc::After), (end, Assoc::Before)]
+    }));
+    moved.retain(|(range, _)| range.start < range.end);
+    styles.append(&mut moved);
 }
 
 #[cfg(test)]

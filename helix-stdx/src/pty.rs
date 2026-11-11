@@ -40,6 +40,17 @@ impl Pty {
     pub fn reader(&self) -> io::Result<Reader> {
         Ok(Reader(self.master.try_clone()?))
     }
+
+    /// A writer of input, which reaches commands as if typed on the terminal.
+    pub fn writer(&self) -> io::Result<File> {
+        self.master.try_clone()
+    }
+}
+
+/// Turns off the output processing of the `terminal` end, which turns each `\n` into `\r\n` and
+/// makes reading the output 30 times slower.
+pub fn raw_output(terminal: &File) -> io::Result<()> {
+    imp::raw_output(terminal)
 }
 
 /// Reads the output of a [`Pty`].
@@ -94,14 +105,15 @@ mod imp {
         let name = ptsname(&master, Vec::new())?;
         let flags = OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC;
         let terminal = rustix::fs::open(name.as_c_str(), flags, Mode::empty())?;
-        // Left on, output processing turns each `\n` into `\r\n`, which makes reading the
-        // output 30 times slower.
-        let mut termios = tcgetattr(&terminal)?;
-        termios.output_modes.remove(OutputModes::OPOST);
-        tcsetattr(&terminal, OptionalActions::Now, &termios)?;
         let master = File::from(master);
         resize(&master, cols, rows)?;
         Ok((Pty { master }, File::from(terminal)))
+    }
+
+    pub fn raw_output(terminal: &File) -> io::Result<()> {
+        let mut termios = tcgetattr(terminal)?;
+        termios.output_modes.remove(OutputModes::OPOST);
+        Ok(tcsetattr(terminal, OptionalActions::Now, &termios)?)
     }
 
     pub fn resize(master: &File, cols: u16, rows: u16) -> io::Result<()> {
@@ -137,6 +149,10 @@ mod imp {
         Err(io::ErrorKind::Unsupported.into())
     }
 
+    pub fn raw_output(_terminal: &File) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     pub fn resize(_master: &File, _cols: u16, _rows: u16) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }
@@ -149,16 +165,18 @@ mod imp {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::{
-        io::{BufRead, BufReader},
+        io::{BufRead, BufReader, Write},
         process::{Command, Stdio},
     };
 
     use super::*;
-    use crate::process::{spawn_group, Leader, ProcessGroup};
+    use crate::process::{spawn_group, spawn_terminal, Leader, ProcessGroup};
 
-    /// Runs `script` with `sh` on the terminal end of a pty `cols` wide and `rows` high.
+    /// Runs `script` with `sh` on the terminal end of a pty `cols` wide and `rows` high, without
+    /// output processing.
     fn run(cols: u16, rows: u16, script: &str) -> (Pty, Reader, Leader, ProcessGroup) {
         let (pty, terminal) = Pty::open(cols, rows).unwrap();
+        raw_output(&terminal).unwrap();
         let mut command = Command::new("sh");
         command
             .args(["-c", script])
@@ -209,5 +227,41 @@ mod tests {
         assert_eq!(lines.next().unwrap().unwrap(), "40 120");
         assert!(lines.next().is_none());
         leader.reap().unwrap();
+    }
+
+    #[test]
+    fn interactive_commands_have_the_terminal() {
+        let (pty, terminal) = Pty::open(80, 24).unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "echo ready; read line; echo \"got $line\"; cat /dev/tty",
+            ])
+            .stdin(terminal.try_clone().unwrap())
+            .stdout(terminal.try_clone().unwrap())
+            .stderr(terminal);
+        let (leader, group) = spawn_terminal(&mut command).unwrap();
+        drop(command);
+        let mut output = BufReader::new(pty.reader().unwrap());
+        let mut line = || {
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            line
+        };
+        // Output processing ends lines with `\r\n`.
+        assert_eq!(line(), "ready\r\n");
+        // Typed input echoes.
+        let mut input = pty.writer().unwrap();
+        input.write_all(b"hi\n").unwrap();
+        assert_eq!(line(), "hi\r\n");
+        assert_eq!(line(), "got hi\r\n");
+        // `/dev/tty` is the terminal, until it hangs up.
+        input.write_all(b"tty\n").unwrap();
+        assert_eq!(line(), "tty\r\n");
+        assert_eq!(line(), "tty\r\n");
+        group.hang_up().unwrap();
+        assert!(leader.killed());
+        assert!(!leader.reap().unwrap().success());
     }
 }

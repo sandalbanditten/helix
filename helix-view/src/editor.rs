@@ -681,7 +681,9 @@ pub struct Config {
     #[serde(default)]
     pub search: SearchConfig,
     pub lsp: LspConfig,
-    pub terminal: Option<TerminalConfig>,
+    /// Terminal buffers, which `:term` opens.
+    pub terminal: TerminalConfig,
+    pub debugger: DebuggerConfig,
     /// Column numbers at which to draw the rulers. Defaults to `[]`, meaning no rulers.
     pub rulers: Vec<u16>,
     #[serde(default)]
@@ -875,21 +877,55 @@ impl Default for SmartTabConfig {
     }
 }
 
+/// The debugger, which runs programs to debug in an external terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DebuggerConfig {
+    pub terminal: Option<ExternalTerminalConfig>,
+}
+
+impl Default for DebuggerConfig {
+    fn default() -> Self {
+        Self {
+            terminal: get_terminal_provider(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
-pub struct TerminalConfig {
+pub struct ExternalTerminalConfig {
     pub command: String,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 }
 
+/// Terminal buffers, which `:term` opens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct TerminalConfig {
+    /// The shell and its arguments. Defaults to `$SHELL`, else `sh`.
+    pub shell: Vec<String>,
+    /// The lines kept above the screen. Defaults to `65536`.
+    pub scrollback: usize,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            shell: Vec::new(),
+            scrollback: 1 << 16,
+        }
+    }
+}
+
 #[cfg(windows)]
-pub fn get_terminal_provider() -> Option<TerminalConfig> {
+pub fn get_terminal_provider() -> Option<ExternalTerminalConfig> {
     use helix_stdx::env::binary_exists;
 
     if binary_exists("wt") {
-        return Some(TerminalConfig {
+        return Some(ExternalTerminalConfig {
             command: "wt".to_string(),
             args: vec![
                 "new-tab".to_string(),
@@ -901,25 +937,25 @@ pub fn get_terminal_provider() -> Option<TerminalConfig> {
         });
     }
 
-    Some(TerminalConfig {
+    Some(ExternalTerminalConfig {
         command: "conhost".to_string(),
         args: vec!["cmd".to_string(), "/C".to_string()],
     })
 }
 
 #[cfg(not(any(windows, target_arch = "wasm32")))]
-pub fn get_terminal_provider() -> Option<TerminalConfig> {
+pub fn get_terminal_provider() -> Option<ExternalTerminalConfig> {
     use helix_stdx::env::{binary_exists, env_var_is_set};
 
     if env_var_is_set("TMUX") && binary_exists("tmux") {
-        return Some(TerminalConfig {
+        return Some(ExternalTerminalConfig {
             command: "tmux".to_string(),
             args: vec!["split-window".to_string()],
         });
     }
 
     if env_var_is_set("WEZTERM_UNIX_SOCKET") && binary_exists("wezterm") {
-        return Some(TerminalConfig {
+        return Some(ExternalTerminalConfig {
             command: "wezterm".to_string(),
             args: vec!["cli".to_string(), "split-pane".to_string()],
         });
@@ -1797,7 +1833,8 @@ impl Default for Config {
             undercurl: false,
             search: SearchConfig::default(),
             lsp: LspConfig::default(),
-            terminal: get_terminal_provider(),
+            terminal: TerminalConfig::default(),
+            debugger: DebuggerConfig::default(),
             rulers: Vec::new(),
             whitespace: WhitespaceConfig::default(),
             bufferline: BufferLine::default(),
@@ -2661,8 +2698,9 @@ impl Editor {
                 let remove_empty_scratch = !doc.is_modified()
                     // If the buffer has no path and is not modified, it is an empty scratch buffer.
                     && doc.path().is_none()
-                    // The compilation buffer is never modified, but holds output.
+                    // The compilation buffer and terminals are never modified, but hold output.
                     && doc.compilation.is_none()
+                    && doc.terminal.is_none()
                     // If the buffer we are changing to is not this buffer
                     && id != doc.id
                     // Ensure the buffer is not displayed in any other splits.

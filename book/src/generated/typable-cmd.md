@@ -14,6 +14,9 @@
 | `:compile-test!` | Run the test command of the language, even with unsaved buffers. |
 | `:compile-any` | Run a command in the compilation buffer. |
 | `:compile-any!` | Run a command in the compilation buffer, even with unsaved buffers. |
+| `:term` | Open a terminal running the shell, or a command, in the current split. |
+| `:vterm` | Open a terminal running the shell, or a command, in a vertical split. |
+| `:hterm` | Open a terminal running the shell, or a command, in a horizontal split. |
 | `:compile-kill` | Stop the compilation. |
 | `:buffer-close`, `:bc`, `:bclose` | Close the current buffer. |
 | `:buffer-close!`, `:bc!`, `:bclose!` | Close the current buffer forcefully, ignoring unsaved changes. |

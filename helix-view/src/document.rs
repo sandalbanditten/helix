@@ -268,6 +268,8 @@ pub struct Document {
 
     /// The run this document shows, if it is the compilation buffer.
     pub compilation: Option<Box<crate::compilation::Compilation>>,
+    /// The terminal this document shows, if it is a terminal buffer.
+    pub terminal: Option<Box<crate::terminal::Terminal>>,
 
     /// The side of a diff this document shows, if it is a pane of the diff view.
     pub diff_view: Option<Box<crate::diff_view::Pane>>,
@@ -835,6 +837,7 @@ impl Document {
             readonly: false,
             dired: None,
             compilation: None,
+            terminal: None,
             diff_view: None,
             page: None,
             jump_labels: HashMap::new(),
@@ -1820,6 +1823,9 @@ impl Document {
         if let Some(compilation) = self.compilation.as_mut() {
             compilation.map(changes);
         }
+        if let Some(terminal) = self.terminal.as_mut() {
+            terminal.map(changes);
+        }
 
         // The text before the first change keeps its lines, so the diagnostics there keep theirs,
         // like the loci a compilation buffer holds above the output appended to it.
@@ -1950,6 +1956,11 @@ impl Document {
         let transaction = helix_core::diff::compare_ropes(&self.text, text);
         self.diff_view = Some(Box::new(pane));
         self.apply_impl(&transaction, view_id, false)
+    }
+
+    /// Applies `transaction`, output of the terminal the document shows, which edits don't change.
+    pub fn apply_output(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
+        self.apply_impl(transaction, view_id, false)
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
@@ -2131,10 +2142,10 @@ impl Document {
         self.id
     }
 
-    /// If there are unsaved modifications.
-    /// Whether edits change the document: they don't in a pager or a pane of the diff view.
+    /// Whether edits change the document: they don't in a pager, a pane of the diff view or a
+    /// terminal.
     pub fn is_modifiable(&self) -> bool {
-        self.diff_view.is_none() && self.page.is_none()
+        self.diff_view.is_none() && self.page.is_none() && self.terminal.is_none()
     }
 
     /// Shows the document as a pager does: the formatting of terminal output in its text, like
@@ -2175,7 +2186,7 @@ impl Document {
     }
 
     pub fn is_modified(&self) -> bool {
-        if self.compilation.is_some() {
+        if self.compilation.is_some() || self.terminal.is_some() {
             return false;
         }
         let current_revision = self.history.borrow().current_revision();
@@ -2528,6 +2539,9 @@ impl Document {
         }
         if let Some(compilation) = &self.compilation {
             return compilation.display_name().into();
+        }
+        if let Some(terminal) = &self.terminal {
+            return terminal.display_name().into();
         }
         if let Some(pane) = &self.diff_view {
             return pane.name.as_str().into();
