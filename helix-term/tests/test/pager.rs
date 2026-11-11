@@ -1,7 +1,7 @@
-use std::io::Write;
+use std::{ffi::OsString, io::Write};
 
 use helix_term::application::Application;
-use helix_view::{doc, graphics::Color};
+use helix_view::{doc, doc_mut, graphics::Color, pager};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -84,6 +84,38 @@ async fn pagers_refuse_edits_and_writes() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn piped_text_is_named_pager_and_files_read_only() -> anyhow::Result<()> {
+    let statusline = |app: &Application| {
+        let screen = app.screen();
+        let width = screen.area.width as usize;
+        let row = screen.content.chunks(width).nth_back(1).unwrap();
+        row.iter()
+            .map(|cell| cell.symbol.as_str())
+            .collect::<String>()
+    };
+    let file = output_file()?;
+    let mut session = pager(&file)?;
+    session.keys("").await?;
+    let name = file.path().file_name().unwrap().to_string_lossy();
+    let line = statusline(&session.app);
+    assert!(
+        line.contains(&*name) && line.contains(" [readonly] "),
+        "{line}"
+    );
+    // A buffer without a file, as the text piped into the pager is.
+    session.keys(":new<ret>").await?;
+    doc_mut!(session.app.editor).page();
+    session.keys("").await?;
+    let line = statusline(&session.app);
+    assert!(line.contains(" [pager] "), "{line}");
+    assert!(
+        !line.contains("[readonly]") && !line.contains("[scratch]"),
+        "{line}"
+    );
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn every_file_of_a_pager_session_is_paged() -> anyhow::Result<()> {
     let file = output_file()?;
     let other = output_file()?;
@@ -135,7 +167,8 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     // The cursor halfway, then the page formatted narrower, in twice the lines.
     session.keys("100gg").await?;
     let doc = doc!(session.app.editor).id();
-    session.app.editor.repage(doc, &page(400));
+    let (text, formatted) = pager::page(&page(400));
+    session.app.editor.repage(doc, text, formatted);
     session.keys("").await?;
     let (view, doc) = helix_view::current_ref!(session.app.editor);
     let text = doc.text().slice(..);
@@ -144,6 +177,67 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     assert!((195..=202).contains(&cursor), "{cursor}");
     assert!(!doc.is_modified());
     assert!(!doc.page.as_ref().unwrap().man.is_empty());
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<()> {
+    let repo = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let name = format!("{}.txt", "long-name-".repeat(15));
+    std::fs::write(repo.path().join(&name), "")?;
+    git(repo.path(), &["init"]);
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-m", "empty"]);
+    std::fs::write(repo.path().join(&name), "line\n".repeat(100))?;
+    // `--stat` lays the diff out for `COLUMNS`, like difftastic.
+    let args = ["diff", "--no-ext-diff", "--stat"];
+    let shown = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo.path())
+        .env("COLUMNS", "200")
+        .output()?;
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile_in(env!("CARGO_TARGET_TMPDIR"))?;
+    file.write_all(&shown.stdout)?;
+    let mut session = pager(&file)?;
+    let doc = doc_mut!(session.app.editor);
+    doc.page.as_mut().unwrap().source = Some(pager::Source {
+        producer: pager::Producer::Git {
+            args: args.iter().map(OsString::from).collect(),
+            dir: repo.path().to_owned(),
+        },
+        width: None,
+        formatting: None,
+    });
+    let widest = |app: &Application| {
+        let text = doc!(app.editor).text();
+        text.lines().map(|line| line.len_chars()).max().unwrap_or(0)
+    };
+    assert!(widest(&session.app) > 150);
+    session
+        .until("git to format the diff again", |app| widest(app) < 150)
+        .await;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    // Lines end before the last column, which would wrap them.
+    assert!(widest(&session.app) < view.inner_width(doc) as usize);
+    assert!(doc.text().to_string().contains("| 100 +"));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_formatted_the_same_stay_as_they_are() -> anyhow::Result<()> {
+    let mut session = pager(&output_file()?)?;
+    session.keys("jwl").await?;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    let (id, version) = (doc.id(), doc.version());
+    let selection = doc.selection(view.id).clone();
+    let (text, formatted) = pager::page(OUTPUT);
+    session.app.editor.repage(id, text, formatted);
+    session.keys("").await?;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    assert_eq!(doc.version(), version);
+    assert_eq!(doc.selection(view.id), &selection);
     session.quit().await
 }
 

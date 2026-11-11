@@ -69,6 +69,9 @@ pub const DEFAULT_LANGUAGE_NAME: &str = "text";
 
 pub const SCRATCH_BUFFER_NAME: &str = "[scratch]";
 
+/// The name of the text piped into a pager.
+pub const PAGER_BUFFER_NAME: &str = "[pager]";
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Mode {
     Normal = 0,
@@ -2138,38 +2141,37 @@ impl Document {
     /// colors and overstrikes, as styles, the parts of a man page in colors of their own, and no
     /// edits. For a document no view shows yet.
     pub fn page(&mut self) {
-        let mut page = crate::pager::Page::default();
-        let mut text = self.text.to_string();
-        if crate::pager::is_formatted(&text) {
-            (text, page) = crate::pager::format(&text);
-            self.text = Rope::from(text.as_str());
-            // The syntax tree was of the formatted text.
+        let (text, page) = crate::pager::page(&self.text.to_string());
+        self.show_page(text, page);
+    }
+
+    /// Shows `text` with `page`, as [`pager::page`](crate::pager::page) reads terminal output, in
+    /// place of the text of a document in a pager, keeping its source. Returns false, changing
+    /// nothing, if the document shows that already. The selections of views are left for the
+    /// caller to set.
+    pub(crate) fn repage(&mut self, text: String, mut page: crate::pager::Page) -> bool {
+        let Some(shown) = self.page.as_mut() else {
+            return false;
+        };
+        if shown.styles == page.styles && self.text == text.as_str() {
+            return false;
+        }
+        page.source = shown.source.take();
+        self.show_page(text, page);
+        // Frames drawn of the text before are not of this one.
+        self.version += 1;
+        true
+    }
+
+    fn show_page(&mut self, text: String, page: crate::pager::Page) {
+        if self.text != text.as_str() {
+            self.text = Rope::from(text);
+            // The syntax tree was of the text before.
             let loader = self.syn_loader.load();
             self.set_language(self.language.clone(), &loader);
-        }
-        if crate::pager::is_man_page(&text) {
-            page.man = crate::pager::man_parts(&text, &page.styles);
         }
         self.reset_history();
         self.page = Some(Box::new(page));
-    }
-
-    /// Shows `output` in place of the text of a document in a pager, as [`page`](Self::page)
-    /// does, keeping its man page. The selections of views are left for the caller to set.
-    pub(crate) fn repage(&mut self, output: &str) {
-        let man_page = self.page.as_mut().and_then(|page| page.man_page.take());
-        self.text = Rope::from(output);
-        if !crate::pager::is_formatted(output) {
-            // Formatting takes the syntax tree along, plain text doesn't.
-            let loader = self.syn_loader.load();
-            self.set_language(self.language.clone(), &loader);
-        }
-        self.page();
-        if let Some(page) = &mut self.page {
-            page.man_page = man_page;
-        }
-        // Frames drawn of the text before are not of this one.
-        self.version += 1;
     }
 
     pub fn is_modified(&self) -> bool {
@@ -2529,6 +2531,9 @@ impl Document {
         }
         if let Some(pane) = &self.diff_view {
             return pane.name.as_str().into();
+        }
+        if self.page.is_some() && self.path.is_none() {
+            return PAGER_BUFFER_NAME.into();
         }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())

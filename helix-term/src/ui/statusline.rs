@@ -612,7 +612,9 @@ fn render_read_only_indicator<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let title = if context.doc.readonly || context.doc.page.is_some() {
+    // Files shown in a pager are read-only too; the text piped into it says so by its name.
+    let paged_file = context.doc.page.is_some() && context.doc.path().is_some();
+    let title = if context.doc.readonly || paged_file {
         " [readonly] "
     } else {
         ""

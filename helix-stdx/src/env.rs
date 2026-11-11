@@ -68,6 +68,35 @@ pub fn which<T: AsRef<OsStr>>(
     })
 }
 
+/// The command-line arguments of the process that started this one, then of the process that
+/// started that one, and so on, where the system tells them: on Linux.
+pub fn ancestor_args() -> impl Iterator<Item = Vec<OsString>> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut pid = std::os::unix::process::parent_id();
+        std::iter::from_fn(move || {
+            if pid == 0 {
+                return None;
+            }
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+            pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:"))?
+                .trim()
+                .parse()
+                .ok()?;
+            // Each argument ends in a NUL.
+            let args = cmdline.strip_suffix(&[0])?;
+            let args = args.split(|&byte| byte == 0);
+            Some(args.map(|arg| OsStr::from_bytes(arg).to_owned()).collect())
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::iter::empty()
+}
+
 fn find_brace_end(src: &[u8]) -> Option<usize> {
     use regex_automata::meta::Regex;
 
@@ -188,6 +217,32 @@ mod tests {
 
         let cwd = current_working_dir();
         assert_eq!(cwd, new_path);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn ancestor_args_are_those_of_the_ancestors() {
+        // Run again as a child of this test, which prints what it reads.
+        if std::env::var_os("HELIX_ANCESTOR_ARGS").is_some() {
+            println!("{:?}", super::ancestor_args().take(2).collect::<Vec<_>>());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "env::tests::ancestor_args_are_those_of_the_ancestors",
+            ])
+            .args(["--nocapture", "--test-threads=1"])
+            .env("HELIX_ANCESTOR_ARGS", "1")
+            .output()
+            .unwrap();
+        let args: Vec<OsString> = std::env::args_os().collect();
+        let parent = super::ancestor_args().next().unwrap();
+        let output = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.contains(&format!("{:?}", [args, parent])),
+            "{output}"
+        );
     }
 
     macro_rules! assert_env_expand {
