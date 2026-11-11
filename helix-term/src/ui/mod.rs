@@ -24,6 +24,7 @@ pub(crate) mod scrollbar;
 pub(crate) mod search;
 mod select;
 mod spinner;
+mod start_screen;
 mod statusline;
 mod text;
 mod text_decorations;

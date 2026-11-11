@@ -28,7 +28,7 @@ fn main() {
     };
     let version: Cow<_> = match &git_hash {
         Some(git_hash) => format!("{} ({})", calver, &git_hash[..8]).into(),
-        None => calver.into(),
+        None => calver.as_str().into(),
     };
 
     println!(
@@ -37,6 +37,10 @@ fn main() {
     );
 
     println!("cargo:rustc-env=VERSION_AND_GIT_HASH={version}");
+    println!("cargo:rustc-env=VERSION={calver}");
+    if let Some(git_hash) = &git_hash {
+        println!("cargo:rustc-env=GIT_HASH={}", &git_hash[..8]);
+    }
 
     if git_hash.is_none() {
         return;

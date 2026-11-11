@@ -8,6 +8,8 @@ use etcetera::base_strategy::{choose_base_strategy, BaseStrategy};
 use std::path::{Path, PathBuf};
 
 pub const VERSION_AND_GIT_HASH: &str = env!("VERSION_AND_GIT_HASH");
+pub const VERSION: &str = env!("VERSION");
+pub const GIT_HASH: Option<&str> = option_env!("GIT_HASH");
 
 static RUNTIME_DIRS: std::sync::LazyLock<Vec<PathBuf>> =
     std::sync::LazyLock::new(prioritize_runtime_dirs);

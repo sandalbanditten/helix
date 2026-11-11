@@ -15,7 +15,7 @@ use crate::{
         minimap::Minimaps,
         overview::{self, Overview},
         scrollbar::{self, Bar, Gesture, RailStyles},
-        statusline,
+        start_screen, statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         undo_tree::UndoTree,
         Completion, ProgressSpinners, ReloadQuestion,
@@ -78,6 +78,8 @@ pub struct EditorView {
     rails: Vec<Rail>,
     /// A press on the rail or the minimap of a view, and the drag that may follow.
     scroll_gesture: Option<ScrollGesture>,
+    /// Whether the logo shows, until the first input.
+    pub start_screen: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +143,7 @@ impl EditorView {
             minimaps: RefCell::default(),
             rails: Vec::new(),
             scroll_gesture: None,
+            start_screen: false,
         }
     }
 
@@ -453,6 +456,11 @@ impl EditorView {
             && config.end_of_line_diagnostics == DiagnosticFilter::Disable
         {
             Self::render_diagnostics(doc, view, inner, surface, theme);
+        }
+
+        if self.start_screen && doc.version() == 0 {
+            let true_color = config.true_color || crate::true_color();
+            start_screen::render(area.clip_bottom(1), surface, theme, true_color);
         }
 
         let mut context =
@@ -1986,6 +1994,10 @@ impl Component for EditorView {
             on_next_key_callback: None,
             jobs: context.jobs,
         };
+
+        if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
+            self.start_screen = false;
+        }
 
         match event {
             Event::Paste(contents) => {

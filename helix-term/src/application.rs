@@ -238,6 +238,9 @@ impl Application {
             }
         } else if stdin().is_terminal() || cfg!(feature = "integration") {
             editor.new_file(Action::VerticalSplit);
+            if let Some(editor_view) = compositor.find::<ui::EditorView>() {
+                editor_view.start_screen = config.load().editor.start_screen;
+            }
         } else {
             editor
                 .new_file_from_stdin(Action::VerticalSplit)

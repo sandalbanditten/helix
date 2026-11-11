@@ -743,6 +743,8 @@ pub struct Config {
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
+    /// Whether to show the logo when starting without files. Defaults to `true`.
+    pub start_screen: bool,
 }
 
 /// User-facing configuration for `[editor.workspace-trust]`.
@@ -1827,6 +1829,7 @@ impl Default for Config {
             kitty_keyboard_protocol: Default::default(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
+            start_screen: true,
         }
     }
 }

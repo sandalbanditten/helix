@@ -14,6 +14,7 @@ Everything below is on `master`. The book (`book/src`) has a page or section for
 | **Scrollbars** | Rails on splits that mark diagnostics and search matches; drag the thumb, or click the track to page | `[editor.scrollbar] enable = true` |
 | **Minimap** | A braille map beside each split; click or drag it to scroll | `[editor.minimap] enable = true` (`width`, `lines-per-dot`) |
 | **Bufferline scroll** | The bufferline scrolls, smoothly, to keep the active buffer in view | Automatic |
+| **Start screen** | Shows the logo and version when starting without files, until the first key | `[editor] start-screen = false` turns it off |
 
 ## Side panels
 
