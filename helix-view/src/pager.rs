@@ -2,7 +2,13 @@
 //! overstrikes become styles, and nothing edits them. Man pages get colors for their parts too,
 //! like bat and Neovim give them.
 
-use std::{ops::Range, sync::LazyLock};
+use std::{
+    ffi::OsString,
+    ops::Range,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::LazyLock,
+};
 
 use helix_core::regex::Regex;
 
@@ -18,47 +24,173 @@ pub struct Page {
     pub styles: Vec<(Range<usize>, Style)>,
     /// The parts of a man page with colors of their own, in order and apart, if the text is one.
     pub man: Vec<(Range<usize>, ManPart)>,
-    /// The man page `man` showed in the pager, which is formatted again to fit the view.
-    pub man_page: Option<ManPage>,
+    /// The command that showed the text in the pager, which formats it again to fit the view.
+    pub source: Option<Source>,
 }
 
-/// A man page `man` showed in the pager, formatted for the width of the view showing it.
+/// A command that showed its output in the pager, formatted for the width of the view showing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManPage {
-    /// The page, as `man` names it to its pager in `MAN_PN`: like `ls(1)`, or a file.
-    pub name: String,
+pub struct Source {
+    pub producer: Producer,
     /// The width the text is formatted for, once the view's is known.
     pub width: Option<u16>,
     /// The width the text is being formatted for.
     pub formatting: Option<u16>,
 }
 
-impl ManPage {
-    /// The page `man` is showing in the pager it started, if any.
-    pub fn from_env() -> Option<Self> {
-        let name = std::env::var("MAN_PN")
-            .ok()
-            .filter(|name| !name.is_empty())?;
+impl Source {
+    /// The command showing its output in the pager it started, if it can format it again: `man`
+    /// showing a man page, or git showing diffs.
+    pub fn from_env(man_page: bool) -> Option<Self> {
+        let producer = if man_page {
+            Producer::man()?
+        } else {
+            Producer::git()?
+        };
         Some(Self {
-            name,
+            producer,
             width: None,
             formatting: None,
         })
     }
+}
 
-    /// The arguments for `man` to show the page.
-    pub fn args(&self) -> Vec<String> {
-        let name = &self.name;
-        if name.contains('/') {
-            return vec!["-l".to_owned(), name.clone()];
+/// A command whose output a pager shows, which lays it out for a width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Producer {
+    /// `man` showing a page, as it names it to its pager in `MAN_PN`: like `ls(1)`, or a file.
+    Man(String),
+    /// git showing diffs: its arguments after `git`, without `-C`, and the directory it ran in.
+    Git { args: Vec<OsString>, dir: PathBuf },
+}
+
+/// The options of git itself that take the argument after them, besides `-C`.
+const GIT_OPTIONS_WITH_VALUES: [&str; 7] = [
+    "-c",
+    "--config-env",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--shallow-file",
+    "--attr-source",
+];
+
+impl Producer {
+    fn man() -> Option<Self> {
+        let name = std::env::var("MAN_PN")
+            .ok()
+            .filter(|name| !name.is_empty())?;
+        Some(Self::Man(name))
+    }
+
+    /// git, if it started the pager with a command that shows diffs. git runs its pager in the
+    /// top directory of the work tree, and tells it in `GIT_PREFIX` where the command ran.
+    fn git() -> Option<Self> {
+        let prefix = std::env::var_os("GIT_PREFIX")?;
+        let dir = helix_stdx::env::current_working_dir().join(prefix);
+        let mut ancestors = helix_stdx::env::ancestor_args();
+        let mut args = ancestors.next()?;
+        // git runs the pager with `sh -c`, which starts it rather than becoming it when the
+        // pager's command is more than a command, like `hx -p 2>/dev/null`.
+        if Path::new(args.first()?).file_name()? == "sh" && args.get(1)? == "-c" {
+            args = ancestors.next()?;
         }
-        match name
-            .strip_suffix(')')
-            .and_then(|name| name.rsplit_once('('))
-        {
-            Some((page, section)) => vec![section.to_owned(), page.to_owned()],
-            None => vec![name.clone()],
+        Self::git_command(args, dir)
+    }
+
+    /// git running `args` in `dir`, if they are a command that shows diffs: `diff`, `show`, `log`,
+    /// `whatchanged`, `range-diff`, `stash show` or `stash list`. Other commands may change the
+    /// repository, so they don't run again.
+    fn git_command(args: Vec<OsString>, dir: PathBuf) -> Option<Self> {
+        let mut args = args.into_iter();
+        if Path::new(&args.next()?).file_name()? != "git" {
+            return None;
         }
+        let mut kept = Vec::new();
+        // The options of git itself, up to the command; `-C` changed to `dir` already.
+        let command = loop {
+            let arg = args.next()?;
+            if arg == "-C" {
+                args.next()?;
+                continue;
+            }
+            if !arg.as_encoded_bytes().starts_with(b"-") {
+                break arg;
+            }
+            let takes_value = GIT_OPTIONS_WITH_VALUES.iter().any(|option| arg == *option);
+            kept.push(arg);
+            if takes_value {
+                kept.push(args.next()?);
+            }
+        };
+        let rest: Vec<OsString> = args.collect();
+        let shows_diffs = match command.to_str()? {
+            "diff" | "show" | "log" | "whatchanged" | "range-diff" => true,
+            "stash" => rest
+                .first()
+                .is_some_and(|action| action == "show" || action == "list"),
+            _ => false,
+        };
+        if !shows_diffs {
+            return None;
+        }
+        kept.push(command);
+        kept.extend(rest);
+        Some(Self::Git { args: kept, dir })
+    }
+
+    /// The widest the text gets: for man pages `MANWIDTH`, if set.
+    pub fn max_width(&self) -> Option<u16> {
+        match self {
+            Self::Man(_) => std::env::var("MANWIDTH")
+                .ok()
+                .and_then(|width| width.parse().ok()),
+            Self::Git { .. } => None,
+        }
+    }
+
+    /// The command that lays the text out again for `width` columns.
+    pub fn command(&self, width: u16) -> Command {
+        let mut command = match self {
+            Self::Man(name) => {
+                let mut command = Command::new("man");
+                // `MANPAGER=cat` keeps `man` from starting the pager again, and
+                // `MAN_KEEP_FORMATTING` keeps its overstrikes in output to a pipe.
+                command
+                    .args(man_args(name))
+                    .env("MANPAGER", "cat")
+                    .env("MANWIDTH", width.to_string())
+                    .env("MAN_KEEP_FORMATTING", "1");
+                command
+            }
+            Self::Git { args, dir } => {
+                let mut command = Command::new("git");
+                // Colored as output to a pager is, and laid out for `COLUMNS`, which difftastic
+                // and `--stat` follow where no terminal tells them a width.
+                command
+                    .args(args)
+                    .current_dir(dir)
+                    .env("COLUMNS", width.to_string())
+                    .env("GIT_PAGER_IN_USE", "true");
+                command
+            }
+        };
+        command.stdin(Stdio::null()).stderr(Stdio::null());
+        command
+    }
+}
+
+/// The arguments for `man` to show the page `name`.
+fn man_args(name: &str) -> Vec<String> {
+    if name.contains('/') {
+        return vec!["-l".to_owned(), name.to_owned()];
+    }
+    match name
+        .strip_suffix(')')
+        .and_then(|name| name.rsplit_once('('))
+    {
+        Some((page, section)) => vec![section.to_owned(), page.to_owned()],
+        None => vec![name.to_owned()],
     }
 }
 
@@ -432,14 +564,75 @@ mod tests {
 
     #[test]
     fn man_pages_name_their_arguments() {
-        let page = |name: &str| ManPage {
-            name: name.to_owned(),
-            width: None,
-            formatting: None,
+        assert_eq!(man_args("ls(1)"), ["1", "ls"]);
+        assert_eq!(man_args("git-log(1)"), ["1", "git-log"]);
+        assert_eq!(man_args("./ls.1"), ["-l", "./ls.1"]);
+        assert_eq!(man_args("ls"), ["ls"]);
+    }
+
+    #[test]
+    fn only_git_commands_showing_diffs_run_again() {
+        let git = |args: &[&str]| {
+            let args = args.iter().map(OsString::from).collect();
+            match Producer::git_command(args, PathBuf::from("/repo/sub"))? {
+                Producer::Git { args, dir } => {
+                    assert_eq!(dir, Path::new("/repo/sub"));
+                    Some(args)
+                }
+                Producer::Man(_) => None,
+            }
         };
-        assert_eq!(page("ls(1)").args(), ["1", "ls"]);
-        assert_eq!(page("git-log(1)").args(), ["1", "git-log"]);
-        assert_eq!(page("./ls.1").args(), ["-l", "./ls.1"]);
-        assert_eq!(page("ls").args(), ["ls"]);
+        assert_eq!(git(&["git", "diff", "HEAD~1"]).unwrap(), ["diff", "HEAD~1"]);
+        // `-C` took git to the directory already; other options of git itself stay.
+        let args = [
+            "/usr/bin/git",
+            "-C",
+            "sub",
+            "-c",
+            "a.b=c",
+            "--no-pager",
+            "log",
+            "-p",
+        ];
+        assert_eq!(
+            git(&args).unwrap(),
+            ["-c", "a.b=c", "--no-pager", "log", "-p"]
+        );
+        assert!(git(&["git", "--git-dir=.git", "show"]).is_some());
+        assert!(git(&["git", "stash", "show", "-p"]).is_some());
+        assert!(git(&["git", "stash", "list"]).is_some());
+        assert!(git(&["git", "-p", "stash", "pop"]).is_none());
+        assert!(git(&["git", "stash"]).is_none());
+        assert!(git(&["git", "-p", "commit", "-m", "diff"]).is_none());
+        // The value of an option isn't the command.
+        assert!(git(&["git", "--git-dir", "diff", "status"]).is_none());
+        assert!(git(&["git", "-c"]).is_none());
+        assert!(git(&["git"]).is_none());
+        assert!(git(&["fish", "-c", "git diff"]).is_none());
+    }
+
+    #[test]
+    fn commands_lay_their_output_out_for_the_width() {
+        let env = |command: &Command, name: &str| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value?.to_str())
+                .map(str::to_owned)
+        };
+        let git = Producer::Git {
+            args: vec!["diff".into()],
+            dir: PathBuf::from("/repo"),
+        };
+        let command = git.command(80);
+        assert_eq!(command.get_program(), "git");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["diff"]);
+        assert_eq!(command.get_current_dir(), Some(Path::new("/repo")));
+        assert_eq!(env(&command, "COLUMNS").as_deref(), Some("80"));
+        assert_eq!(env(&command, "GIT_PAGER_IN_USE").as_deref(), Some("true"));
+        let command = Producer::Man("ls(1)".to_owned()).command(80);
+        assert_eq!(command.get_program(), "man");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["1", "ls"]);
+        assert_eq!(env(&command, "MANWIDTH").as_deref(), Some("80"));
     }
 }

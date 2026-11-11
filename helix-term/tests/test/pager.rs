@@ -1,7 +1,7 @@
-use std::io::Write;
+use std::{ffi::OsString, io::Write};
 
 use helix_term::application::Application;
-use helix_view::{doc, graphics::Color, pager};
+use helix_view::{doc, doc_mut, graphics::Color, pager};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -145,6 +145,51 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     assert!((195..=202).contains(&cursor), "{cursor}");
     assert!(!doc.is_modified());
     assert!(!doc.page.as_ref().unwrap().man.is_empty());
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<()> {
+    let repo = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let name = format!("{}.txt", "long-name-".repeat(15));
+    std::fs::write(repo.path().join(&name), "")?;
+    git(repo.path(), &["init"]);
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-m", "empty"]);
+    std::fs::write(repo.path().join(&name), "line\n".repeat(100))?;
+    // `--stat` lays the diff out for `COLUMNS`, like difftastic.
+    let args = ["diff", "--no-ext-diff", "--stat"];
+    let shown = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo.path())
+        .env("COLUMNS", "200")
+        .output()?;
+    let mut file = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile_in(env!("CARGO_TARGET_TMPDIR"))?;
+    file.write_all(&shown.stdout)?;
+    let mut session = pager(&file)?;
+    let doc = doc_mut!(session.app.editor);
+    doc.page.as_mut().unwrap().source = Some(pager::Source {
+        producer: pager::Producer::Git {
+            args: args.iter().map(OsString::from).collect(),
+            dir: repo.path().to_owned(),
+        },
+        width: None,
+        formatting: None,
+    });
+    let widest = |app: &Application| {
+        let text = doc!(app.editor).text();
+        text.lines().map(|line| line.len_chars()).max().unwrap_or(0)
+    };
+    assert!(widest(&session.app) > 150);
+    session
+        .until("git to format the diff again", |app| widest(app) < 150)
+        .await;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    // Lines end before the last column, which would wrap them.
+    assert!(widest(&session.app) < view.inner_width(doc) as usize);
+    assert!(doc.text().to_string().contains("| 100 +"));
     session.quit().await
 }
 

@@ -2785,9 +2785,9 @@ impl Editor {
                 self.syn_loader.clone(),
             );
             doc.page();
-            // Shown by `man`, the page can be formatted again to fit the view.
-            if let Some(page) = doc.page.as_mut().filter(|page| !page.man.is_empty()) {
-                page.man_page = crate::pager::ManPage::from_env();
+            // Shown by `man` or git, the text can be formatted again to fit the view.
+            if let Some(page) = doc.page.as_mut() {
+                page.source = crate::pager::Source::from_env(!page.man.is_empty());
             }
             return Ok(self.new_file_from_document(action, doc));
         }
