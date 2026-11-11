@@ -162,6 +162,19 @@ struct Row {
 }
 
 impl Row {
+    /// A row of `cols` cells of `blank`, or an empty one.
+    fn blank(blank: Cell, cols: usize) -> Self {
+        let cells = if blank == BLANK {
+            Vec::new()
+        } else {
+            vec![blank; cols]
+        };
+        Self {
+            cells,
+            wrapped: false,
+        }
+    }
+
     /// Whether the row, of a screen `cols` wide, is filled up with spaces to its end.
     fn padded(&self, cols: usize) -> bool {
         self.cells.len() >= cols && self.cells.iter().rev().take(2).all(Cell::is_blank)
@@ -199,6 +212,24 @@ impl Row {
         }
     }
 
+    /// Moves the cells from `col` on right by `count`, those past `cols` going.
+    fn insert(&mut self, col: usize, count: usize, blank: Cell, cols: usize) {
+        if col >= self.cells.len() && blank == BLANK {
+            return;
+        }
+        if col > self.cells.len() {
+            self.cells.resize(col, BLANK);
+        }
+        self.split(col);
+        let count = count.min(cols - col);
+        self.cells
+            .splice(col..col, std::iter::repeat_n(blank, count));
+        if self.cells.len() > cols {
+            self.split(cols);
+            self.cells.truncate(cols);
+        }
+    }
+
     /// Turns a wide char or a tab covering `col` and other cells into spaces.
     fn split(&mut self, col: usize) {
         let rest = |col: usize| {
@@ -217,21 +248,28 @@ impl Row {
         }
     }
 
-    /// Blanks the cells of `cols`.
-    fn erase(&mut self, cols: std::ops::Range<usize>) {
+    /// Fills the cells of `cols` with `blank`.
+    fn erase(&mut self, cols: Range<usize>, blank: Cell) {
+        if blank != BLANK && self.cells.len() < cols.end {
+            self.cells.resize(cols.end, BLANK);
+        }
         let end = cols.end.min(self.cells.len());
         if cols.start >= end {
             return;
         }
         self.split(cols.start);
         self.split(end);
-        self.cells[cols.start..end].fill(BLANK);
+        self.cells[cols.start..end].fill(blank);
     }
 
-    /// Erases the cells from `col` on.
-    fn truncate(&mut self, col: usize) {
-        self.split(col);
-        self.cells.truncate(col);
+    /// Erases the cells from `col` on, of a row `cols` wide.
+    fn truncate(&mut self, col: usize, blank: Cell, cols: usize) {
+        if blank == BLANK {
+            self.split(col);
+            self.cells.truncate(col);
+        } else {
+            self.erase(col..cols, blank);
+        }
         self.wrapped = false;
     }
 
@@ -240,8 +278,8 @@ impl Row {
         self.wrapped = false;
     }
 
-    /// Adds the text of the row, of a screen `cols` wide, to `shown`.
-    fn render(&self, cols: usize, clusters: &Clusters, shown: &mut Shown) {
+    /// Adds the text of the row, of a screen `cols` wide, to `shown`. Returns the cells shown.
+    fn render(&self, cols: usize, clusters: &Clusters, shown: &mut Shown) -> usize {
         let mut end = self.cells.len();
         if self.padded(cols) {
             end -= self
@@ -270,6 +308,7 @@ impl Row {
             }
             shown.style(start, run[0].style);
         }
+        end
     }
 }
 
@@ -279,20 +318,70 @@ enum Escape {
     None,
     /// After `ESC`.
     Start,
-    /// After `ESC` and intermediate bytes, like the `(` of `ESC ( B`.
-    Intermediate,
+    /// After `ESC` and an intermediate byte, like the `(` of `ESC ( B`.
+    Intermediate(char),
     /// In a control sequence, `ESC [ … final`.
     Control,
-    /// In a string, like an OSC title `ESC ] … BEL`, until `BEL` or `ESC \`.
-    String,
+    /// In a string `ESC c …`, like an OSC title `ESC ] … BEL`, until `BEL` or `ESC \`.
+    String(char),
     /// After an `ESC` in a string.
-    StringEnd,
+    StringEnd(char),
 }
 
 /// The parameters of a control sequence kept at most, which no real one has.
 const MAX_PARAMS: usize = 64;
+/// The longest string kept, like a title.
+const MAX_STRING: usize = 4096;
 /// Tabs stop at every multiple of this.
 const TAB: usize = 8;
+
+/// The modes programs set on a terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Modes {
+    /// Cursor keys send `ESC O A` rather than `ESC [ A`.
+    pub app_cursor: bool,
+    pub bracketed_paste: bool,
+    /// The program draws a frame, which shows once it is done.
+    pub synchronized: bool,
+    pub show_cursor: bool,
+    autowrap: bool,
+    /// Printing inserts rather than overwrites.
+    insert: bool,
+    /// Rows count from the top of the scroll region.
+    origin: bool,
+}
+
+impl Default for Modes {
+    fn default() -> Self {
+        Self {
+            app_cursor: false,
+            bracketed_paste: false,
+            synchronized: false,
+            show_cursor: true,
+            autowrap: true,
+            insert: false,
+            origin: false,
+        }
+    }
+}
+
+/// The cursor as `ESC 7` saves it.
+#[derive(Debug, Clone, Copy, Default)]
+struct Saved {
+    row: usize,
+    col: usize,
+    style: Style,
+    charsets: [bool; 2],
+    shifted: bool,
+}
+
+/// The main screen while the alternate one shows.
+#[derive(Debug)]
+struct Main {
+    rows: VecDeque<Row>,
+    row: usize,
+    col: usize,
+}
 
 /// A terminal screen of the last rows of output, `cols` wide and `height` high.
 #[derive(Debug)]
@@ -305,8 +394,7 @@ pub struct Screen {
     row: usize,
     /// The cursor's column; at `cols`, the next char goes into the next row.
     col: usize,
-    /// The cursor and style that `ESC 7` saved.
-    saved: Option<(usize, usize, Style)>,
+    saved: Option<Saved>,
     clusters: Clusters,
     /// Whether the colors of the output are kept, rather than left out.
     colors: bool,
@@ -319,13 +407,35 @@ pub struct Screen {
     held: Shown,
     /// The lines that scrolled away since they were taken last, each ending in a line break.
     scrolled: Shown,
+    /// Whether programs draw on the screen and ask it questions, as in a terminal, rather than
+    /// only write output.
+    terminal: bool,
+    /// The rows that scroll.
+    region: Range<usize>,
+    modes: Modes,
+    /// Whether the charsets G0 and G1 are DEC line drawing, and whether G1 is in use.
+    charsets: [bool; 2],
+    shifted: bool,
+    /// The char printed last, which `CSI b` repeats.
+    last: Option<char>,
+    main: Option<Box<Main>>,
+    /// The string being read.
+    string: String,
+    /// The answers to the program's questions.
+    replies: Vec<u8>,
+    title: Option<String>,
+    /// The colors of the text and the background, for programs that ask.
+    palette: [Option<(u8, u8, u8)>; 2],
+    /// Whether the program cleared the lines that scrolled away.
+    cleared: bool,
 }
 
 impl Screen {
     pub fn new(cols: u16, height: u16, colors: bool) -> Self {
+        let height = usize::from(height.max(1));
         Self {
             cols: cols.max(1).into(),
-            height: height.max(1).into(),
+            height,
             rows: VecDeque::from([Row::default()]),
             row: 0,
             col: 0,
@@ -338,6 +448,28 @@ impl Screen {
             partial: Vec::new(),
             held: Shown::default(),
             scrolled: Shown::default(),
+            terminal: false,
+            region: 0..height,
+            modes: Modes::default(),
+            charsets: [false; 2],
+            shifted: false,
+            last: None,
+            main: None,
+            string: String::new(),
+            replies: Vec::new(),
+            title: None,
+            palette: [None; 2],
+            cleared: false,
+        }
+    }
+
+    /// The screen of a terminal, on which programs draw, telling those that ask the colors of
+    /// its text and its background.
+    pub fn terminal(cols: u16, height: u16, palette: [Option<(u8, u8, u8)>; 2]) -> Self {
+        Self {
+            terminal: true,
+            palette,
+            ..Self::new(cols, height, true)
         }
     }
 
@@ -351,9 +483,16 @@ impl Screen {
         // Rows below the cursor that don't fit go, as the cursor's stays.
         let over = used.saturating_sub(height).min(self.row);
         self.rows.truncate(used);
-        self.scroll_up(over);
+        if self.main.is_some() {
+            for _ in 0..over {
+                self.rows.pop_front();
+            }
+        } else {
+            self.scroll_away(over);
+        }
         self.row -= over;
         (self.cols, self.height) = (cols, height);
+        self.region = 0..height;
         self.rows.truncate(height);
         self.move_to_row(self.row);
         self.col = self.col.min(cols);
@@ -379,7 +518,7 @@ impl Screen {
                     .bytes()
                     .take_while(|byte| (b' '..=b'~').contains(byte))
                     .count();
-                if self.escape == Escape::None && run > 0 {
+                if self.escape == Escape::None && run > 0 && self.plain() {
                     self.print_ascii(&text.as_bytes()[..run]);
                     text = &text[run..];
                 } else {
@@ -403,9 +542,31 @@ impl Screen {
         mem::take(&mut self.scrolled)
     }
 
-    /// The lines of the screen down to the cursor or the last one written.
+    /// The lines of the screen down to the cursor or the last one written. On a terminal, every
+    /// row is a line, after the start of the line that goes on in the top row.
     pub fn shown(&self) -> Shown {
-        let mut shown = self.held.clone();
+        let mut shown = Shown::default();
+        if self.terminal {
+            if self.top() > 0 {
+                shown.append(&self.held);
+                shown.push('\n', Style::default());
+            }
+            for row in 0..self.height {
+                let cells = self.rows.get(row).map_or(0, |cells| {
+                    cells.render(self.cols, &self.clusters, &mut shown)
+                });
+                if row == self.row {
+                    for _ in cells..self.col.min(self.cols) {
+                        shown.push(' ', Style::default());
+                    }
+                }
+                if row + 1 < self.height {
+                    shown.push('\n', Style::default());
+                }
+            }
+            return shown;
+        }
+        shown = self.held.clone();
         let last = self.used().saturating_sub(1).max(self.row);
         for (index, row) in self.rows.iter().take(last + 1).enumerate() {
             row.render(self.cols, &self.clusters, &mut shown);
@@ -416,14 +577,64 @@ impl Screen {
         shown
     }
 
+    /// The chars of [`shown`](Self::shown) before the top row of a terminal.
+    pub fn top(&self) -> usize {
+        if self.main.is_some() || self.held.chars == 0 {
+            0
+        } else {
+            self.held.chars + 1
+        }
+    }
+
+    /// The chars of [`shown`](Self::shown) before the cursor of a terminal.
+    pub fn cursor(&self) -> usize {
+        let mut shown = Shown::default();
+        let mut chars = self.top();
+        for row in self.rows.iter().take(self.row) {
+            row.render(self.cols, &self.clusters, &mut shown);
+            chars += 1;
+        }
+        let row = Row {
+            cells: self.rows[self.row]
+                .cells
+                .iter()
+                .take(self.col)
+                .copied()
+                .collect(),
+            wrapped: false,
+        };
+        let cells = row.render(self.cols, &self.clusters, &mut shown);
+        chars + shown.chars + self.col.min(self.cols).saturating_sub(cells)
+    }
+
+    pub fn modes(&self) -> Modes {
+        self.modes
+    }
+
+    /// The title the program gave the terminal.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Takes the answers to the program's questions, to write to it.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        mem::take(&mut self.replies)
+    }
+
+    /// Whether the program cleared the lines that scrolled away, since this was asked last.
+    pub fn take_cleared(&mut self) -> bool {
+        mem::take(&mut self.cleared)
+    }
+
     /// Ends the output and takes the lines that scrolled away.
     pub fn finish(&mut self) -> Shown {
         if !mem::take(&mut self.partial).is_empty() {
             self.put(char::REPLACEMENT_CHARACTER);
         }
+        self.leave_alternate(false);
         let used = self.used();
         self.rows.truncate(used);
-        self.scroll_up(used);
+        self.scroll_away(used);
         if !self.held.text.is_empty() {
             self.held.push('\n', Style::default());
             self.scrolled.append(&mem::take(&mut self.held));
@@ -439,16 +650,35 @@ impl Screen {
             .map_or(0, |last| last + 1)
     }
 
+    /// Whether printable ASCII prints as itself, in its cells.
+    fn plain(&self) -> bool {
+        self.modes.autowrap && !self.modes.insert && !self.charsets[usize::from(self.shifted)]
+    }
+
+    /// What erasing leaves: blanks in the background color.
+    fn blank(&self) -> Cell {
+        Cell {
+            glyph: Glyph::Char(' '),
+            style: Style {
+                bg: self.style.bg,
+                ..Style::new()
+            },
+        }
+    }
+
     fn put(&mut self, c: char) {
         self.escape = match (self.escape, c) {
             (Escape::None, '\x1b') => Escape::Start,
             (Escape::None, c) => {
                 match c {
+                    '\n' | '\x0b' | '\x0c' if self.terminal => self.line_feed(false),
                     '\n' => self.line_feed(true),
                     '\x0b' | '\x0c' => self.line_feed(false),
                     '\r' => self.col = 0,
                     '\x08' => self.col = self.cursor_col().saturating_sub(1),
                     '\t' => self.tab(),
+                    '\x0e' => self.shifted = true,
+                    '\x0f' => self.shifted = false,
                     c if c.is_control() => {}
                     c => self.print(c),
                 }
@@ -458,13 +688,23 @@ impl Screen {
                 self.params.clear();
                 Escape::Control
             }
-            (Escape::Start, ']' | 'P' | 'X' | '^' | '_') => Escape::String,
-            (Escape::Start | Escape::Intermediate, ' '..='/') => Escape::Intermediate,
+            (Escape::Start, ']' | 'P' | 'X' | '^' | '_') => {
+                self.string.clear();
+                Escape::String(c)
+            }
+            (Escape::Start, ' '..='/') => Escape::Intermediate(c),
             (Escape::Start, c) => {
                 self.escape_final(c);
                 Escape::None
             }
-            (Escape::Intermediate, _) => Escape::None,
+            (Escape::Intermediate(intermediate), ' '..='/') => Escape::Intermediate(intermediate),
+            (Escape::Intermediate(intermediate), c) => {
+                // `ESC ( 0` makes G0 line drawing, `ESC ) B` makes G1 ASCII.
+                if let Some(set) = ['(', ')'].iter().position(|&set| set == intermediate) {
+                    self.charsets[set] = c == '0';
+                }
+                Escape::None
+            }
             (Escape::Control, '@'..='~') => {
                 self.control(c);
                 Escape::None
@@ -476,11 +716,22 @@ impl Screen {
                 }
                 Escape::Control
             }
-            (Escape::String, '\x07') => Escape::None,
-            (Escape::String, '\x1b') => Escape::StringEnd,
-            (Escape::String, _) => Escape::String,
-            (Escape::StringEnd, '\\') => Escape::None,
-            (Escape::StringEnd, _) => Escape::String,
+            (Escape::String(kind), '\x07') => {
+                self.string_end(kind);
+                Escape::None
+            }
+            (Escape::String(kind), '\x1b') => Escape::StringEnd(kind),
+            (Escape::String(kind), c) => {
+                if self.string.len() < MAX_STRING {
+                    self.string.push(c);
+                }
+                Escape::String(kind)
+            }
+            (Escape::StringEnd(kind), '\\') => {
+                self.string_end(kind);
+                Escape::None
+            }
+            (Escape::StringEnd(kind), _) => Escape::String(kind),
         };
     }
 
@@ -490,6 +741,11 @@ impl Screen {
     }
 
     fn print(&mut self, c: char) {
+        let c = if self.charsets[usize::from(self.shifted)] {
+            line_drawing(c)
+        } else {
+            c
+        };
         let width = if c.is_ascii() {
             1
         } else {
@@ -499,16 +755,25 @@ impl Screen {
             self.combine(c);
             return;
         }
-        if self.col + width > self.cols && self.col > 0 {
-            self.rows[self.row].wrapped = true;
-            self.line_feed(true);
+        if self.col + width > self.cols {
+            if self.modes.autowrap && self.col > 0 {
+                self.rows[self.row].wrapped = true;
+                self.line_feed(true);
+            } else {
+                self.col = self.cols.saturating_sub(width);
+            }
         }
         let cell = Cell {
             glyph: Glyph::Char(c),
             style: self.style,
         };
+        if self.modes.insert {
+            let blank = self.blank();
+            self.rows[self.row].insert(self.col, width, blank, self.cols);
+        }
         self.rows[self.row].put(self.col, cell, width);
         self.col += width;
+        self.last = Some(c);
     }
 
     /// Prints `text`, printable ASCII.
@@ -533,6 +798,7 @@ impl Screen {
                 }
             }
             self.col += now.len();
+            self.last = now.last().map(|&byte| byte.into());
             text = rest;
         }
     }
@@ -555,7 +821,8 @@ impl Screen {
         *glyph = Glyph::Cluster(self.clusters.id(cluster));
     }
 
-    /// Moves to the next tab stop. Tabs past the end of the row are kept as tabs.
+    /// Moves to the next tab stop. Output keeps tabs past the end of the row as tabs; a terminal
+    /// shows the spaces.
     fn tab(&mut self) {
         let col = self.cursor_col();
         let stop = ((col / TAB + 1) * TAB).min(self.cols - 1);
@@ -563,7 +830,7 @@ impl Screen {
             return;
         }
         let row = &mut self.rows[self.row];
-        if col >= row.cells.len() {
+        if col >= row.cells.len() && !self.terminal {
             let tab = Cell {
                 glyph: Glyph::Char('\t'),
                 style: Style::default(),
@@ -573,31 +840,60 @@ impl Screen {
         self.col = stop;
     }
 
-    /// Moves the cursor down a row, scrolling at the bottom, and to the first column with
-    /// `carriage_return`.
+    /// Moves the cursor down a row, scrolling at the bottom of the scroll region, and to the
+    /// first column with `carriage_return`.
     fn line_feed(&mut self, carriage_return: bool) {
         self.col = if carriage_return {
             0
         } else {
             self.cursor_col()
         };
-        if self.row + 1 >= self.height {
+        if self.row + 1 == self.region.end {
             self.scroll_up(1);
-        } else {
+        } else if self.row + 1 < self.height {
             self.move_to_row(self.row + 1);
+        }
+    }
+
+    /// Moves the cursor up a row, scrolling at the top of the scroll region.
+    fn reverse_index(&mut self) {
+        if self.row == self.region.start {
+            self.scroll_down(self.row, 1);
+        } else if self.row > 0 {
+            self.row -= 1;
         }
     }
 
     /// Moves the cursor to `row`, in the screen.
     fn move_to_row(&mut self, row: usize) {
         self.row = row.min(self.height - 1);
-        if self.rows.len() <= self.row {
-            self.rows.resize_with(self.row + 1, Row::default);
+        self.ensure_rows(self.row + 1);
+    }
+
+    fn ensure_rows(&mut self, rows: usize) {
+        if self.rows.len() < rows {
+            self.rows.resize_with(rows, Row::default);
+        }
+    }
+
+    /// Scrolls the scroll region up by `count` rows, those of the whole main screen scrolling
+    /// away.
+    fn scroll_up(&mut self, count: usize) {
+        if self.region == (0..self.height) && self.main.is_none() {
+            self.scroll_away(count);
+            return;
+        }
+        let Range { start, end } = self.region.clone();
+        self.ensure_rows(end);
+        let blank = self.blank();
+        for _ in 0..count.min(end - start) {
+            self.rows.remove(start);
+            self.rows.insert(end - 1, Row::blank(blank, self.cols));
         }
     }
 
     /// Scrolls the top `count` rows away, the cursor staying where it is on the screen.
-    fn scroll_up(&mut self, count: usize) {
+    fn scroll_away(&mut self, count: usize) {
         for _ in 0..count.min(self.height) {
             let Some(mut row) = self.rows.pop_front() else {
                 break;
@@ -621,84 +917,251 @@ impl Screen {
         self.move_to_row(self.row);
     }
 
-    /// Scrolls the rows down by `count` from `top`, the bottom ones going.
+    /// Scrolls the rows of the scroll region from `top` down by `count`, the bottom ones going.
     fn scroll_down(&mut self, top: usize, count: usize) {
-        for _ in 0..count.min(self.height) {
-            self.rows.insert(top.min(self.rows.len()), Row::default());
+        let end = self.region.end;
+        if top >= end {
+            return;
+        }
+        self.ensure_rows(end);
+        let blank = self.blank();
+        for _ in 0..count.min(end - top) {
+            self.rows.remove(end - 1);
+            self.rows.insert(top, Row::blank(blank, self.cols));
         }
         self.rows.truncate(self.height);
         self.move_to_row(self.row);
     }
 
-    fn clear_rows(&mut self, rows: std::ops::Range<usize>) {
+    fn clear_rows(&mut self, rows: Range<usize>) {
+        let blank = self.blank();
+        let end = rows.end.min(self.height);
+        if blank != BLANK {
+            self.ensure_rows(end);
+        }
         for row in self
             .rows
-            .range_mut(rows.start.min(self.rows.len())..rows.end.min(self.rows.len()))
+            .range_mut(rows.start.min(self.rows.len())..end.min(self.rows.len()))
         {
-            row.clear();
+            *row = Row::blank(blank, self.cols);
         }
+    }
+
+    fn save(&mut self) {
+        self.saved = Some(Saved {
+            row: self.row,
+            col: self.col,
+            style: self.style,
+            charsets: self.charsets,
+            shifted: self.shifted,
+        });
+    }
+
+    fn restore(&mut self) {
+        let saved = self.saved.unwrap_or_default();
+        self.move_to_row(saved.row);
+        self.col = saved.col.min(self.cols);
+        self.style = saved.style;
+        self.charsets = saved.charsets;
+        self.shifted = saved.shifted;
+    }
+
+    /// Shows the alternate screen, a blank one, the main one kept.
+    fn enter_alternate(&mut self) {
+        if self.main.is_some() {
+            return;
+        }
+        let rows = mem::replace(&mut self.rows, VecDeque::from([Row::default()]));
+        self.main = Some(Box::new(Main {
+            rows,
+            row: self.row,
+            col: self.col,
+        }));
+        self.move_to_row(self.row);
+    }
+
+    /// Shows the main screen again, the cursor where it was with `cursor`.
+    fn leave_alternate(&mut self, cursor: bool) {
+        let Some(main) = self.main.take() else {
+            return;
+        };
+        self.rows = main.rows;
+        self.rows.truncate(self.height);
+        if cursor {
+            self.move_to_row(main.row);
+            self.col = main.col.min(self.cols);
+        } else {
+            self.move_to_row(self.row);
+        }
+    }
+
+    /// Puts everything back as it was at the start, but the rows.
+    fn reset(&mut self) {
+        self.leave_alternate(false);
+        self.style = Style::default();
+        self.modes = Modes::default();
+        self.region = 0..self.height;
+        self.charsets = [false; 2];
+        self.shifted = false;
+        self.saved = None;
     }
 
     /// Carries out the escape sequence `ESC c`.
     fn escape_final(&mut self, c: char) {
         match c {
-            '7' => self.saved = Some((self.row, self.col, self.style)),
+            '7' => self.save(),
             '8' => self.restore(),
             'D' => self.line_feed(false),
             'E' => self.line_feed(true),
-            'M' if self.row == 0 => self.scroll_down(0, 1),
-            'M' => self.row -= 1,
+            'M' => self.reverse_index(),
             'c' => {
+                self.reset();
                 self.clear_rows(0..self.height);
-                (self.row, self.col, self.style) = (0, 0, Style::default());
+                (self.row, self.col) = (0, 0);
             }
             _ => {}
         }
     }
 
-    /// Erases the screen, after the cursor with `0`, before it with `1`, else all of it.
-    fn erase_display(&mut self, which: usize) {
-        let (row, col) = (self.row, self.col);
-        match which {
-            0 => {
-                self.rows[row].truncate(col);
-                self.rows.truncate(row + 1);
+    /// Carries out the string `ESC kind … ST`: a title, or a question about colors.
+    fn string_end(&mut self, kind: char) {
+        if kind != ']' || !self.terminal {
+            return;
+        }
+        let string = mem::take(&mut self.string);
+        let Some((command, text)) = string.split_once(';') else {
+            return;
+        };
+        match (command, text) {
+            ("0" | "2", title) => self.title = Some(title.to_owned()),
+            ("10" | "11", "?") => {
+                let index = usize::from(command == "11");
+                if let Some((r, g, b)) = self.palette[index] {
+                    let reply = format!(
+                        "\x1b]{command};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\"
+                    );
+                    self.replies.extend_from_slice(reply.as_bytes());
+                }
             }
-            1 => {
-                self.clear_rows(0..row);
-                self.rows[row].erase(0..col + 1);
-            }
-            _ => self.clear_rows(0..self.height),
+            _ => {}
         }
     }
 
-    fn restore(&mut self) {
-        let (row, col, style) = self.saved.unwrap_or_default();
-        self.move_to_row(row);
-        self.col = col.min(self.cols);
-        self.style = style;
+    /// Answers a question of the program with `reply`, on a terminal.
+    fn reply(&mut self, reply: &str) {
+        if self.terminal {
+            self.replies.extend_from_slice(reply.as_bytes());
+        }
+    }
+
+    /// Sets the private mode `mode`, or resets it.
+    fn set_mode(&mut self, mode: &str, set: bool) {
+        match mode {
+            "1" => self.modes.app_cursor = set,
+            "6" => {
+                self.modes.origin = set;
+                (self.row, self.col) = (self.region.start, 0);
+            }
+            "7" => self.modes.autowrap = set,
+            "25" => self.modes.show_cursor = set,
+            "2004" => self.modes.bracketed_paste = set,
+            "2026" => self.modes.synchronized = set,
+            "47" | "1047" | "1049" if self.terminal => {
+                if mode == "1049" && set {
+                    self.save();
+                }
+                if set {
+                    self.enter_alternate();
+                    if mode != "47" {
+                        self.clear_rows(0..self.height);
+                    }
+                } else {
+                    if mode == "1047" {
+                        self.clear_rows(0..self.height);
+                    }
+                    self.leave_alternate(mode != "1049");
+                    if mode == "1049" {
+                        self.restore();
+                    }
+                }
+            }
+            // A full-screen program's screen goes, once it's done with it. What the screen
+            // showed before stays, as it scrolled away.
+            "47" | "1047" | "1049" => {
+                if set {
+                    let used = self.used();
+                    self.rows.truncate(used);
+                    self.scroll_away(used);
+                }
+                self.clear_rows(0..self.height);
+                (self.row, self.col) = (0, 0);
+            }
+            _ => {}
+        }
+    }
+
+    /// The state of the private mode `mode` for `CSI ? mode $ p`: 1 set, 2 reset, 0 unknown.
+    fn mode_state(&self, mode: &str) -> u8 {
+        let set = match mode {
+            "1" => self.modes.app_cursor,
+            "6" => self.modes.origin,
+            "7" => self.modes.autowrap,
+            "25" => self.modes.show_cursor,
+            "47" | "1047" | "1049" => self.main.is_some(),
+            "2004" => self.modes.bracketed_paste,
+            "2026" => self.modes.synchronized,
+            _ => return 0,
+        };
+        if set {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// Carries out the private control sequence `ESC [ params final`, like `ESC [ ? 25 l`.
+    fn private_control(&mut self, final_char: char) {
+        let params = mem::take(&mut self.params);
+        match (params.split_at(1), final_char) {
+            (("?", modes), 'h' | 'l') => {
+                for mode in modes.split(';') {
+                    self.set_mode(mode, final_char == 'h');
+                }
+            }
+            (("?", mode), 'p') if mode.ends_with('$') => {
+                let mode = mode.trim_end_matches('$');
+                let state = self.mode_state(mode);
+                self.reply(&format!("\x1b[?{mode};{state}$y"));
+            }
+            (("?", "6"), 'n') => {
+                let (row, col) = self.position();
+                self.reply(&format!("\x1b[?{row};{col}R"));
+            }
+            ((">", "" | "0"), 'c') => self.reply("\x1b[>1;10;0c"),
+            ((">", "" | "0"), 'q') => self.reply(&format!(
+                "\x1bP>|helix {}\x1b\\",
+                helix_loader::VERSION_AND_GIT_HASH
+            )),
+            _ => {}
+        }
+        self.params = params;
+    }
+
+    /// The cursor's row and column for a report, counting from 1, and from the top of the
+    /// scroll region in origin mode.
+    fn position(&self) -> (usize, usize) {
+        let top = if self.modes.origin {
+            self.region.start
+        } else {
+            0
+        };
+        (self.row - top + 1, self.cursor_col() + 1)
     }
 
     /// Carries out the control sequence `ESC [ params final`.
     fn control(&mut self, final_char: char) {
-        // Private sequences, like `ESC [ ? 25 l`, hide the cursor and the like.
         if self.params.starts_with(['<', '=', '>', '?']) {
-            if let Some(modes) = self.params.strip_prefix('?') {
-                let alternate = modes
-                    .split(';')
-                    .any(|mode| matches!(mode, "47" | "1047" | "1049"));
-                // A full-screen program's screen goes, once it's done with it. What the screen
-                // showed before stays, as it scrolled away.
-                if alternate && final_char == 'h' {
-                    let used = self.used();
-                    self.rows.truncate(used);
-                    self.scroll_up(used);
-                }
-                if alternate && matches!(final_char, 'h' | 'l') {
-                    self.clear_rows(0..self.height);
-                    (self.row, self.col) = (0, 0);
-                }
-            }
+            self.private_control(final_char);
             return;
         }
         if final_char == 'm' {
@@ -712,6 +1175,13 @@ impl Screen {
             }
             return;
         }
+        // Sequences with intermediate bytes, like `ESC [ ! p` or `ESC [ 2 SP q`.
+        if self.params.ends_with([' ', '!', '"', '$', '\'']) {
+            if self.params == "!" && final_char == 'p' {
+                self.reset();
+            }
+            return;
+        }
         let mut params = self
             .params
             .split(';')
@@ -720,50 +1190,79 @@ impl Screen {
         // How many times the sequence moves, inserts or deletes.
         let count = first.max(1);
         let (row, col) = (self.row, self.cursor_col());
+        // Rows of the scroll region, when the cursor is in it, bound moves up and down.
+        let top = if row >= self.region.start {
+            self.region.start
+        } else {
+            0
+        };
+        let bottom = if row < self.region.end {
+            self.region.end
+        } else {
+            self.height
+        };
+        // Rows to move to count from the top of the scroll region in origin mode.
+        let origin = if self.modes.origin {
+            self.region.clone()
+        } else {
+            0..self.height
+        };
+        let blank = self.blank();
         match final_char {
-            'A' => (self.row, self.col) = (row.saturating_sub(count), col),
+            'A' => (self.row, self.col) = (row.saturating_sub(count).max(top), col),
             'B' => {
-                self.move_to_row(row.saturating_add(count));
+                self.move_to_row(row.saturating_add(count).min(bottom - 1));
                 self.col = col;
             }
             'C' => self.col = col.saturating_add(count).min(self.cols - 1),
             'D' => self.col = col.saturating_sub(count),
             'E' => {
-                self.move_to_row(row.saturating_add(count));
+                self.move_to_row(row.saturating_add(count).min(bottom - 1));
                 self.col = 0;
             }
-            'F' => (self.row, self.col) = (row.saturating_sub(count), 0),
+            'F' => (self.row, self.col) = (row.saturating_sub(count).max(top), 0),
             'G' | '`' => self.col = (count - 1).min(self.cols - 1),
             'd' => {
-                self.move_to_row(count - 1);
+                self.move_to_row((origin.start + count - 1).min(origin.end - 1));
                 self.col = col;
             }
             'H' | 'f' => {
-                self.move_to_row(count - 1);
+                self.move_to_row((origin.start + count - 1).min(origin.end - 1));
                 self.col = (second.max(1) - 1).min(self.cols - 1);
             }
             'J' => {
                 self.col = col;
-                self.erase_display(first);
+                match first {
+                    0 => {
+                        self.rows[row].truncate(col, blank, self.cols);
+                        if blank == BLANK {
+                            self.rows.truncate(row + 1);
+                        } else {
+                            self.clear_rows(row + 1..self.height);
+                        }
+                    }
+                    1 => {
+                        self.clear_rows(0..row);
+                        self.rows[row].erase(0..col + 1, blank);
+                    }
+                    3 => {
+                        self.cleared = true;
+                        self.held = Shown::default();
+                        self.scrolled = Shown::default();
+                    }
+                    _ => self.clear_rows(0..self.height),
+                }
             }
             'K' => {
                 self.col = col;
                 match first {
-                    0 => self.rows[row].truncate(col),
-                    1 => self.rows[row].erase(0..col + 1),
-                    _ => self.rows[row].clear(),
+                    0 => self.rows[row].truncate(col, blank, self.cols),
+                    1 => self.rows[row].erase(0..col + 1, blank),
+                    _ => self.rows[row].truncate(0, blank, self.cols),
                 }
             }
             '@' => {
-                let cells = &mut self.rows[row];
-                if col < cells.cells.len() {
-                    cells.split(col);
-                    let count = count.min(self.cols - col);
-                    cells.cells.splice(col..col, vec![BLANK; count]);
-                    if cells.cells.len() > self.cols {
-                        cells.truncate(self.cols);
-                    }
-                }
+                self.rows[row].insert(col, count, blank, self.cols);
                 self.col = col;
             }
             'P' => {
@@ -773,30 +1272,79 @@ impl Screen {
                     cells.split(col);
                     cells.split(end);
                     cells.cells.drain(col..end);
+                    if blank != BLANK {
+                        cells.cells.resize(self.cols, blank);
+                    }
                 }
                 self.col = col;
             }
             'X' => {
-                self.rows[row].erase(col..col.saturating_add(count));
+                self.rows[row].erase(col..col.saturating_add(count).min(self.cols), blank);
                 self.col = col;
             }
-            'L' => {
+            'L' if self.region.contains(&row) => {
                 self.scroll_down(row, count);
                 self.col = 0;
             }
-            'M' => {
-                for _ in 0..count.min(self.rows.len() - row) {
+            'M' if self.region.contains(&row) => {
+                let end = self.region.end;
+                self.ensure_rows(end);
+                for _ in 0..count.min(end - row) {
                     self.rows.remove(row);
+                    self.rows.insert(end - 1, Row::blank(blank, self.cols));
                 }
                 self.move_to_row(row);
                 self.col = 0;
             }
             'S' => self.scroll_up(count),
-            'T' => self.scroll_down(0, count),
-            's' if self.params.is_empty() => self.saved = Some((row, self.col, self.style)),
+            'T' => self.scroll_down(self.region.start, count),
+            'b' => {
+                if let Some(c) = self.last {
+                    for _ in 0..count.min(self.cols * self.height) {
+                        self.print(c);
+                    }
+                }
+            }
+            'I' => {
+                for _ in 0..count {
+                    self.tab();
+                }
+            }
+            'Z' => self.col = (col.saturating_sub(1) / TAB * TAB).min(col),
+            'r' => {
+                let end = if second == 0 { self.height } else { second };
+                let start = first.max(1) - 1;
+                if start + 1 < end.min(self.height) {
+                    self.region = start..end.min(self.height);
+                    let row = if self.modes.origin { start } else { 0 };
+                    self.move_to_row(row);
+                    self.col = 0;
+                }
+            }
+            'h' | 'l' if self.params == "4" => self.modes.insert = final_char == 'h',
+            'c' if first == 0 => self.reply("\x1b[?62;22c"),
+            'n' if first == 5 => self.reply("\x1b[0n"),
+            'n' if first == 6 => {
+                let (row, col) = self.position();
+                self.reply(&format!("\x1b[{row};{col}R"));
+            }
+            't' if first == 18 => {
+                let reply = format!("\x1b[8;{};{}t", self.height, self.cols);
+                self.reply(&reply);
+            }
+            's' if self.params.is_empty() => self.save(),
             'u' if self.params.is_empty() => self.restore(),
             _ => {}
         }
+    }
+}
+
+/// `c` in the DEC line drawing charset.
+fn line_drawing(c: char) -> char {
+    const CHARS: &str = "◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·";
+    match c {
+        '`'..='~' => CHARS.chars().nth(c as usize - '`' as usize).unwrap_or(c),
+        _ => c,
     }
 }
 
@@ -1113,6 +1661,126 @@ mod tests {
         screen.resize(10, 2);
         assert_eq!(screen.take_scrolled().text, "");
         assert_eq!(screen.shown().text, "1\n2");
+    }
+
+    /// A terminal `cols` wide and `height` high after `output`.
+    fn terminal(cols: u16, height: u16, output: &str) -> Screen {
+        let mut screen = Screen::terminal(cols, height, [None; 2]);
+        screen.push(output.as_bytes());
+        screen
+    }
+
+    fn replies(screen: &mut Screen) -> String {
+        String::from_utf8(screen.take_replies()).unwrap()
+    }
+
+    #[test]
+    fn terminals_show_every_row() {
+        assert_eq!(terminal(10, 3, "a\r\nb").shown().text, "a\nb\n");
+        // Output processing turns `\n` into `\r\n`, so a lone one keeps the column.
+        assert_eq!(terminal(10, 3, "ab\ncd").shown().text, "ab\n  cd\n");
+        // Wrapped rows stay rows, but scroll away as one line.
+        let mut screen = terminal(4, 2, "abcdefgh\r\nx");
+        assert_eq!(screen.shown().text, "abcd\nefgh\nx");
+        assert_eq!(screen.top(), 5);
+        screen.push(b"\r\ny");
+        assert_eq!(screen.take_scrolled().text, "abcdefgh\n");
+        assert_eq!((screen.shown().text.as_str(), screen.top()), ("x\ny", 0));
+        // Tabs move over cells, which show as spaces.
+        assert_eq!(terminal(20, 1, "a\tb").shown().text, "a       b");
+    }
+
+    #[test]
+    fn the_cursor_is_where_the_program_put_it() {
+        assert_eq!(terminal(10, 3, "$ ").cursor(), 2);
+        let screen = terminal(10, 3, "ab\r\n\x1b[5C");
+        assert_eq!(screen.shown().text, "ab\n     \n");
+        assert_eq!(screen.cursor(), 8);
+        // Wide chars are one char over two columns.
+        assert_eq!(terminal(10, 2, "日本x").cursor(), 3);
+        let screen = terminal(4, 2, "abcdefgh\r\nx");
+        assert_eq!(screen.cursor(), 11);
+    }
+
+    #[test]
+    fn scroll_regions_scroll_alone() {
+        // As tmux keeps its status line below the region its window scrolls in.
+        let screen = terminal(10, 4, "\x1b[1;3r\x1b[4;1Hstatus\x1b[1;1Ha\r\nb\r\nc\r\nd");
+        assert_eq!(screen.shown().text, "b\nc\nd\nstatus");
+        assert_eq!(screen.scrolled_len(), 0);
+        let shown = |output: &str| terminal(10, 4, output).shown().text;
+        assert_eq!(
+            shown("\x1b[1;3r\x1b[4;1Hstatus\x1b[1;1Ha\r\nb\x1b[1;1H\x1bM"),
+            "\na\nb\nstatus"
+        );
+        assert_eq!(
+            shown("1\r\n2\r\n3\r\n4\x1b[1;3r\x1b[1;1H\x1b[M"),
+            "2\n3\n\n4"
+        );
+        assert_eq!(
+            shown("1\r\n2\r\n3\r\n4\x1b[2;3r\x1b[2;1H\x1b[2L"),
+            "1\n\n\n4"
+        );
+        assert_eq!(shown("\x1b[2;3r\x1b[?6h\x1b[1;1Hx"), "\nx\n\n");
+        assert_eq!(shown("1\r\n2\r\n3\r\n4\x1b[2;3r\x1b[S"), "1\n3\n\n4");
+    }
+
+    #[test]
+    fn full_screen_programs_draw_on_the_alternate_screen() {
+        let mut screen = terminal(10, 3, "$ vim\r\n\x1b[?1049h\x1b[H\x1b[2Jfull");
+        assert_eq!(screen.shown().text, "full\n\n");
+        screen.push(b"\x1b[?1049l");
+        assert_eq!(screen.shown().text, "$ vim\n\n");
+        assert_eq!(screen.cursor(), 6);
+        // Its rows don't scroll away.
+        let mut screen = terminal(10, 3, "\x1b[?1049h1\r\n2\r\n3\r\n4");
+        assert_eq!(screen.shown().text, "2\n3\n4");
+        assert_eq!(screen.scrolled_len(), 0);
+        // Ended, the program leaves the main screen.
+        assert_eq!(screen.finish().text, "");
+    }
+
+    #[test]
+    fn programs_get_answers() {
+        let mut screen = terminal(80, 24, "ab\x1b[c\x1b[>c\x1b[6n\x1b[?2026$p\x1b[?u\x1b[18t");
+        assert_eq!(
+            replies(&mut screen),
+            "\x1b[?62;22c\x1b[>1;10;0c\x1b[1;3R\x1b[?2026;2$y\x1b[8;24;80t"
+        );
+        screen.push(b"\x1b[?2026h\x1b[?2026$p\x1b[?99$p\x1b[5n");
+        assert_eq!(replies(&mut screen), "\x1b[?2026;1$y\x1b[?99;0$y\x1b[0n");
+        // Colors are told when they are known.
+        let mut screen = Screen::terminal(80, 24, [Some((255, 0, 16)), None]);
+        screen.push(b"\x1b]10;?\x1b\\\x1b]11;?\x07");
+        assert_eq!(replies(&mut screen), "\x1b]10;rgb:ffff/0000/1010\x1b\\");
+        // Output has no one to answer.
+        let mut output = Screen::new(80, 24, true);
+        output.push(b"\x1b[c");
+        assert!(output.take_replies().is_empty());
+    }
+
+    #[test]
+    fn modes_titles_and_charsets() {
+        let screen = terminal(80, 24, "\x1b[?1h\x1b[?2004h\x1b[?25l\x1b]0;fish\x07");
+        let modes = screen.modes();
+        assert!(modes.app_cursor && modes.bracketed_paste && !modes.show_cursor);
+        assert_eq!(screen.title(), Some("fish"));
+        let shown = |cols, output: &str| terminal(cols, 1, output).shown().text;
+        assert_eq!(shown(10, "\x1b(0lqk\x1b(Bx"), "┌─┐x");
+        assert_eq!(shown(10, "\x1b)0\x0eq\x0fq"), "─q");
+        assert_eq!(shown(10, "abc\r\x1b[4hX\x1b[4l"), "Xabc");
+        assert_eq!(shown(4, "\x1b[?7labcdef"), "abcf");
+        assert_eq!(shown(10, "x\x1b[3b"), "xxxx");
+        // Erasing fills with the background color, as tmux's status line does.
+        let screen = terminal(6, 1, "\x1b[42m\x1b[6X ok");
+        assert_eq!(screen.shown().text, " ok   ");
+        let green = Style::default().bg(Color::Indexed(2));
+        assert_eq!(screen.shown().styles, [(0..6, green)]);
+        // Clearing what scrolled away is noted.
+        let mut screen = terminal(10, 2, "1\r\n2\r\n3\x1b[3J");
+        assert!(screen.take_cleared());
+        assert_eq!(screen.scrolled_len(), 0);
+        assert!(!screen.take_cleared());
     }
 
     /// Times the screen on lines of output, and on progress redrawn, in release:
