@@ -22,10 +22,13 @@ use tokio::runtime::Handle;
 
 use super::{
     locus::{Finder, Locus},
-    output::{End, Shown},
-    screen::Screen,
+    output::End,
 };
-use crate::{compositor::Compositor, job};
+use crate::{
+    compositor::Compositor,
+    job,
+    ui::screen::{Screen, Shown},
+};
 
 /// Output read but not yet in the buffer.
 #[derive(Debug, Default)]
