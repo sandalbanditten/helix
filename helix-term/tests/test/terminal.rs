@@ -205,6 +205,31 @@ async fn terminals_open_beside_the_buffer() -> anyhow::Result<()> {
     session.quit().await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn terminals_are_named_by_their_title() -> anyhow::Result<()> {
+    let mut session = session()?;
+    session.keys(":term<ret>").await?;
+    assert_eq!(doc!(session.app.editor).display_name(), "sh");
+    session.send("printf '\\033]0;%s\\007' titled<ret>")?;
+    session
+        .until("the title", |app| {
+            doc!(app.editor).display_name() == "titled"
+        })
+        .await;
+    // The statusline says what it is.
+    session.keys("").await?;
+    let screen: String = session
+        .app
+        .screen()
+        .content
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(screen.contains(" titled "));
+    assert!(screen.contains(" [terminal] "));
+    session.quit().await
+}
+
 /// Times typing and output, in an optimized build:
 /// `cargo test --profile integration --features integration --test integration terminal::measure -- --ignored --nocapture`
 #[tokio::test(flavor = "multi_thread")]

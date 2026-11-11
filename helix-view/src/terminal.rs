@@ -19,8 +19,6 @@ pub struct Terminal {
     /// Counts the runs of the buffer, so that output of an earlier run is dropped.
     pub run: u64,
     pub started: Instant,
-    /// When keys last went to it.
-    pub used: Instant,
     /// The running command, hung up on when dropped; `None` once it ended.
     pub process: Option<ProcessGroup>,
     pub pty: Option<Pty>,
@@ -40,15 +38,13 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new(command: Vec<String>, name: String, dir: PathBuf) -> Self {
-        let now = Instant::now();
         Self {
             command,
             name,
             dir,
             title: None,
             run: 0,
-            started: now,
-            used: now,
+            started: Instant::now(),
             process: None,
             pty: None,
             input: None,
@@ -61,9 +57,9 @@ impl Terminal {
         }
     }
 
-    /// How the buffer is called, like `[term] fish`.
-    pub fn display_name(&self) -> String {
-        format!("[term] {}", self.title.as_deref().unwrap_or(&self.name))
+    /// How the buffer is called: the title the program gives it, else the shell or the command.
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
     }
 
     pub fn is_running(&self) -> bool {

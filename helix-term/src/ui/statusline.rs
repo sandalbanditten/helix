@@ -614,7 +614,9 @@ where
 {
     // Files shown in a pager are read-only too; the text piped into it says so by its name.
     let paged_file = context.doc.page.is_some() && context.doc.path().is_some();
-    let title = if context.doc.readonly || paged_file {
+    let title = if context.doc.terminal.is_some() {
+        " [terminal] "
+    } else if context.doc.readonly || paged_file {
         " [readonly] "
     } else {
         ""
