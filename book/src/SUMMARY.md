@@ -24,6 +24,7 @@
   - [Undo tree](./undo-tree.md)
   - [Diff view](./diff-view.md)
   - [Pager](./pager.md)
+  - [Terminal](./terminal.md)
   - [Language support](./lang-support.md)
   - [Workspace trust](./workspace-trust.md)
 - [Ecosystem](./ecosystem.md)

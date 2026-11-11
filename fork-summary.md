@@ -60,6 +60,12 @@ Shows two versions side by side, aligned by difftastic when `difft` is installed
 - A diff of several files shows a diff tree (`Space e`/`Space E`), with renames listed like `git --stat`.
 - Options are in `[editor.diff]`: `tool` and `filler-character`.
 
+### Terminal
+- `:term [cmd]` (`:vterm`, `:hterm`) opens a terminal buffer; `Space t` goes to the last one.
+- Keys go to the program in insert mode; `Esc` goes to normal mode to read, search and yank the text, and `i`/`a`/`I`/`A` go back. `Ctrl-\ Esc` sends `Esc`.
+- Full-screen programs (btop, less, tmux, Helix) work; the buffer stays after the program ends and `i` runs it again.
+- `[editor] terminal-shell = ["fish"]` sets the shell.
+
 ### Pager
 `hx -p` works like `less -R`: `cmd | hx -p` or `hx -p <files>` open read-only, with the ANSI colours kept.
 - Set `MANPAGER='hx -p'` and `git config --global core.pager 'hx -p'` to use it for man pages and git.
