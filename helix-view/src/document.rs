@@ -69,6 +69,9 @@ pub const DEFAULT_LANGUAGE_NAME: &str = "text";
 
 pub const SCRATCH_BUFFER_NAME: &str = "[scratch]";
 
+/// The name of the text piped into a pager.
+pub const PAGER_BUFFER_NAME: &str = "[pager]";
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Mode {
     Normal = 0,
@@ -2528,6 +2531,9 @@ impl Document {
         }
         if let Some(pane) = &self.diff_view {
             return pane.name.as_str().into();
+        }
+        if self.page.is_some() && self.path.is_none() {
+            return PAGER_BUFFER_NAME.into();
         }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())

@@ -84,6 +84,38 @@ async fn pagers_refuse_edits_and_writes() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn piped_text_is_named_pager_and_files_read_only() -> anyhow::Result<()> {
+    let statusline = |app: &Application| {
+        let screen = app.screen();
+        let width = screen.area.width as usize;
+        let row = screen.content.chunks(width).nth_back(1).unwrap();
+        row.iter()
+            .map(|cell| cell.symbol.as_str())
+            .collect::<String>()
+    };
+    let file = output_file()?;
+    let mut session = pager(&file)?;
+    session.keys("").await?;
+    let name = file.path().file_name().unwrap().to_string_lossy();
+    let line = statusline(&session.app);
+    assert!(
+        line.contains(&*name) && line.contains(" [readonly] "),
+        "{line}"
+    );
+    // A buffer without a file, as the text piped into the pager is.
+    session.keys(":new<ret>").await?;
+    doc_mut!(session.app.editor).page();
+    session.keys("").await?;
+    let line = statusline(&session.app);
+    assert!(line.contains(" [pager] "), "{line}");
+    assert!(
+        !line.contains("[readonly]") && !line.contains("[scratch]"),
+        "{line}"
+    );
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn every_file_of_a_pager_session_is_paged() -> anyhow::Result<()> {
     let file = output_file()?;
     let other = output_file()?;
