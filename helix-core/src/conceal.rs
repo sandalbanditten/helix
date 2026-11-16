@@ -142,6 +142,16 @@ pub enum ConcealReveal {
 impl ConcealReveal {
     /// Whether `selection` shows the concealed chars `range` of `text` as they are.
     pub fn reveals(self, text: RopeSlice, selection: &Selection, range: ops::Range<usize>) -> bool {
+        let ranges = selection.ranges();
+        // A cursor reveals a symbol from next to it at most, so the selections nowhere near, which
+        // most are, are ruled out without looking up its line.
+        if self != Self::Line {
+            let near = range.start.saturating_sub(1);
+            let first = ranges.partition_point(|sel| sel.to() < near);
+            if ranges.get(first).is_none_or(|sel| sel.from() > range.end) {
+                return false;
+            }
+        }
         let line_start = || text.line_to_char(text.char_to_line(range.start));
         // the cursor positions that reveal `range`
         let cursors = match self {
@@ -161,7 +171,6 @@ impl ConcealReveal {
         };
         let cuts = |pos: usize| range.start < pos && pos < range.end;
 
-        let ranges = selection.ranges();
         // ranges are sorted and disjoint, so their ends are sorted too
         let first = ranges.partition_point(|sel| sel.to() < *cursors.start().min(&range.start));
         ranges[first..]
