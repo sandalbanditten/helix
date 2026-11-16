@@ -10,7 +10,7 @@ and underlined text. Every file opened later in the session opens the same way.
 | `hx -p <files>` | The files |
 
 The text can be searched, selected and yanked as in any buffer, but edits and `:w` are refused.
-`:q` quits.
+`:q` quits. The gutter leaves out the diagnostics and diff columns.
 
 To read man pages and the output of git in Helix:
 

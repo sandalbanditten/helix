@@ -2655,12 +2655,29 @@ impl Editor {
             }
         }
 
+        let gutters = self.view_gutters();
         for (view, _) in self.tree.views_mut() {
             let doc = doc_mut!(self, &view.doc);
             view.sync_changes(doc);
-            view.gutters = config.gutters.clone();
+            view.gutters = gutters.clone();
             view.ensure_cursor_in_view(doc, config.scrolloff)
         }
+    }
+
+    /// The gutters of views: in a pager without the columns of diagnostics and changes.
+    fn view_gutters(&self) -> GutterConfig {
+        let mut gutters = self.config().gutters.clone();
+        if self.pager {
+            let layout = &mut gutters.layout;
+            layout.retain(|gutter| !matches!(gutter, GutterType::Diagnostics | GutterType::Diff));
+            // Nor the spacer after the diagnostics.
+            let spacers = layout
+                .iter()
+                .take_while(|gutter| **gutter == GutterType::Spacer)
+                .count();
+            layout.drain(..spacers);
+        }
+        gutters
     }
 
     fn replace_document_in_view(&mut self, current_view: ViewId, doc_id: DocumentId) {
@@ -2763,7 +2780,7 @@ impl Editor {
                     .try_get(self.tree.focus)
                     .filter(|v| id == v.doc) // Different Document
                     .cloned()
-                    .unwrap_or_else(|| View::new(id, self.config().gutters.clone()));
+                    .unwrap_or_else(|| View::new(id, self.view_gutters()));
                 let view_id = self.tree.split(
                     view,
                     match action {
@@ -3097,7 +3114,7 @@ impl Editor {
                         self.syn_loader.clone(),
                     ))
                 });
-            let view = View::new(doc_id, self.config().gutters.clone());
+            let view = View::new(doc_id, self.view_gutters());
             let view_id = self.tree.insert(view);
             let doc = doc_mut!(self, &doc_id);
             doc.ensure_view_init(view_id);
