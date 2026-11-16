@@ -5,8 +5,11 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::ptr::NonNull;
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::doc_formatter::FormattedGrapheme;
 use crate::fold::Fold;
+use crate::graphemes::grapheme_width;
 use crate::syntax::{Highlight, OverlayHighlights};
 use crate::{Position, Tendril};
 
@@ -93,6 +96,8 @@ pub struct Conceal {
     pub replacement: Replacement,
     /// How the replacement is styled.
     pub style: ConcealStyle,
+    /// The columns of a text replacement, measured once rather than whenever it is drawn.
+    width: usize,
 }
 
 impl Conceal {
@@ -104,12 +109,22 @@ impl Conceal {
             Replacement::Fill(_) => ConcealStyle::Rule,
             Replacement::Text(_) | Replacement::Hidden => ConcealStyle::Text,
         };
+        let width = match &replacement {
+            Replacement::Text(text) => text_width(text),
+            Replacement::Fill(_) | Replacement::Hidden => 0,
+        };
         Self {
             start,
             end,
             replacement,
             style,
+            width,
         }
+    }
+
+    /// The columns of its replacement, if that is text.
+    pub(crate) fn width(&self) -> usize {
+        self.width
     }
 
     /// Styles the replacement with `style`.
@@ -376,6 +391,7 @@ struct FoldLayer<'a> {
     folds: &'a [Fold],
     next: Cell<usize>,
     placeholder: Tendril,
+    placeholder_width: usize,
 }
 
 /// Conceals fetched from a [`ConcealSource`] as the document formatter reaches them.
@@ -577,6 +593,7 @@ impl<'a> TextAnnotations<'a> {
         self.folds = FoldLayer {
             folds,
             next: Cell::new(0),
+            placeholder_width: text_width(&placeholder),
             placeholder,
         };
         self
@@ -602,6 +619,10 @@ impl<'a> TextAnnotations<'a> {
 
     pub(crate) fn fold_placeholder(&self) -> &str {
         &self.folds.placeholder
+    }
+
+    pub(crate) fn fold_placeholder_width(&self) -> usize {
+        self.folds.placeholder_width
     }
 
     /// Adds conceals, which show document text as other graphemes, replacing any added before.
@@ -692,4 +713,9 @@ impl<'a> TextAnnotations<'a> {
         }
         virt_off.row
     }
+}
+
+/// The columns `text` takes, which may be several graphemes.
+pub(crate) fn text_width(text: &str) -> usize {
+    text.graphemes(true).map(grapheme_width).sum()
 }

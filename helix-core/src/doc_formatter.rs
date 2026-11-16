@@ -40,6 +40,8 @@ pub enum GraphemeSource {
     /// A closed fold: document text shown as a placeholder, see [`fold`].
     Fold {
         codepoints: u32,
+        /// The columns of the placeholder.
+        width: usize,
     },
     /// Document text shown as another grapheme, or hidden, see
     /// [`Conceal`](crate::text_annotations::Conceal).
@@ -48,6 +50,8 @@ pub enum GraphemeSource {
         /// Whether it fills the rest of the row, like a horizontal rule.
         fill: bool,
         style: ConcealStyle,
+        /// The columns of the replacement.
+        width: usize,
     },
 }
 
@@ -83,21 +87,22 @@ impl GraphemeSource {
     pub fn doc_chars(self) -> usize {
         match self {
             GraphemeSource::Document { codepoints }
-            | GraphemeSource::Fold { codepoints }
+            | GraphemeSource::Fold { codepoints, .. }
             | GraphemeSource::Conceal { codepoints, .. } => codepoints as usize,
             GraphemeSource::VirtualText { .. } => 0,
         }
     }
 
     // A fold's placeholder or a conceal's replacement may be several graphemes, like ` … `, so
-    // it is measured as a whole. A fold's placeholder is also a non-whitespace word of its own
-    // whatever it starts with.
+    // it is measured as a whole, once. A fold's placeholder is also a non-whitespace word of its
+    // own whatever it starts with.
 
     fn width(self, grapheme: &Grapheme) -> usize {
-        match grapheme {
-            Grapheme::Other { g } if self.is_placeholder() => {
-                g.graphemes(true).map(grapheme_width).sum()
-            }
+        match (self, grapheme) {
+            (
+                GraphemeSource::Fold { width, .. } | GraphemeSource::Conceal { width, .. },
+                Grapheme::Other { .. },
+            ) => width,
             _ => grapheme.width(),
         }
     }
@@ -339,7 +344,10 @@ impl<'t> DocumentFormatter<'t> {
                     .expect("folds come from syntax trees, which are smaller than 4 GiB");
                 (
                     self.annotations.fold_placeholder().into(),
-                    GraphemeSource::Fold { codepoints },
+                    GraphemeSource::Fold {
+                        codepoints,
+                        width: self.annotations.fold_placeholder_width(),
+                    },
                 )
             } else if let Some(conceal) = self.annotations.conceal_at(char_pos, len_chars) {
                 // a conceal of no text hides nothing to skip
@@ -350,12 +358,14 @@ impl<'t> DocumentFormatter<'t> {
                 let codepoints = u32::try_from(conceal.end - conceal.start)
                     .expect("conceals hide a part of a line");
                 let fill = matches!(conceal.replacement, Replacement::Fill(_));
+                let mut width = conceal.width();
                 let replacement = match conceal.replacement {
                     Replacement::Text(text) => text,
                     Replacement::Fill(g) => {
-                        let width = self.text_fmt.viewport_width as usize;
-                        let count = width.saturating_sub(col + 1) / grapheme_width(g).max(1);
-                        Cow::Owned(g.repeat(count.max(1)))
+                        let row = self.text_fmt.viewport_width as usize;
+                        let count = (row.saturating_sub(col + 1) / grapheme_width(g).max(1)).max(1);
+                        width = count * grapheme_width(g);
+                        Cow::Owned(g.repeat(count))
                     }
                     Replacement::Hidden => Cow::Borrowed(""),
                 };
@@ -363,6 +373,7 @@ impl<'t> DocumentFormatter<'t> {
                     codepoints,
                     fill,
                     style: conceal.style,
+                    width,
                 };
                 (replacement.into(), source)
             } else if let Some(grapheme) = self.graphemes.next() {
