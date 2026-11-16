@@ -327,6 +327,26 @@ impl ConcealCache {
     }
 }
 
+/// The chars of the outermost block of `root`'s tree holding the char `char_idx`: the outermost
+/// node other than a section, which groups blocks under a heading.
+fn block_at(root: &Node, text: RopeSlice, char_idx: usize) -> Option<ops::Range<usize>> {
+    let byte = text.char_to_byte(char_idx.min(text.len_chars())) as u32;
+    let mut cursor = root.walk();
+    loop {
+        cursor.goto_first_child_for_byte(byte)?;
+        let node = cursor.node();
+        if node.start_byte() > byte {
+            return None;
+        }
+        if node.kind() != "section" {
+            let range = node.byte_range();
+            return Some(
+                text.byte_to_char(range.start as usize)..text.byte_to_char(range.end as usize),
+            );
+        }
+    }
+}
+
 /// The conceals that a syntax tree's `conceals.scm` queries capture, fetched as the document
 /// formatter reaches them.
 pub struct SyntaxConceals<'a> {
@@ -382,15 +402,23 @@ impl<'a> SyntaxConceals<'a> {
     /// Computes the conceals and decorations of the lines `lines` into `cache`.
     fn fetch(&self, cache: &mut ConcealCache, lines: ops::Range<usize>) {
         let text = self.text;
-        let end = if lines.end < text.len_lines() {
-            text.line_to_char(lines.end)
+        // A match only renders where it is found from its start: from the block the window
+        // starts in, unless that is far before it, and a line before and after the window, where
+        // a table next to it draws its border.
+        let mut first = lines.start.saturating_sub(1);
+        let root = self.syntax.tree().root_node();
+        if let Some(block) = block_at(&root, text, text.line_to_char(lines.start)) {
+            let block_line = text.char_to_line(block.start);
+            if block_line + FETCHED_LINES >= lines.start {
+                first = first.min(block_line);
+            }
+        }
+        let end = if lines.end + 1 < text.len_lines() {
+            text.line_to_char(lines.end + 1)
         } else {
             text.len_chars()
         };
-        let rendered = self.render(
-            text.line_to_char(lines.start)..end,
-            Some(&mut cache.table_widths),
-        );
+        let rendered = self.render(text.line_to_char(first)..end, Some(&mut cache.table_widths));
         for line in lines.clone() {
             cache.lines.insert(line, Vec::new());
             cache.decorations.remove(&line);
@@ -1294,6 +1322,94 @@ mod test {
         assert!(ConcealReveal::Symbol.reveals(text, &many, 5..10));
         assert!(ConcealReveal::Symbol.reveals(text, &many, 15..19));
         assert!(!ConcealReveal::Symbol.reveals(text, &many, 2..3));
+    }
+
+    /// Texts with the parts of each language that are concealed.
+    const SAMPLES: [(&str, &str); 2] = [
+        (
+            "markdown",
+            r#"# Title
+
+Some *emphasis
+across lines* and `code`, a [link](https://example.com), &copy; and a footnote[^1].
+
+Setext
+------
+
+- [ ] todo
+- [x] done
+  - nested
+    1. one
+    1. two
+
+> [!NOTE] Callout
+> body with **bold**
+> > nested quote
+
+| a | b |
+|---|:-:|
+| one | two |
+| three | four |
+
+```rust
+fn main() {}
+```
+
+---
+
+Math $x^2 + \alpha$ inline.
+
+1) first
+2) second
+"#,
+        ),
+        (
+            "typst",
+            r#"= Heading
+
+Text with $alpha + beta -> gamma$ and -- dashes.
+
+$ sum_(i=0)^n i = (n(n+1)) / 2 $
+
+== Sub
+
+#sym.qed and #emoji.face, a [[Note\#Heading|alias]] link.
+
+#line(length: 100%)
+
+- item with $x != y$
+"#,
+        ),
+    ];
+
+    #[test]
+    fn windows_render_alike() {
+        // whether a window starts in an element, like a paragraph, or next to a table
+        for (language, source) in SAMPLES {
+            let text = Rope::from(source);
+            let syntax = parse(language, &text);
+            let conceals = |cache| {
+                SyntaxConceals::new(
+                    text.slice(..),
+                    &syntax,
+                    LOADER.clone(),
+                    None,
+                    OPTIONS,
+                    cache,
+                )
+                .unwrap()
+            };
+            let whole = RefCell::<ConcealCache>::default();
+            conceals(&whole).fetch(&mut whole.borrow_mut(), 0..text.len_lines());
+            let by_line = RefCell::<ConcealCache>::default();
+            for line in 0..text.len_lines() {
+                conceals(&by_line).fetch(&mut by_line.borrow_mut(), line..line + 1);
+            }
+            let (whole, by_line) = (whole.borrow(), by_line.borrow());
+            assert_eq!(whole.lines, by_line.lines, "{language}");
+            assert_eq!(whole.decorations, by_line.decorations, "{language}");
+            assert_eq!(whole.rows, by_line.rows, "{language}");
+        }
     }
 
     #[test]
