@@ -23,9 +23,10 @@ use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthStr;
 
 use crate::chars::char_is_line_ending;
-use crate::syntax::{merge_regions, Loader, Syntax};
+use crate::syntax::{generate_edits, merge_regions, Loader, Syntax};
 use crate::text_annotations::{Conceal, ConcealSource, LineAnnotation, Replacement};
-use crate::tree_sitter::Node;
+use crate::transaction::ChangeSet;
+use crate::tree_sitter::{Node, Tree};
 use crate::{Position, RopeSlice, Selection};
 
 /// The longest text, in bytes, that is looked up in a [`SymbolTable`] of symbols.
@@ -39,6 +40,9 @@ const FETCHED_LINES: usize = 128;
 
 /// The most lines whose conceals are handed to the document formatter at once.
 const SERVED_LINES: usize = 16;
+
+/// The lines on each side of an edit whose conceals are kept, moved along with the text.
+const KEPT_LINES: usize = 2 * FETCHED_LINES;
 
 /// A table of symbols that the text a `conceals.scm` query captures is looked up in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +213,19 @@ struct Cached {
     reveal: Reveal,
 }
 
+impl Cached {
+    /// Moves it `by` chars, as an edit before it moves the text.
+    fn shift(&mut self, by: isize) {
+        let conceal = &mut self.conceal;
+        let mut range = conceal.start..conceal.end;
+        shift(&mut range, by);
+        (conceal.start, conceal.end) = (range.start, range.end);
+        if let Reveal::Element(element) = &mut self.reveal {
+            shift(element, by);
+        }
+    }
+}
+
 /// Rendered Markdown drawn over the text of a line rather than instead of it, unless a cursor
 /// reveals the line: the chars `range` drawn as `style` says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +257,18 @@ pub struct VirtualRow {
 impl VirtualRow {
     pub(crate) fn new(parts: Vec<(String, RowStyle)>, element: Option<ops::Range<usize>>) -> Self {
         Self { parts, element }
+    }
+
+    /// Moves it `by` chars, as an edit before it moves the text.
+    fn shift(&mut self, by: isize) {
+        for (_, style) in &mut self.parts {
+            if let RowStyle::Text { char_idx } = style {
+                *char_idx = char_idx.saturating_add_signed(by);
+            }
+        }
+        if let Some(element) = &mut self.element {
+            shift(element, by);
+        }
     }
 }
 
@@ -288,8 +317,8 @@ struct Rendered<'t> {
     tables: Vec<Node<'t>>,
 }
 
-/// The conceals of the lines of a syntax tree, computed as they are needed. It has to be cleared
-/// whenever the tree changes.
+/// The conceals of the lines of a syntax tree, computed as they are needed. An edit of the text
+/// [`edit`](Self::edit)s it, and other changes of the tree clear it.
 #[derive(Debug, Default)]
 pub struct ConcealCache {
     /// The conceals of each line computed so far, sorted and disjoint.
@@ -315,6 +344,104 @@ impl ConcealCache {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// Keeps the conceals of the lines near an edit that it can't have changed, moved to where it
+    /// left them, and forgets the rest. `syntax` is the tree of `text`, the text after the edit.
+    ///
+    /// The conceals of a line depend on the outermost block it is in, like a table or a list, so
+    /// the blocks that the edit and the structural changes of the tree reach are computed anew.
+    pub fn edit(
+        &mut self,
+        edit: ConcealEdit,
+        old_text: RopeSlice,
+        text: RopeSlice,
+        changes: &ChangeSet,
+        syntax: &Syntax,
+    ) {
+        let root = syntax.tree().root_node();
+        // the chars of the text after the edit whose conceals may be different
+        let mut changed = Vec::new();
+        let mut offset = 0;
+        // the lines of the text before the edit that it changed; the changes are sorted
+        let mut edited: Option<ops::Range<usize>> = None;
+        for (from, to, insert) in changes.changes_iter() {
+            let start = from.saturating_add_signed(offset);
+            let end = start + insert.as_ref().map_or(0, |insert| insert.chars().count());
+            offset += end as isize - start as isize - (to - from) as isize;
+            changed.push(start..end);
+            let first = edited.map_or(old_text.char_to_line(from), |edited| edited.start);
+            edited = Some(first..old_text.char_to_line(to) + 1);
+        }
+        let Some(edited) = edited else {
+            return;
+        };
+        let byte_to_char = |byte: u32| text.byte_to_char(byte as usize);
+        changed.extend(
+            edit.tree
+                .changed_ranges(syntax.tree())
+                .iter()
+                .map(|range| byte_to_char(range.start_byte)..byte_to_char(range.end_byte)),
+        );
+        let blocks: Vec<_> = changed
+            .iter()
+            .flat_map(|range| [range.start, range.end])
+            .filter_map(|char_idx| block_at(&root, text, char_idx))
+            .collect();
+        changed.extend(blocks);
+        // as lines, with a line of margin on both sides
+        let last_line = text.len_lines() - 1;
+        let mut lines: Vec<_> = changed
+            .into_iter()
+            .map(|range| {
+                let first = text.char_to_line(range.start.min(text.len_chars()));
+                let last = text.char_to_line(range.end.min(text.len_chars()));
+                first.saturating_sub(1)..(last + 1).min(last_line) + 1
+            })
+            .collect();
+        merge_regions(&mut lines);
+
+        // the lines before the edit stay, those after it move as much as it moved the text, and
+        // those between the changes of several cursors are dropped
+        let kept = edited.start.saturating_sub(KEPT_LINES)..edited.end + KEPT_LINES;
+        let line_offset = text.len_lines() as isize - old_text.len_lines() as isize;
+        let moves: HashMap<usize, (usize, isize)> = self
+            .lines
+            .keys()
+            .filter(|line| kept.contains(line))
+            .filter_map(|&line| {
+                let (new_line, by) = if line < edited.start {
+                    (line, 0)
+                } else if line >= edited.end {
+                    (line.checked_add_signed(line_offset)?, offset)
+                } else {
+                    return None;
+                };
+                let i = lines.partition_point(|range| range.end <= new_line);
+                let changed = lines.get(i).is_some_and(|range| range.start <= new_line);
+                (!changed).then_some((line, (new_line, by)))
+            })
+            .collect();
+        move_lines(&mut self.lines, &moves, |conceals, by| {
+            for cached in conceals {
+                cached.shift(by);
+            }
+        });
+        move_lines(&mut self.decorations, &moves, |decorations, by| {
+            for (decoration, element) in decorations {
+                shift(&mut decoration.range, by);
+                shift(element, by);
+            }
+        });
+        move_lines(&mut self.rows, &moves, |rows, by| {
+            for row in rows.above.iter_mut().chain(&mut rows.below) {
+                row.shift(by);
+            }
+        });
+    }
+
     /// The window of lines around `line` whose conceals are computed together, leaving out lines
     /// already known.
     fn window(&self, line: usize, len_lines: usize) -> ops::Range<usize> {
@@ -324,6 +451,24 @@ impl ConcealCache {
         let after = (line + 1..len_lines).take(FETCHED_LINES - (line + 1 - first));
         let end = after.take_while(unknown).last().unwrap_or(line) + 1;
         first..end
+    }
+}
+
+/// The syntax tree of a text before an edit, with the edit applied, taken before the tree is
+/// updated for the edit to find what the update changed.
+pub struct ConcealEdit {
+    tree: Tree,
+}
+
+impl ConcealEdit {
+    /// `syntax` is the tree of `old_text`, which `changes` edit.
+    pub fn new(syntax: &Syntax, old_text: RopeSlice, changes: &ChangeSet) -> Self {
+        let mut tree = syntax.tree().clone();
+        // in the positions of the text before the edit, so the last one first
+        for edit in generate_edits(old_text, changes).iter().rev() {
+            tree.edit(edit);
+        }
+        Self { tree }
     }
 }
 
@@ -345,6 +490,27 @@ fn block_at(root: &Node, text: RopeSlice, char_idx: usize) -> Option<ops::Range<
             );
         }
     }
+}
+
+/// Moves the lines of `map` to the lines `moves` maps them to, shifting their chars with `shift`,
+/// and drops the lines it doesn't map.
+fn move_lines<T>(
+    map: &mut HashMap<usize, T>,
+    moves: &HashMap<usize, (usize, isize)>,
+    shift: impl Fn(&mut T, isize),
+) {
+    *map = std::mem::take(map)
+        .into_iter()
+        .filter_map(|(line, mut value)| {
+            let &(line, by) = moves.get(&line)?;
+            shift(&mut value, by);
+            Some((line, value))
+        })
+        .collect();
+}
+
+fn shift(range: &mut ops::Range<usize>, by: isize) {
+    *range = range.start.saturating_add_signed(by)..range.end.saturating_add_signed(by);
 }
 
 /// The conceals that a syntax tree's `conceals.scm` queries capture, fetched as the document
@@ -740,7 +906,7 @@ mod test {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::{Range, Rope};
+    use crate::{Range, Rope, Transaction};
 
     static LOADER: LazyLock<Arc<Loader>> =
         LazyLock::new(|| Arc::new(crate::config::default_lang_loader()));
@@ -1409,6 +1575,93 @@ $ sum_(i=0)^n i = (n(n+1)) / 2 $
             assert_eq!(whole.lines, by_line.lines, "{language}");
             assert_eq!(whole.decorations, by_line.decorations, "{language}");
             assert_eq!(whole.rows, by_line.rows, "{language}");
+        }
+    }
+
+    type Served = (
+        Vec<Conceal>,
+        Vec<(usize, LineRows)>,
+        Vec<(usize, ConcealDecoration)>,
+    );
+
+    /// The conceals, rows and decorations that `cache` serves for the whole of `text`.
+    fn served(text: &Rope, syntax: &Syntax, cache: &RefCell<ConcealCache>) -> Served {
+        let slice = text.slice(..);
+        let conceals =
+            SyntaxConceals::new(slice, syntax, LOADER.clone(), None, OPTIONS, cache).unwrap();
+        let mut served = Vec::new();
+        let mut fetched = 0;
+        while fetched <= text.len_chars() {
+            fetched = conceals.conceals_from(fetched, &mut served);
+        }
+        let lines = 0..text.len_lines();
+        (
+            served,
+            conceals.rows(lines.clone()),
+            conceals.decorations(lines),
+        )
+    }
+
+    #[test]
+    fn cache_follows_edits() {
+        const INSERTED: &[&str] = &[
+            "", "x", " ", "\n", "\n\n", "*", "**", "`", "```", "|", "| c |", "-", "- ", "1. ", ">",
+            "> ", "#", "[", "]", "(", ")", "$", "\\", "alpha", "->", "[[", "]]", "=", "---",
+        ];
+        // xorshift, so that a failing edit can be repeated
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut random = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for (language, source) in SAMPLES {
+            let mut text = Rope::from(source);
+            let mut syntax = parse(language, &text);
+            let cache = RefCell::default();
+            served(&text, &syntax, &cache);
+            for step in 0..400 {
+                // one or two edits, like those of several cursors
+                let mut changes = Vec::new();
+                let mut from = random(text.len_chars() + 1);
+                for _ in 0..1 + random(2) {
+                    let to = (from + random(4)).min(text.len_chars());
+                    let inserted = INSERTED[random(INSERTED.len())];
+                    changes.push((from, to, (!inserted.is_empty()).then(|| inserted.into())));
+                    if to == text.len_chars() {
+                        break;
+                    }
+                    from = to + 1 + random(text.len_chars() - to);
+                    if from > text.len_chars() {
+                        break;
+                    }
+                }
+                let transaction = Transaction::change(&text, changes.into_iter());
+                let old = text.clone();
+                let edit = ConcealEdit::new(&syntax, old.slice(..), transaction.changes());
+                transaction.apply(&mut text);
+                syntax
+                    .update(
+                        old.slice(..),
+                        text.slice(..),
+                        transaction.changes(),
+                        &LOADER,
+                    )
+                    .unwrap();
+                cache.borrow_mut().edit(
+                    edit,
+                    old.slice(..),
+                    text.slice(..),
+                    transaction.changes(),
+                    &syntax,
+                );
+                assert_eq!(
+                    served(&text, &syntax, &cache),
+                    served(&text, &syntax, &RefCell::default()),
+                    "{language} after edit {step}:\n{text}"
+                );
+            }
         }
     }
 

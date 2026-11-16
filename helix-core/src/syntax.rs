@@ -1130,7 +1130,7 @@ fn subtract_regions(
 
 pub type Highlighter<'a> = highlighter::Highlighter<'a, 'a, Loader>;
 
-fn generate_edits(old_text: RopeSlice, changeset: &ChangeSet) -> Vec<InputEdit> {
+pub(crate) fn generate_edits(old_text: RopeSlice, changeset: &ChangeSet) -> Vec<InputEdit> {
     use crate::Operation::*;
     use tree_sitter::Point;
 

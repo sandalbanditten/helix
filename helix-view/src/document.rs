@@ -6,7 +6,9 @@ use futures_util::FutureExt;
 use helix_core::auto_pairs::AutoPairs;
 use helix_core::chars::char_is_word;
 use helix_core::command_line::Token;
-use helix_core::conceal::{ConcealCache, ConcealOptions, ConcealReveal, SyntaxConceals};
+use helix_core::conceal::{
+    ConcealCache, ConcealEdit, ConcealOptions, ConcealReveal, SyntaxConceals,
+};
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
@@ -1778,7 +1780,11 @@ impl Document {
         }
 
         // update tree-sitter syntax tree
-        self.conceal_cache.get_mut().clear();
+        let conceal_edit = self
+            .syntax
+            .as_ref()
+            .filter(|_| !self.conceal_cache.get_mut().is_empty())
+            .map(|syntax| ConcealEdit::new(syntax, old_doc.slice(..), transaction.changes()));
         if let Some(syntax) = &mut self.syntax {
             let loader = self.syn_loader.load();
             if let Err(err) = syntax.update(
@@ -1790,6 +1796,16 @@ impl Document {
                 log::error!("TS parser failed, disabling TS for the current buffer: {err}");
                 self.syntax = None;
             }
+        }
+        match (conceal_edit, &self.syntax) {
+            (Some(edit), Some(syntax)) => self.conceal_cache.get_mut().edit(
+                edit,
+                old_doc.slice(..),
+                self.text.slice(..),
+                transaction.changes(),
+                syntax,
+            ),
+            _ => self.conceal_cache.get_mut().clear(),
         }
 
         // TODO: all of that should likely just be hooks
