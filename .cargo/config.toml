@@ -15,3 +15,9 @@ rustflags = ["--cfg", "tokio_unstable", "-C", "target-feature=-crt-static"]
 xtask = "run --package xtask --"
 integration-test = "test --features integration --profile integration --workspace --test integration --test file_tree --test dired --test compilation"
 
+# `cargo install` of `hx` built for this machine's CPU; the profile can't set rustflags on stable
+install-opt = [
+    "install", "--profile", "opt", "--locked",
+    "--path", "helix-term",
+    "--config", 'target."cfg(all())".rustflags = ["-C", "target-cpu=native"]',
+]
