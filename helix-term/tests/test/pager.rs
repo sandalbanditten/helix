@@ -1,7 +1,13 @@
-use std::{ffi::OsString, io::Write};
+use std::{ffi::OsString, io::Write, path::Path};
 
+use helix_core::Rope;
 use helix_term::application::Application;
-use helix_view::{doc, doc_mut, graphics::Color, pager};
+use helix_view::{
+    doc, doc_mut,
+    editor::{Action, GutterType},
+    graphics::Color,
+    pager, Document,
+};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -180,8 +186,11 @@ async fn pages_formatted_again_keep_their_place() -> anyhow::Result<()> {
     session.quit().await
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<()> {
+/// The arguments of git that show a diff laid out for `COLUMNS`, like difftastic's.
+const STAT: [&str; 3] = ["diff", "--no-ext-diff", "--stat"];
+
+/// A repository with a change that [`STAT`] shows wider than the view.
+fn repo_with_wide_stat() -> anyhow::Result<tempfile::TempDir> {
     let repo = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let name = format!("{}.txt", "long-name-".repeat(15));
     std::fs::write(repo.path().join(&name), "")?;
@@ -189,10 +198,30 @@ async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<(
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "-m", "empty"]);
     std::fs::write(repo.path().join(&name), "line\n".repeat(100))?;
-    // `--stat` lays the diff out for `COLUMNS`, like difftastic.
-    let args = ["diff", "--no-ext-diff", "--stat"];
+    Ok(repo)
+}
+
+fn stat_source(repo: &Path) -> pager::Source {
+    pager::Source {
+        producer: pager::Producer::Git {
+            args: STAT.iter().map(OsString::from).collect(),
+            dir: repo.to_owned(),
+        },
+        width: None,
+        formatting: None,
+    }
+}
+
+fn widest(app: &Application) -> usize {
+    let text = doc!(app.editor).text();
+    text.lines().map(|line| line.len_chars()).max().unwrap_or(0)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<()> {
+    let repo = repo_with_wide_stat()?;
     let shown = std::process::Command::new("git")
-        .args(args)
+        .args(STAT)
         .current_dir(repo.path())
         .env("COLUMNS", "200")
         .output()?;
@@ -202,18 +231,7 @@ async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<(
     file.write_all(&shown.stdout)?;
     let mut session = pager(&file)?;
     let doc = doc_mut!(session.app.editor);
-    doc.page.as_mut().unwrap().source = Some(pager::Source {
-        producer: pager::Producer::Git {
-            args: args.iter().map(OsString::from).collect(),
-            dir: repo.path().to_owned(),
-        },
-        width: None,
-        formatting: None,
-    });
-    let widest = |app: &Application| {
-        let text = doc!(app.editor).text();
-        text.lines().map(|line| line.len_chars()).max().unwrap_or(0)
-    };
+    doc.page.as_mut().unwrap().source = Some(stat_source(repo.path()));
     assert!(widest(&session.app) > 150);
     session
         .until("git to format the diff again", |app| widest(app) < 150)
@@ -222,6 +240,42 @@ async fn git_formats_diffs_again_for_the_width_of_the_view() -> anyhow::Result<(
     // Lines end before the last column, which would wrap them.
     assert!(widest(&session.app) < view.inner_width(doc) as usize);
     assert!(doc.text().to_string().contains("| 100 +"));
+    session.quit().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_shows_diffs_as_they_arrive_for_the_width_of_the_view() -> anyhow::Result<()> {
+    let repo = repo_with_wide_stat()?;
+    let mut session = pager(&output_file()?)?;
+    // Empty, as the page of git's diffs starts.
+    let editor = &mut session.app.editor;
+    let mut doc = Document::from(
+        Rope::new(),
+        None,
+        editor.config.clone(),
+        editor.syn_loader.clone(),
+    );
+    doc.page = Some(Box::new(pager::Page {
+        source: Some(stat_source(repo.path())),
+        ..Default::default()
+    }));
+    editor.new_file_from_document(Action::Replace, doc);
+    session
+        .until("git to show the diff", |app| {
+            let page = doc!(app.editor).page.as_ref().unwrap();
+            page.source.as_ref().unwrap().width.is_some()
+        })
+        .await;
+    let (view, doc) = helix_view::current_ref!(session.app.editor);
+    let text = doc.text().slice(..);
+    assert!(text.to_string().contains("| 100 +"), "{text}");
+    assert!(widest(&session.app) < view.inner_width(doc) as usize);
+    assert_eq!(doc.selection(view.id).primary().cursor(text), 0);
+    // A pager has no columns of diagnostics and changes.
+    assert_eq!(
+        view.gutters(),
+        [GutterType::LineNumbers, GutterType::Spacer]
+    );
     session.quit().await
 }
 

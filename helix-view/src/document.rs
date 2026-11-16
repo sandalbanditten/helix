@@ -1958,7 +1958,8 @@ impl Document {
         self.apply_impl(&transaction, view_id, false)
     }
 
-    /// Applies `transaction`, output of the terminal the document shows, which edits don't change.
+    /// Applies `transaction`, output of the terminal or command the document shows, which edits
+    /// don't change.
     pub fn apply_output(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
         self.apply_impl(transaction, view_id, false)
     }

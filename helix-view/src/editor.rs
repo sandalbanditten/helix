@@ -2852,6 +2852,21 @@ impl Editor {
     }
 
     pub fn new_file_from_stdin(&mut self, action: Action) -> Result<DocumentId, Error> {
+        // git runs again for the width of the view, and its output there shows as it arrives:
+        // what it writes here stays unread.
+        if let Some(source) = self.pager.then(crate::pager::Source::git).flatten() {
+            let mut doc = Document::from(
+                helix_core::Rope::new(),
+                None,
+                self.config.clone(),
+                self.syn_loader.clone(),
+            );
+            doc.page = Some(Box::new(crate::pager::Page {
+                source: Some(source),
+                ..Default::default()
+            }));
+            return Ok(self.new_file_from_document(action, doc));
+        }
         let (stdin, encoding, has_bom) = crate::document::read_to_string(&mut stdin(), None)?;
         if self.pager {
             let mut doc = Document::from(
@@ -2861,9 +2876,9 @@ impl Editor {
                 self.syn_loader.clone(),
             );
             doc.page();
-            // Shown by `man` or git, the text can be formatted again to fit the view.
-            if let Some(page) = doc.page.as_mut() {
-                page.source = crate::pager::Source::from_env(!page.man.is_empty());
+            // Shown by `man`, the page can be formatted again to fit the view.
+            if let Some(page) = doc.page.as_mut().filter(|page| !page.man.is_empty()) {
+                page.source = crate::pager::Source::man();
             }
             return Ok(self.new_file_from_document(action, doc));
         }

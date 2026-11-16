@@ -37,7 +37,11 @@ A man page that `man` shows in `hx -p` is formatted again to fit the text of the
 Neovim's `:Man` does: when it opens, and whenever the view gets wider or narrower. `MANWIDTH`, if
 set, is the widest it gets. This needs `man-db`, which tells the pager the page it shows.
 
-On Linux, diffs that git shows in `hx -p` as its pager are formatted again the same way: git runs
-again with `COLUMNS` set to the width of the text, which difftastic and `--stat` follow. This goes
-for `git diff`, `git show`, `git log`, `git whatchanged`, `git range-diff`, `git stash show` and
-`git stash list`.
+On Linux, diffs that git shows in `hx -p` as its pager are formatted the same way: git runs again
+with `COLUMNS` set to the width of the text, which difftastic and `--stat` follow, and its output
+shows as it arrives. The output git piped to the pager is left unread, so git stops, and exits
+with SIGPIPE once `hx` quits, as it does when `less` quits early. This goes for `git diff`,
+`git show`, `git log`, `git whatchanged`, `git range-diff`, `git stash show` and `git stash list`.
+
+The width leaves room for line numbers of up to five digits, so that it stays the same as the
+output gets longer.

@@ -39,19 +39,22 @@ pub struct Source {
 }
 
 impl Source {
-    /// The command showing its output in the pager it started, if it can format it again: `man`
-    /// showing a man page, or git showing diffs.
-    pub fn from_env(man_page: bool) -> Option<Self> {
-        let producer = if man_page {
-            Producer::man()?
-        } else {
-            Producer::git()?
-        };
-        Some(Self {
+    fn new(producer: Producer) -> Self {
+        Self {
             producer,
             width: None,
             formatting: None,
-        })
+        }
+    }
+
+    /// `man`, if it started the pager to show a man page.
+    pub fn man() -> Option<Self> {
+        Producer::man().map(Self::new)
+    }
+
+    /// git, if it started the pager with a command that shows diffs.
+    pub fn git() -> Option<Self> {
+        Producer::git().map(Self::new)
     }
 }
 
@@ -382,67 +385,83 @@ pub fn is_formatted(output: &str) -> bool {
 /// `ESC [ 1;31 m` become styles and other escape sequences go. Overstrikes, which `man` and the
 /// like use, become bold (`a BS a`) or underlined (`_ BS a`) text.
 pub fn format(output: &str) -> (String, Page) {
-    let mut text = Text::default();
-    let mut style = Style::default();
-    let mut input = output.chars().peekable();
-    while let Some(c) = input.next() {
-        match c {
-            '\x1b' => match input.next() {
-                // A control sequence: parameters and intermediates up to a final byte.
-                Some('[') => {
-                    let mut params = String::new();
-                    for c in input.by_ref() {
-                        if ('\x40'..='\x7e').contains(&c) {
-                            if c == 'm' {
-                                style = sgr::apply(style, &params);
+    Formatter::default().format(output)
+}
+
+/// Formats terminal output that arrives in parts, as [`format`] formats it whole. The parts end
+/// at line breaks, which escape sequences and overstrikes don't cross.
+#[derive(Debug, Default)]
+pub struct Formatter {
+    /// The style the parts so far left.
+    style: Style,
+}
+
+impl Formatter {
+    /// The text of the next part of the output, and the styles of its chars.
+    pub fn format(&mut self, output: &str) -> (String, Page) {
+        let mut text = Text::default();
+        let mut style = self.style;
+        let mut input = output.chars().peekable();
+        while let Some(c) = input.next() {
+            match c {
+                '\x1b' => match input.next() {
+                    // A control sequence: parameters and intermediates up to a final byte.
+                    Some('[') => {
+                        let mut params = String::new();
+                        for c in input.by_ref() {
+                            if ('\x40'..='\x7e').contains(&c) {
+                                if c == 'm' {
+                                    style = sgr::apply(style, &params);
+                                }
+                                break;
                             }
-                            break;
-                        }
-                        params.push(c);
-                    }
-                }
-                // An operating system command, like a hyperlink, up to BEL or ST.
-                Some(']') => {
-                    while let Some(c) = input.next() {
-                        if c == '\x07' || (c == '\x1b' && input.next_if_eq(&'\\').is_some()) {
-                            break;
+                            params.push(c);
                         }
                     }
-                }
-                // Designates a character set.
-                Some('(' | ')' | '*' | '+') => {
+                    // An operating system command, like a hyperlink, up to BEL or ST.
+                    Some(']') => {
+                        while let Some(c) = input.next() {
+                            if c == '\x07' || (c == '\x1b' && input.next_if_eq(&'\\').is_some()) {
+                                break;
+                            }
+                        }
+                    }
+                    // Designates a character set.
+                    Some('(' | ')' | '*' | '+') => {
+                        input.next();
+                    }
+                    _ => {}
+                },
+                '\x08' => {
+                    let Some(&after) = input.peek().filter(|&&after| after != '\n') else {
+                        continue;
+                    };
+                    let Some((before, before_style)) = text.pop() else {
+                        continue;
+                    };
                     input.next();
+                    let underlined = before_style.underline_style(UnderlineStyle::Line);
+                    let (c, style) = if before == after {
+                        (after, before_style.add_modifier(Modifier::BOLD))
+                    } else if before == '_' {
+                        (after, underlined)
+                    } else if after == '_' {
+                        (before, underlined)
+                    } else {
+                        (after, before_style)
+                    };
+                    text.push(c, style);
                 }
-                _ => {}
-            },
-            '\x08' => {
-                let Some(&after) = input.peek().filter(|&&after| after != '\n') else {
-                    continue;
-                };
-                let Some((before, before_style)) = text.pop() else {
-                    continue;
-                };
-                input.next();
-                let underlined = before_style.underline_style(UnderlineStyle::Line);
-                let (c, style) = if before == after {
-                    (after, before_style.add_modifier(Modifier::BOLD))
-                } else if before == '_' {
-                    (after, underlined)
-                } else if after == '_' {
-                    (before, underlined)
-                } else {
-                    (after, before_style)
-                };
-                text.push(c, style);
+                c => text.push(c, style),
             }
-            c => text.push(c, style),
         }
+        self.style = style;
+        let page = Page {
+            styles: text.styles,
+            ..Page::default()
+        };
+        (text.text, page)
     }
-    let page = Page {
-        styles: text.styles,
-        ..Page::default()
-    };
-    (text.text, page)
 }
 
 /// Text being formatted, with the styles of its chars.

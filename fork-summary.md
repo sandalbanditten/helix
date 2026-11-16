@@ -71,7 +71,7 @@ Shows two versions side by side, aligned by difftastic when `difft` is installed
 `hx -p` works like `less -R`: `cmd | hx -p` or `hx -p <files>` open read-only, with the ANSI colours kept.
 - Set `MANPAGER='hx -p'` and `git config --global core.pager 'hx -p'` to use it for man pages and git.
 - Man pages get colours like `bat`, using the `man.*` theme keys, and reflow when the view's width changes.
-- On Linux, git's diffs (difftastic, `--stat`) reflow to the view's width too.
+- On Linux, git's diffs (difftastic, `--stat`) are made for the view's width too, and show as they arrive.
 
 ### Auto-reload
 - Buffers reload when their files change on disk. The reload is an undo step, so `u` reverts it.
