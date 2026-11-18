@@ -549,6 +549,33 @@ async fn select_mode_tree_sitter_prev_function_goes_backwards_to_object() -> any
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tree_sitter_objects_at_end_of_file() -> anyhow::Result<()> {
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        (
+            "fn inc(x: usize) -> usize { #[x|]# + 1 }",
+            "maf",
+            "#[fn inc(x: usize) -> usize { x + 1 }|]#",
+            LineFeedHandling::AsIs,
+        ),
+    )
+    .await?;
+
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        (
+            "#[/|]#// Increments\nfn inc(x: usize) -> usize { x + 1 }",
+            "]f",
+            "/// Increments\n#[fn inc(x: usize) -> usize { x + 1 }|]#",
+            LineFeedHandling::AsIs,
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn find_char() -> anyhow::Result<()> {
     test(("he#[l|]#lo\nhello", "fl", "he#[ll|]#o\nhello")).await?;
     test(("hel#[l|]#o\nhello", "fl", "hel#[lo\nhel|]#lo")).await?;
