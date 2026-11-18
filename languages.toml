@@ -5050,7 +5050,7 @@ file-types = []
 
 [[grammar]]
 name = "rsx"
-source = { path = "/home/notroot/Code/soft/tree-sitter-rsx" }
+source = { git = "https://github.com/sandalbanditten/tree-sitter-rsx", rev = "7cd636130f9d30e5d0b36fbf1770fa8a7bd4291a" }
 
 [[language]]
 name = "clarity"
