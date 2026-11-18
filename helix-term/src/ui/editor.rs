@@ -1012,7 +1012,7 @@ impl EditorView {
         } else {
             view.render_selection(doc)
                 .iter()
-                // a row of several lines is identified by its first line
+                // a row of several lines is identified by its first line; sorted like the ranges
                 .map(|range| fold::row_start_line(folds, text, range.cursor_line(text)))
                 .collect()
         };
@@ -1032,7 +1032,7 @@ impl EditorView {
             let cursors = cursors.clone();
             let gutter_decoration = move |renderer: &mut TextRenderer, pos: LinePos| {
                 // TODO handle softwrap in gutters
-                let selected = cursors.contains(&pos.doc_line);
+                let selected = cursors.binary_search(&pos.doc_line).is_ok();
                 let x = viewport.x + offset;
                 let y = pos.visual_line;
 
