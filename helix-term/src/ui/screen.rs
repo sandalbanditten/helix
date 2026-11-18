@@ -1241,11 +1241,11 @@ impl Screen {
             'F' => (self.row, self.col) = (row.saturating_sub(count).max(top), 0),
             'G' | '`' => self.col = (count - 1).min(self.cols - 1),
             'd' => {
-                self.move_to_row((origin.start + count - 1).min(origin.end - 1));
+                self.move_to_row(origin.start.saturating_add(count - 1).min(origin.end - 1));
                 self.col = col;
             }
             'H' | 'f' => {
-                self.move_to_row((origin.start + count - 1).min(origin.end - 1));
+                self.move_to_row(origin.start.saturating_add(count - 1).min(origin.end - 1));
                 self.col = (second.max(1) - 1).min(self.cols - 1);
             }
             'J' => {
@@ -1324,7 +1324,7 @@ impl Screen {
                 }
             }
             'I' => {
-                for _ in 0..count {
+                for _ in 0..count.min(self.cols) {
                     self.tab();
                 }
             }
@@ -1718,6 +1718,11 @@ mod tests {
         assert_eq!(terminal(10, 2, "日本x").cursor(), 3);
         let screen = terminal(4, 2, "abcdefgh\r\nx");
         assert_eq!(screen.cursor(), 11);
+        // Counts as large as they come stop at the edge of the screen.
+        let huge = usize::MAX;
+        let screen = terminal(20, 3, &format!("\x1b[2;3r\x1b[?6h\x1b[{huge}H\x1b[{huge}I"));
+        // The last row of the region and the last column, past two empty rows.
+        assert_eq!(screen.cursor(), 2 + 19);
     }
 
     #[test]
