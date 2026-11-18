@@ -155,6 +155,33 @@ mod test {
         .await
     }
 
+    /// Swapping names goes through a temporary name, which a broken link takes too.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn names_swap_with_broken_links() -> anyhow::Result<()> {
+        let workspace = Workspace::new(&["a.txt"])?;
+        std::os::unix::fs::symlink("missing", workspace.path("z"))?;
+        let mut app = workspace.app("a.txt")?;
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some(":dired<ret>"), None),
+                (
+                    Some("/\\bz\\b<ret>ca.txt<esc>/a\\.txt<ret>cz<esc>:w<ret>"),
+                    Some(&|app| {
+                        assert_eq!(status(app), "Applied 2 changes");
+                        let link = workspace.path("a.txt");
+                        assert_eq!(fs::read_link(link).unwrap(), PathBuf::from("missing"));
+                        assert!(workspace.path("z").is_file());
+                    }),
+                ),
+                (Some(":qa!<ret>"), None),
+            ],
+            true,
+        )
+        .await
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn undo_files_follow_renamed_and_copied_entries() -> anyhow::Result<()> {
         let workspace = Workspace::new(&["a.txt", "b.txt"])?;

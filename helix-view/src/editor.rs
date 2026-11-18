@@ -2338,7 +2338,8 @@ impl Editor {
             }
         }
 
-        if old_path.exists() {
+        // Not `exists`, which is false for a broken link.
+        if fs::symlink_metadata(old_path).is_ok() {
             helix_stdx::fs::move_path(old_path, &new_path)?;
             if let Some(dir) = self.config().undo.persisted() {
                 if let Err(err) = undo_file::moved(&dir, &canonicalize(old_path), &new_path) {
