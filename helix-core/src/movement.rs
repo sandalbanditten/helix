@@ -598,27 +598,54 @@ pub fn goto_treesitter_object(
             .root_node();
         let textobject_query = loader.textobject_query(syntax.layer(layer).language);
 
+        let textobject_query = textobject_query?;
         let cap_name = |t: TextObject| format!("{}.{}", object_name, t);
-        let nodes = textobject_query?.capture_nodes_any(
-            &[
-                &cap_name(TextObject::Movement),
-                &cap_name(TextObject::Around),
-                &cap_name(TextObject::Inside),
-            ],
-            &slice_tree,
-            slice,
-        )?;
+        let cap_names = [
+            cap_name(TextObject::Movement),
+            cap_name(TextObject::Around),
+            cap_name(TextObject::Inside),
+        ];
+        let cap_names = cap_names.each_ref().map(String::as_str);
 
-        let node = match dir {
-            Direction::Forward => nodes
-                .filter(|n| n.start_byte() > byte_pos)
-                .min_by_key(|n| (n.start_byte(), Reverse(n.end_byte())))?,
-            Direction::Backward => nodes
-                .filter(|n| n.end_byte() < byte_pos)
-                .max_by_key(|n| (n.end_byte(), Reverse(n.start_byte())))?,
+        // Query a window from the cursor, doubled until it holds the nearest object: the query
+        // finds every object that intersects it.
+        let len = slice.len_bytes();
+        let mut size = 4096;
+        let node = loop {
+            let window = match dir {
+                Direction::Forward => byte_pos..(byte_pos + size).min(len),
+                Direction::Backward => byte_pos.saturating_sub(size)..byte_pos,
+            };
+            let nodes = textobject_query.capture_nodes_any(
+                &cap_names,
+                &slice_tree,
+                slice,
+                window.start as u32..window.end as u32,
+            )?;
+            let node = match dir {
+                Direction::Forward => nodes
+                    .filter(|n| n.start_byte() > byte_pos)
+                    .min_by_key(|n| (n.start_byte(), Reverse(n.end_byte()))),
+                Direction::Backward => nodes
+                    .filter(|n| n.end_byte() < byte_pos)
+                    .max_by_key(|n| (n.end_byte(), Reverse(n.start_byte()))),
+            };
+            let (in_window, whole) = match dir {
+                Direction::Forward => (
+                    node.as_ref().is_some_and(|n| n.start_byte() < window.end),
+                    window.end == len,
+                ),
+                Direction::Backward => (
+                    node.as_ref().is_some_and(|n| n.end_byte() > window.start),
+                    window.start == 0,
+                ),
+            };
+            if in_window || whole {
+                break node?;
+            }
+            size *= 2;
         };
 
-        let len = slice.len_bytes();
         let start_byte = node.start_byte();
         let end_byte = node.end_byte();
         if start_byte >= len || end_byte > len {

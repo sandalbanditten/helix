@@ -1463,24 +1463,30 @@ impl TextObjectQuery {
         capture_name: &str,
         node: &Node<'a>,
         slice: RopeSlice<'a>,
+        range: ops::Range<u32>,
     ) -> Option<impl Iterator<Item = CapturedNode<'a>>> {
-        self.capture_nodes_any(&[capture_name], node, slice)
+        self.capture_nodes_any(&[capture_name], node, slice, range)
     }
 
     /// Find the first capture that exists out of all given `capture_names`
-    /// and return sub nodes that match this capture.
+    /// and return sub nodes that match this capture, at least all those that
+    /// intersect the byte `range`.
     pub fn capture_nodes_any<'a>(
         &'a self,
         capture_names: &[&str],
         node: &Node<'a>,
         slice: RopeSlice<'a>,
+        range: ops::Range<u32>,
     ) -> Option<impl Iterator<Item = CapturedNode<'a>>> {
         let capture = capture_names
             .iter()
             .find_map(|cap| self.query.get_capture(cap))?;
 
-        let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
-            .execute_query(&self.query, node, RopeInput::new(slice));
+        let mut cursor = InactiveQueryCursor::new(range, TREE_SITTER_MATCH_LIMIT).execute_query(
+            &self.query,
+            node,
+            RopeInput::new(slice),
+        );
         let capture_node = iter::from_fn(move || {
             let mat = cursor.next_match()?;
             Some(mat.nodes_for_capture(capture).cloned().collect())
@@ -1846,7 +1852,7 @@ mod test {
         let root = syntax.tree().root_node();
         let test = |capture, range| {
             let matches: Vec<_> = textobject
-                .capture_nodes(capture, &root, source.slice(..))
+                .capture_nodes(capture, &root, source.slice(..), 0..u32::MAX)
                 .unwrap()
                 .collect();
 
@@ -1868,6 +1874,25 @@ mod test {
         // The query used in this test case only captures the first line_comment node.
         // Determine if this behavior is intentional in tree-sitter.
         // test("multiple_nodes_grouped", 1..37);
+    }
+
+    #[test]
+    fn textobject_groups_from_a_range_in_them() {
+        let source = Rope::from_str("// a\n// b\n// c\n// d\nfn f() {}\n");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let root = syntax.tree().root_node();
+        let query = LOADER.textobject_query(language).unwrap();
+        let captures = |range| {
+            query
+                .capture_nodes("comment.around", &root, source.slice(..), range)
+                .unwrap()
+                .map(|node| (node.start_byte(), node.end_byte()))
+                .collect::<Vec<_>>()
+        };
+        // a group starting before the range is still found whole
+        assert_eq!(captures(12..13), [(0, 19)]);
+        assert_eq!(captures(0..u32::MAX), [(0, 19)]);
     }
 
     /// The words in the regions that `spell_regions` selects in `source`, in order.

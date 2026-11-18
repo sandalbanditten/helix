@@ -549,6 +549,33 @@ async fn select_mode_tree_sitter_prev_function_goes_backwards_to_object() -> any
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tree_sitter_objects_far_from_the_cursor() -> anyhow::Result<()> {
+    // further than the first window queried for the next object
+    let filler = "let x = 1;\n".repeat(1000);
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        (
+            format!("#[/|]#// Increments\n{filler}fn inc(x: usize) -> usize {{ x + 1 }}\n"),
+            "]f",
+            format!("/// Increments\n{filler}#[fn inc(x: usize) -> usize {{ x + 1 }}|]#\n"),
+        ),
+    )
+    .await?;
+
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        (
+            format!("fn inc(x: usize) -> usize {{ x + 1 }}\n{filler}#[;|]#\n"),
+            "[f",
+            format!("#[|fn inc(x: usize) -> usize {{ x + 1 }}]#\n{filler};\n"),
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tree_sitter_objects_at_end_of_file() -> anyhow::Result<()> {
     test_with_config(
         AppBuilder::new().with_file("foo.rs", None),

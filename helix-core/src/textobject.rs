@@ -272,8 +272,14 @@ pub fn textobject_treesitter(
     let textobject_query = loader.textobject_query(syntax.layer(layer).language);
     let get_range = move || -> Option<Range> {
         let capture_name = format!("{}.{}", object_name, textobject); // eg. function.inner
+                                                                      // objects that contain the cursor intersect its byte
         let node = textobject_query?
-            .capture_nodes(&capture_name, &root, slice)?
+            .capture_nodes(
+                &capture_name,
+                &root,
+                slice,
+                byte_pos as u32..byte_pos as u32 + 1,
+            )?
             .filter(|node| node.byte_range().contains(&byte_pos))
             .min_by_key(|node| node.byte_range().len())?;
 
