@@ -1202,7 +1202,15 @@ impl Document {
             };
 
             let write_result: anyhow::Result<_> = async {
-                let mut dst = tokio::fs::File::create(&write_path).await?;
+                let mut options = tokio::fs::OpenOptions::new();
+                options.write(true).create(true).truncate(true);
+                // Don't expose a private file's new copy until the backup's metadata is copied
+                #[cfg(unix)]
+                if let Some(backup) = &backup {
+                    use std::os::unix::fs::PermissionsExt;
+                    options.mode(fs::metadata(backup).await?.permissions().mode() & 0o777);
+                }
+                let mut dst = options.open(&write_path).await?;
                 to_writer(&mut dst, encoding_with_bom_info, &text).await?;
                 // Ignore ENOTSUP/EOPNOTSUPP (Operation not supported) errors from sync_all()
                 // This is known to occur on SMB filesystems on macOS where fsync is not supported
