@@ -29,6 +29,9 @@ pub struct SignatureHelp {
     active_signature: usize,
     lsp_signature: Option<usize>,
     signatures: Vec<Signature>,
+    docs: Vec<Option<Markdown>>,
+    /// The highlighted text of the signature at an index, and the theme's name
+    highlighted: Option<(usize, String, Text<'static>)>,
 }
 
 impl SignatureHelp {
@@ -41,12 +44,29 @@ impl SignatureHelp {
         lsp_signature: Option<usize>,
         signatures: Vec<Signature>,
     ) -> Self {
+        let docs = signatures
+            .iter()
+            .map(|signature| {
+                let doc = signature.signature_doc.clone()?;
+                Some(Markdown::new(doc, Arc::clone(&config_loader)))
+            })
+            .collect();
         Self {
             language,
             config_loader,
             active_signature,
             lsp_signature,
             signatures,
+            docs,
+            highlighted: None,
+        }
+    }
+
+    fn active_index(&self) -> usize {
+        if self.active_signature < self.signatures.len() {
+            self.active_signature
+        } else {
+            0
         }
     }
 
@@ -97,32 +117,28 @@ impl Component for SignatureHelp {
         let margin = Margin::all(1);
         let area = area.inner(margin);
 
-        let signature = self
-            .signatures
-            .get(self.active_signature)
-            .unwrap_or_else(|| &self.signatures[0]);
-
-        let active_param_span = signature.active_param_range.map(|(start, end)| {
-            let highlight = cx
-                .editor
-                .theme
-                .find_highlight_exact("ui.selection")
-                .unwrap();
-            OverlayHighlights::single(highlight, start..end)
-        });
-
-        let signature = self
-            .signatures
-            .get(self.active_signature)
-            .unwrap_or_else(|| &self.signatures[0]);
-
-        let sig_text = crate::ui::markdown::highlighted_code_block(
-            signature.signature.as_str(),
-            &self.language,
-            Some(&cx.editor.theme),
-            &self.config_loader.load(),
-            active_param_span,
-        );
+        let index = self.active_index();
+        let theme = &cx.editor.theme;
+        if self
+            .highlighted
+            .as_ref()
+            .is_none_or(|(i, name, _)| *i != index || name != theme.name())
+        {
+            let signature = &self.signatures[index];
+            let active_param_span = signature.active_param_range.map(|(start, end)| {
+                let highlight = theme.find_highlight_exact("ui.selection").unwrap();
+                OverlayHighlights::single(highlight, start..end)
+            });
+            let text = crate::ui::markdown::highlighted_code_block(
+                signature.signature.as_str(),
+                &self.language,
+                Some(theme),
+                &self.config_loader.load(),
+                active_param_span,
+            );
+            self.highlighted = Some((index, theme.name().to_owned(), text));
+        }
+        let sig_text = &self.highlighted.as_ref().unwrap().2;
 
         if self.signatures.len() > 1 {
             let signature_index = self.signature_index();
@@ -131,7 +147,7 @@ impl Component for SignatureHelp {
             paragraph.render(area.with_height(1).clip_right(1), surface);
         }
 
-        let sig_text_para = Paragraph::new(&sig_text)
+        let sig_text_para = Paragraph::new(sig_text)
             .wrap(Wrap { trim: false })
             .scroll((cx.scroll.unwrap_or_default() as u16, 0));
         let (_, sig_text_height) = sig_text_para.required_size(area.width);
@@ -139,9 +155,9 @@ impl Component for SignatureHelp {
         let sig_text_area = sig_text_area.intersection(surface.area);
         sig_text_para.render(sig_text_area, surface);
 
-        if signature.signature_doc.is_none() {
+        let Some(sig_doc) = &self.docs[index] else {
             return;
-        }
+        };
 
         let sep_style = Style::default();
         let borders = BorderType::line_symbols(BorderType::Plain);
@@ -151,10 +167,6 @@ impl Component for SignatureHelp {
             }
         }
 
-        let sig_doc = match &signature.signature_doc {
-            None => return,
-            Some(doc) => Markdown::new(doc.clone(), Arc::clone(&self.config_loader)),
-        };
         let sig_doc = sig_doc.parse(Some(&cx.editor.theme));
         let sig_doc_area = area
             .clip_top(sig_text_area.height + 2)
@@ -169,10 +181,8 @@ impl Component for SignatureHelp {
         const PADDING: u16 = 2;
         const SEPARATOR_HEIGHT: u16 = 1;
 
-        let signature = self
-            .signatures
-            .get(self.active_signature)
-            .unwrap_or_else(|| &self.signatures[0]);
+        let index = self.active_index();
+        let signature = &self.signatures[index];
 
         let max_text_width = viewport.0.saturating_sub(PADDING).clamp(10, 120);
 
@@ -186,10 +196,9 @@ impl Component for SignatureHelp {
         let sig_text_para = Paragraph::new(&signature_text).wrap(Wrap { trim: false });
         let (sig_width, sig_height) = sig_text_para.required_size(max_text_width);
 
-        let (width, height) = match signature.signature_doc {
-            Some(ref doc) => {
-                let doc_md = Markdown::new(doc.clone(), Arc::clone(&self.config_loader));
-                let doc_text = doc_md.parse(None);
+        let (width, height) = match &self.docs[index] {
+            Some(doc) => {
+                let doc_text = doc.parse(None);
                 let (doc_width, doc_height) =
                     crate::ui::text::required_size(&doc_text, max_text_width);
                 (

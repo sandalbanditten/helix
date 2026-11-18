@@ -124,6 +124,8 @@ pub struct Completion {
     filter: String,
     // TODO: move to helix-view/central handler struct in the future
     resolve_handler: ResolveHandler,
+    /// The documentation of the selected item, kept while it doesn't change
+    doc: Option<Markdown>,
 }
 
 impl Completion {
@@ -312,6 +314,7 @@ impl Completion {
             // and avoid allocation during matching
             filter: String::from(fragment),
             resolve_handler: ResolveHandler::new(),
+            doc: None,
         };
 
         // need to recompute immediately in case start_offset != trigger_offset
@@ -489,17 +492,14 @@ impl Component for Completion {
         let doc = doc!(cx.editor);
         let language = doc.language_name().unwrap_or("");
 
-        let markdowned = |lang: &str, detail: Option<&str>, doc: Option<&str>| {
-            let md = match (detail, doc) {
-                (Some(detail), Some(doc)) => format!("```{lang}\n{detail}\n```\n{doc}"),
-                (Some(detail), None) => format!("```{lang}\n{detail}\n```"),
-                (None, Some(doc)) => doc.to_string(),
-                (None, None) => String::new(),
-            };
-            Markdown::new(md, cx.editor.syn_loader.clone())
+        let markdowned = |lang: &str, detail: Option<&str>, doc: Option<&str>| match (detail, doc) {
+            (Some(detail), Some(doc)) => format!("```{lang}\n{detail}\n```\n{doc}"),
+            (Some(detail), None) => format!("```{lang}\n{detail}\n```"),
+            (None, Some(doc)) => doc.to_string(),
+            (None, None) => String::new(),
         };
 
-        let mut markdown_doc = match option {
+        let md = match option {
             CompletionItem::Lsp(option) => match &option.item.documentation {
                 Some(lsp::Documentation::String(contents))
                 | Some(lsp::Documentation::MarkupContent(lsp::MarkupContent {
@@ -528,6 +528,10 @@ impl Component for Completion {
                 };
                 markdowned(language, None, Some(doc))
             }
+        };
+        let markdown_doc = match &mut self.doc {
+            Some(doc) if doc.contents() == md => doc,
+            doc => doc.insert(Markdown::new(md, cx.editor.syn_loader.clone())),
         };
 
         let popup_area = self.popup.area(area, cx.editor);

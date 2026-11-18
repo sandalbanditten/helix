@@ -5,7 +5,7 @@ use tui::{
     text::{Span, Spans, Text},
 };
 
-use std::sync::Arc;
+use std::{borrow::Cow, cell::RefCell, sync::Arc};
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -141,6 +141,8 @@ pub struct Markdown {
     contents: String,
 
     config_loader: Arc<ArcSwap<syntax::Loader>>,
+    /// The last text parsed with a theme, and the theme's name
+    styled: RefCell<Option<(String, Text<'static>)>>,
 }
 
 // TODO: pre-render and self reference via Pin
@@ -166,10 +168,38 @@ impl Markdown {
         Self {
             contents,
             config_loader,
+            styled: RefCell::default(),
         }
     }
 
-    pub fn parse(&self, theme: Option<&Theme>) -> tui::text::Text<'_> {
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    /// The text of the contents, highlighting code blocks with `theme`. Highlighting builds a
+    /// syntax tree per block, so the result for a theme is kept.
+    pub fn parse(&self, theme: Option<&Theme>) -> Text<'_> {
+        let Some(theme) = theme else {
+            return self.parse_text(None);
+        };
+        let mut styled = self.styled.borrow_mut();
+        if styled.as_ref().is_none_or(|(name, _)| name != theme.name()) {
+            let lines = self.parse_text(Some(theme)).lines.into_iter().map(|spans| {
+                let spans = spans.0.into_iter().map(|span| Span {
+                    content: Cow::Owned(span.content.into_owned()),
+                    style: span.style,
+                });
+                Spans(spans.collect())
+            });
+            *styled = Some((
+                theme.name().to_owned(),
+                Text::from(lines.collect::<Vec<_>>()),
+            ));
+        }
+        styled.as_ref().unwrap().1.clone()
+    }
+
+    fn parse_text(&self, theme: Option<&Theme>) -> Text<'_> {
         fn push_line<'a>(spans: &mut Vec<Span<'a>>, lines: &mut Vec<Spans<'a>>) {
             let spans = std::mem::take(spans);
             if !spans.is_empty() {
@@ -388,5 +418,30 @@ impl Component for Markdown {
         let (width, height) = crate::ui::text::required_size(&contents, max_text_width);
 
         Some((width + padding, height + padding))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use helix_view::theme::{BASE16_DEFAULT_THEME, DEFAULT_THEME};
+
+    #[test]
+    fn parsed_text_follows_the_theme() {
+        let loader = helix_core::config::default_lang_loader();
+        let markdown = Markdown::new(
+            "Some *text*\n```rust\nfn f() {}\n```".into(),
+            Arc::new(ArcSwap::from_pointee(loader)),
+        );
+        for theme in [&*DEFAULT_THEME, &*DEFAULT_THEME, &*BASE16_DEFAULT_THEME] {
+            assert_eq!(
+                markdown.parse(Some(theme)),
+                markdown.parse_text(Some(theme))
+            );
+        }
+        assert_ne!(
+            markdown.parse(Some(&DEFAULT_THEME)),
+            markdown.parse(Some(&BASE16_DEFAULT_THEME))
+        );
     }
 }
