@@ -1000,6 +1000,28 @@ pub fn is_opaque_interior(
     false
 }
 
+/// The indent query and tree for `byte_pos`, and whether they are an injected language's.
+fn indent_query_and_tree<'q, 's>(
+    query: &'q IndentQuery,
+    syntax: &'s Syntax,
+    loader: &'q syntax::Loader,
+    byte_pos: u32,
+) -> (&'q IndentQuery, &'s tree_sitter::Tree, bool) {
+    let layer = syntax.layer_for_byte_range(byte_pos, byte_pos);
+    // Only a *different* language injection needs special handling; a
+    // same-language injection (e.g. rust macro token-trees) is already indented
+    // correctly by the root walk, and offsetting it would double-count. So is a
+    // language without indent queries (e.g. rsx in rust macro token-trees).
+    let injected = (layer != syntax.root_layer()
+        && syntax.layer(layer).language != syntax.root_language())
+    .then(|| loader.indent_query(syntax.layer(layer).language))
+    .flatten();
+    match injected {
+        Some(query) => (query, syntax.tree_for_byte_range(byte_pos, byte_pos), true),
+        None => (query, syntax.tree(), false),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn treesitter_indent_for_pos<'a>(
     query: &IndentQuery,
@@ -1015,20 +1037,7 @@ pub fn treesitter_indent_for_pos<'a>(
     let byte_pos = text.char_to_byte(pos) as u32;
     // Inside an injection layer indent with that language's query and tree,
     // then shift the whole result by the injection's base indent.
-    let layer = syntax.layer_for_byte_range(byte_pos, byte_pos);
-    // Only a *different* language injection needs special handling; a
-    // same-language injection (e.g. rust macro token-trees) is already indented
-    // correctly by the root walk, and offsetting it would double-count.
-    let injected = (layer != syntax.root_layer()
-        && syntax.layer(layer).language != syntax.root_language())
-    .then(|| loader.indent_query(syntax.layer(layer).language))
-    .flatten();
-    let query = injected.unwrap_or(query);
-    let tree = if injected.is_some() {
-        syntax.tree_for_byte_range(byte_pos, byte_pos)
-    } else {
-        syntax.tree()
-    };
+    let (query, tree, injected) = indent_query_and_tree(query, syntax, loader, byte_pos);
     let root = tree.root_node();
 
     // Compute the indent by *scope containment*: the level of a line is the
@@ -1058,7 +1067,7 @@ pub fn treesitter_indent_for_pos<'a>(
     // The injected walk above is relative to the injection's own tree root (the
     // embedded code starts at level 0). Shift it by the indent of the injection's
     // first content line so it sits where the host language placed the block.
-    if injected.is_some() {
+    if injected {
         result.indent += injection_base_level(syntax, text, byte_pos, tab_width, indent_width);
     }
     Some(result)
@@ -1271,10 +1280,12 @@ fn injection_base_level(
 pub fn is_outdent_token_at(
     query: &IndentQuery,
     syntax: &Syntax,
+    loader: &syntax::Loader,
     text: RopeSlice,
     byte_pos: u32,
 ) -> bool {
-    let root = syntax.tree_for_byte_range(byte_pos, byte_pos).root_node();
+    let (query, tree, _) = indent_query_and_tree(query, syntax, loader, byte_pos);
+    let root = tree.root_node();
     let Some(mut node) = root.descendant_for_byte_range(byte_pos, byte_pos) else {
         return false;
     };
