@@ -28,6 +28,8 @@ pub struct Menu<T: Item> {
     matches: Vec<(u32, u32)>,
 
     widths: Vec<Constraint>,
+    /// The width of all columns, computed from all options when unset
+    columns_width: Option<usize>,
 
     callback_fn: MenuCallback<T>,
 
@@ -56,6 +58,7 @@ impl<T: Item> Menu<T> {
             matches,
             cursor: None,
             widths: Vec::new(),
+            columns_width: None,
             callback_fn: Box::new(callback_fn),
             scroll: 0,
             smooth_scroll: SmoothOffset::default(),
@@ -74,9 +77,16 @@ impl<T: Item> Menu<T> {
     }
 
     pub fn update_options(&mut self) -> (&mut Vec<(u32, u32)>, &mut Vec<T>) {
+        self.columns_width = None;
         self.recalculate = true;
         self.smooth_scroll.reset();
         (&mut self.matches, &mut self.options)
+    }
+
+    pub fn update_matches(&mut self) -> (&mut Vec<(u32, u32)>, &[T]) {
+        self.recalculate = true;
+        self.smooth_scroll.reset();
+        (&mut self.matches, &self.options)
     }
 
     pub fn ensure_cursor_in_bounds(&mut self) {
@@ -141,29 +151,36 @@ impl<T: Item> Menu<T> {
     }
 
     fn recalculate_size(&mut self, viewport: (u16, u16)) {
-        let n = self
-            .options
-            .first()
-            .map(|option| option.format(&self.editor_data).cells.len())
-            .unwrap_or_default();
-        let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
-            let row = option.format(&self.editor_data);
-            // maintain max for each column
-            for (acc, cell) in acc.iter_mut().zip(row.cells.iter()) {
-                let width = cell.content.width();
-                if width > *acc {
-                    *acc = width;
+        let columns_width = *self.columns_width.get_or_insert_with(|| {
+            let n = self
+                .options
+                .first()
+                .map(|option| option.format(&self.editor_data).cells.len())
+                .unwrap_or_default();
+            let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
+                let row = option.format(&self.editor_data);
+                // maintain max for each column
+                for (acc, cell) in acc.iter_mut().zip(row.cells.iter()) {
+                    let width = cell.content.width();
+                    if width > *acc {
+                        *acc = width;
+                    }
                 }
-            }
 
-            acc
+                acc
+            });
+            self.widths = max_lens
+                .iter()
+                .map(|&len| Constraint::Length(len as u16))
+                .collect();
+            max_lens.iter().sum::<usize>() + n
         });
 
         let height = self.matches.len().min(10).min(viewport.1 as usize);
         // do all the matches fit on a single screen?
         let fits = self.matches.len() <= height;
 
-        let mut len = max_lens.iter().sum::<usize>() + n;
+        let mut len = columns_width;
 
         if !fits {
             len += 1; // +1: reserve some space for scrollbar
@@ -171,11 +188,6 @@ impl<T: Item> Menu<T> {
 
         len += Self::LEFT_PADDING;
         let width = len.min(viewport.0 as usize);
-
-        self.widths = max_lens
-            .into_iter()
-            .map(|len| Constraint::Length(len as u16))
-            .collect();
 
         self.size = (width as u16, height as u16);
 

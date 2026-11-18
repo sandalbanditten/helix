@@ -334,7 +334,7 @@ impl Completion {
             false,
         );
         let mut buf = Vec::new();
-        let (matches, options) = self.popup.contents_mut().update_options();
+        let (matches, options) = self.popup.contents_mut().update_matches();
         if incremental {
             matches.retain_mut(|(index, score)| {
                 let option = &options[*index as usize];

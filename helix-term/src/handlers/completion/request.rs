@@ -369,6 +369,9 @@ pub fn request_incomplete_completion_list(editor: &mut Editor, handle: TaskHandl
         requests.spawn(request);
     }
     if !requests.is_empty() {
-        tokio::spawn(replace_completions(handle, requests, true));
+        tokio::spawn(cancelable_future(
+            replace_completions(handle.clone(), requests, true),
+            handle,
+        ));
     }
 }
