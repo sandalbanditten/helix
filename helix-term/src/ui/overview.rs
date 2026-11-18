@@ -132,8 +132,11 @@ impl Overview {
             return;
         }
         let text = document.text().slice(..);
+        // shortcut: matches past the first 100,000 go unmarked, as every key of the search finds
+        // them again; skip to the next line after a match if big files need all their marks.
         let mut lines: Vec<usize> = regex
             .find_iter(text.regex_input())
+            .take(100_000)
             .map(|found| text.byte_to_line(found.start()))
             .collect();
         lines.dedup();
