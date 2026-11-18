@@ -2545,6 +2545,24 @@ fn make_search_word_bounded(cx: &mut Context) {
     }
 }
 
+/// Searches the file at `path` unless it starts with binary data, which a multi-line search only
+/// checks for after reading the whole file.
+fn search_text_file<S: grep_searcher::Sink<Error = std::io::Error>>(
+    searcher: &mut grep_searcher::Searcher,
+    matcher: &grep_regex::RegexMatcher,
+    path: &Path,
+    sink: S,
+) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut head = Vec::new();
+    (&mut file).take(64 * 1024).read_to_end(&mut head)?;
+    if head.contains(&b'\0') {
+        return Ok(());
+    }
+    searcher.search_reader(matcher, head.as_slice().chain(file), sink)
+}
+
 fn global_search(cx: &mut Context) {
     #[derive(Debug)]
     struct FileResult<'a> {
@@ -2654,6 +2672,9 @@ fn global_search(cx: &mut Context) {
                     let injector = injector.clone();
                     let documents = &documents;
                     Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
+                        if injector.is_closed() {
+                            return WalkState::Quit;
+                        }
                         let entry = match entry {
                             Ok(entry) => entry,
                             Err(_) => return WalkState::Continue,
@@ -2696,7 +2717,7 @@ fn global_search(cx: &mut Context) {
                                 )
                             }
                         } else {
-                            searcher.search_path(&matcher, entry.path(), sink)
+                            search_text_file(&mut searcher, &matcher, entry.path(), sink)
                         };
 
                         if let Err(err) = result {
@@ -7467,5 +7488,40 @@ fn lsp_or_syntax_workspace_symbol_picker(cx: &mut Context) {
         lsp::workspace_symbol_picker(cx);
     } else {
         syntax_workspace_symbol_picker(cx);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn global_search_skips_binary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("binary");
+        std::fs::write(&binary, b"\0needle\n").unwrap();
+        // a match past the head that is read first
+        let text = dir.path().join("text");
+        std::fs::write(&text, "x\n".repeat(64 * 1024) + "needle\n").unwrap();
+
+        let matcher = RegexMatcherBuilder::new()
+            .multi_line(true)
+            .build("needle")
+            .unwrap();
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .multi_line(true)
+            .build();
+        let mut matches = |path: &Path| {
+            let mut lines = Vec::new();
+            let sink = sinks::UTF8(|line, _| {
+                lines.push(line);
+                Ok(true)
+            });
+            search_text_file(&mut searcher, &matcher, path, sink).unwrap();
+            lines
+        };
+        assert!(matches(&binary).is_empty());
+        assert_eq!(matches(&text), [64 * 1024 + 1]);
     }
 }

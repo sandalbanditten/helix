@@ -177,8 +177,13 @@ impl<I, D> Clone for Injector<I, D> {
 pub struct InjectorShutdown;
 
 impl<T, D> Injector<T, D> {
+    /// Whether the picker closed or no longer takes items from this injector.
+    pub fn is_closed(&self) -> bool {
+        self.version != self.picker_version.load(atomic::Ordering::Relaxed)
+    }
+
     pub fn push(&self, item: T) -> Result<(), InjectorShutdown> {
-        if self.version != self.picker_version.load(atomic::Ordering::Relaxed) {
+        if self.is_closed() {
             return Err(InjectorShutdown);
         }
 
