@@ -3348,6 +3348,9 @@ impl Editor {
             .and_then(|uri| diagnostics.get(&uri))
             .map(|diags| {
                 diags.iter().filter_map(move |(diagnostic, provider)| {
+                    if !filter(diagnostic, provider) {
+                        return None;
+                    }
                     let server_id = provider.language_server_id()?;
                     let ls = language_servers.get_by_id(server_id)?;
                     language_config
@@ -3359,17 +3362,13 @@ impl Editor {
                             })
                         })
                         .and_then(|_| {
-                            if filter(diagnostic, provider) {
-                                Document::lsp_diagnostic_to_diagnostic(
-                                    &text,
-                                    language_config.as_deref(),
-                                    diagnostic,
-                                    provider.clone(),
-                                    ls.offset_encoding(),
-                                )
-                            } else {
-                                None
-                            }
+                            Document::lsp_diagnostic_to_diagnostic(
+                                &text,
+                                language_config.as_deref(),
+                                diagnostic,
+                                provider.clone(),
+                                ls.offset_encoding(),
+                            )
                         })
                 })
             })
