@@ -5050,7 +5050,7 @@ file-types = []
 
 [[grammar]]
 name = "rsx"
-source = { git = "https://github.com/sandalbanditten/tree-sitter-rsx", rev = "7cd636130f9d30e5d0b36fbf1770fa8a7bd4291a" }
+source = { git = "https://github.com/sandalbanditten/tree-sitter-rsx", rev = "25c69dfd4ead3698a187cf86c8943fd998badf8f" }
 
 [[language]]
 name = "clarity"

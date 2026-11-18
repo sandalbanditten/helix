@@ -15,6 +15,11 @@ fn app() -> Element {
 //          ^ @constructor
             document::Title { "t" }
 //                    ^ @constructor
+            Router::<Route> {}
+//          ^ @constructor
+            Input<i32> { ..InputProps { a: 1 } }
+//          ^ @constructor
+//                         ^ @constructor
             my-element {}
 //          ^ @tag
 //             ^ @tag

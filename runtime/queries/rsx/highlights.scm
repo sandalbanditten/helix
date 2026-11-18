@@ -8,8 +8,9 @@
   name: ((identifier) @constructor
     (#match? @constructor "^[A-Z]|_")))
 (element name: (scoped_identifier name: (identifier) @constructor))
+; `Comp::<T>` and `Comp<T>`
 (element
-  name: (generic_type_with_turbofish
+  name: (_
     type: [
       (identifier) @constructor
       (scoped_identifier name: (identifier) @constructor)
