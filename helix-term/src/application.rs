@@ -353,9 +353,19 @@ impl Application {
                 Some(event) = input_stream.next() => {
                     self.handle_terminal_events(event).await;
                 }
-                Some(callback) = self.jobs.callbacks.recv() => {
-                    if let Some(job) = self.jobs.handle_callback(&mut self.editor, &mut self.compositor, Ok(Some(callback))) {
-                        self.jobs.add(job);
+                Some(mut callback) = self.jobs.callbacks.recv() => {
+                    // Render once for the callbacks already queued, but not so many that keys wait
+                    for handled in 1.. {
+                        if let Some(job) = self.jobs.handle_callback(&mut self.editor, &mut self.compositor, Ok(Some(callback))) {
+                            self.jobs.add(job);
+                        }
+                        if handled == 64 {
+                            break;
+                        }
+                        match self.jobs.callbacks.try_recv() {
+                            Ok(next) => callback = next,
+                            Err(_) => break,
+                        }
                     }
                     self.render().await;
                 }
