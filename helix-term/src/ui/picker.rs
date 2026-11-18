@@ -60,6 +60,8 @@ pub const ID: &str = "picker";
 pub const MIN_AREA_WIDTH_FOR_PREVIEW: u16 = 72;
 /// Biggest file size to preview in bytes
 pub const MAX_FILE_SIZE_FOR_PREVIEW: u64 = 10 * 1024 * 1024;
+/// Most previews kept at once
+const MAX_CACHED_PREVIEWS: usize = 32;
 
 #[derive(PartialEq, Eq, Hash)]
 pub enum PathOrId<'a> {
@@ -675,6 +677,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                         }
                     })
                     .unwrap_or(CachedPreview::NotFound);
+                if self.preview_cache.len() >= MAX_CACHED_PREVIEWS {
+                    self.preview_cache.clear();
+                }
                 self.preview_cache.insert(path.clone(), preview);
                 Some((Preview::Cached(&self.preview_cache[&path]), range))
             }
