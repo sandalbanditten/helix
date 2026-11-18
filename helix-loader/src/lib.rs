@@ -225,16 +225,22 @@ pub fn merge_toml_values(left: toml::Value, right: toml::Value, merge_depth: usi
             if merge_depth > 0 {
                 left_items.reserve(right_items.len());
                 for rvalue in right_items {
-                    let lvalue = get_name(&rvalue)
-                        .and_then(|rname| {
-                            left_items.iter().position(|v| get_name(v) == Some(rname))
-                        })
-                        .map(|lpos| left_items.remove(lpos));
-                    let mvalue = match lvalue {
-                        Some(lvalue) => merge_toml_values(lvalue, rvalue, merge_depth - 1),
-                        None => rvalue,
-                    };
-                    left_items.push(mvalue);
+                    let lpos = get_name(&rvalue).and_then(|rname| {
+                        left_items.iter().position(|v| get_name(v) == Some(rname))
+                    });
+                    match lpos {
+                        // A language moves last, winning shared file types, only when it lists them
+                        Some(lpos) if rvalue.get("file-types").is_none() => {
+                            let lvalue =
+                                std::mem::replace(&mut left_items[lpos], Value::Boolean(false));
+                            left_items[lpos] = merge_toml_values(lvalue, rvalue, merge_depth - 1);
+                        }
+                        Some(lpos) => {
+                            let lvalue = left_items.remove(lpos);
+                            left_items.push(merge_toml_values(lvalue, rvalue, merge_depth - 1));
+                        }
+                        None => left_items.push(rvalue),
+                    }
                 }
                 Value::Array(left_items)
             } else {
@@ -373,5 +379,29 @@ mod merge_toml_tests {
                 .unwrap(),
             &vec![Value::String("lsp".into())]
         )
+    }
+
+    #[test]
+    fn language_toml_overrides_move_last_only_with_file_types() {
+        let position = |user: &str| {
+            let base = include_bytes!("../../languages.toml");
+            let base: Value = toml::from_str(str::from_utf8(base).unwrap()).unwrap();
+            let merged = merge_toml_values(base, toml::from_str(user).unwrap(), 3);
+            let languages = merged.get("language").unwrap().as_array().unwrap();
+            let position = |name: &str| {
+                languages
+                    .iter()
+                    .position(|v| v.get("name").unwrap().as_str() == Some(name))
+                    .unwrap()
+            };
+            (position("scala"), position("supercollider"))
+        };
+
+        // Both claim `.sc`, and the later language wins it
+        let (scala, supercollider) = position("[[language]]\nname = \"scala\"\nauto-format = true");
+        assert!(scala < supercollider);
+        let (scala, supercollider) =
+            position("[[language]]\nname = \"scala\"\nfile-types = [\"scala\", \"sc\"]");
+        assert!(scala > supercollider);
     }
 }
