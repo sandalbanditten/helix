@@ -6868,12 +6868,14 @@ async fn shell_impl_async(
             }
         }
         String::from_utf8_lossy(&output.stderr)
-        // Prioritize `stderr` output over `stdout`
-    } else if !output.stderr.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        log::debug!("Command printed to stderr: {stderr}");
-        stderr
+    } else if output.stdout.is_empty() {
+        // Some commands, like `python2 --version`, print only to stderr
+        String::from_utf8_lossy(&output.stderr)
     } else {
+        if !output.stderr.is_empty() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::debug!("Command printed to stderr: {stderr}");
+        }
         String::from_utf8_lossy(&output.stdout)
     };
 

@@ -318,6 +318,20 @@ async fn test_multi_selection_shell_commands() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_shell_output_over_warnings() -> anyhow::Result<()> {
+    test((
+        "#[|lorem]#",
+        "|echo warning <gt>&2; echo foo<ret>",
+        "#[|foo]#",
+    ))
+    .await?;
+
+    test(("#[|lorem]#", "|echo version <gt>&2<ret>", "#[|version]#")).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_undo_redo() -> anyhow::Result<()> {
     // A jumplist selection is created at a point which is undone.
     //
