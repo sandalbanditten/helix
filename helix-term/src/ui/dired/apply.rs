@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context as _, Result};
 use helix_view::Editor;
 
 use super::{
+    format::shown,
     git,
     plan::{Change, Metadata, Move, Plan},
 };
@@ -248,11 +249,6 @@ fn set(path: &Path, metadata: &Metadata) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn set(_path: &Path, _metadata: &Metadata) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
-}
-
-/// A path for a message, relative to the working directory when it is below it.
-fn shown(path: &Path) -> String {
-    super::format::quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
 }
 
 #[cfg(test)]

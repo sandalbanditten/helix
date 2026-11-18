@@ -14,7 +14,7 @@ use helix_core::{ChangeSet, Operation, Rope, RopeSlice};
 use helix_view::dired::{Entry, GitStatus, Kind, Listing, Size, Source};
 
 use super::{
-    format::{self, Clock},
+    format::{self, shown, Clock},
     git,
     paste::{Origin, Paste},
 };
@@ -815,11 +815,6 @@ impl Planner<'_> {
             }
         }
     }
-}
-
-/// A path for a message, relative to the working directory when it is below it.
-fn shown(path: &Path) -> String {
-    format::quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
 }
 
 /// Where the entry at `path` goes when renamed to `name`.

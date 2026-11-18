@@ -1,6 +1,6 @@
 //! The text of dired listings, and reading their columns back from edited lines.
 
-use std::{fmt::Write as _, ops::Range, time::SystemTime};
+use std::{fmt::Write as _, ops::Range, path::Path, time::SystemTime};
 
 use helix_core::unicode::width::UnicodeWidthStr;
 use helix_view::dired::{Entry, GitStatus, Kind, Listing, Size};
@@ -286,6 +286,11 @@ pub fn quote(name: &str) -> String {
         (false, true) => format!("'{escaped}'"),
         (false, false) => escaped,
     }
+}
+
+/// A path for a message, relative to the working directory when it is below it.
+pub fn shown(path: &Path) -> String {
+    quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
 }
 
 /// The name a quoted name like `'my file'` or `new\nline` stands for.

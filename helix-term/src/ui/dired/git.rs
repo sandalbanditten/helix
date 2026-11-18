@@ -159,15 +159,12 @@ pub fn ignore(repo: &Path, path: &Path, is_dir: bool) -> IgnoreEdit {
 
 /// How to stop ignoring the entry at `path`: removing the pattern that ignores it, or negating it.
 pub fn unignore(repo: &Path, path: &Path, is_dir: bool) -> Result<IgnoreEdit, String> {
-    let shown = |path: &Path| {
-        super::format::quote(&helix_stdx::path::get_relative_path(path).to_string_lossy())
-    };
     // Git does not look into an ignored directory, so what is in it cannot be un-ignored.
     for ancestor in path.ancestors().skip(1).take_while(|dir| *dir != repo) {
         if matching(repo, ancestor, true).is_some() {
             return Err(format!(
                 "Ignored as {} is, un-ignore that first",
-                shown(ancestor)
+                super::format::shown(ancestor)
             ));
         }
     }
