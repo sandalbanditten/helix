@@ -842,15 +842,16 @@ fn init_indent_query<'a, 'b>(
             deepest_preceding = Some(last);
         }
         // When typing a newline, the body the new line opens is a sibling past
-        // the cursor — extend the query range to cover it so its capture (and
+        // the cursor — extend the query range to its start so its capture (and
         // in particular its `(#set! "scope" "header")` annotation) is present
-        // in the result, the signal we use to drive descent.
+        // in the result, the signal we use to drive descent. Only the captures
+        // of the body and its ancestors are read, and those all contain its start.
         let candidate_body = new_line_byte_pos
             .and(deepest_preceding.as_ref())
             .and_then(|dp| candidate_body_for_new_line(dp, byte_pos));
         let upper = candidate_body
             .as_ref()
-            .map(|b| b.end_byte())
+            .map(|b| b.start_byte() + 1)
             .unwrap_or(byte_pos + 1);
         let query_range = deepest_preceding
             .as_ref()
