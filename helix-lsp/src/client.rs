@@ -1106,7 +1106,7 @@ impl Client {
                     // range = None -> whole document
                     range: None,        //Some(Range)
                     range_length: None, // u64 apparently deprecated
-                    text: new_text.to_string(),
+                    text: String::from(new_text),
                 }]
             }
             lsp::TextDocumentSyncKind::INCREMENTAL => {
