@@ -98,7 +98,13 @@ pub fn coords_at_pos(text: RopeSlice, pos: usize) -> Position {
 
     let line_start = text.line_to_char(line);
     let pos = ensure_grapheme_boundary_prev(text, pos);
-    let col = text.slice(line_start..pos).graphemes().count();
+    let prefix = text.slice(line_start..pos);
+    // a char is a grapheme in ASCII, except for "\r\n" which only ends a line
+    let col = if prefix.chunks().all(|chunk| chunk.is_ascii()) {
+        prefix.len_chars()
+    } else {
+        prefix.graphemes().count()
+    };
 
     Position::new(line, col)
 }
@@ -550,6 +556,13 @@ mod test {
         assert_eq!(coords_at_pos(slice, 0), (0, 0).into());
         assert_eq!(coords_at_pos(slice, 1), (0, 1).into());
         assert_eq!(coords_at_pos(slice, 2), (0, 2).into());
+
+        // Test with ASCII and CRLF line endings.
+        let text = Rope::from("ab\r\ncd");
+        let slice = text.slice(..);
+        assert_eq!(coords_at_pos(slice, 2), (0, 2).into()); // position on \r
+        assert_eq!(coords_at_pos(slice, 3), (0, 2).into()); // position on \n
+        assert_eq!(coords_at_pos(slice, 5), (1, 1).into());
     }
 
     #[test]

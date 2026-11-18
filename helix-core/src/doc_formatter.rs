@@ -22,6 +22,7 @@ use unicode_segmentation::{Graphemes, UnicodeSegmentation};
 use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 
 use crate::graphemes::{grapheme_width, Grapheme, GraphemeStr};
+use crate::line_ending::line_end_char_index;
 use crate::syntax::Highlight;
 use crate::text_annotations::{ConcealStyle, Replacement, TextAnnotations};
 use crate::{fold, Position, RopeSlice};
@@ -565,6 +566,24 @@ impl<'t> DocumentFormatter<'t> {
                 return;
             }
         }
+    }
+
+    /// Skips the rest of the row up to its line break, without soft wrap, returning the number
+    /// of chars skipped. The line break keeps the column the row reached.
+    pub fn skip_to_row_end(&mut self) -> usize {
+        debug_assert!(!self.text_fmt.soft_wrap);
+        let line = fold::row_end_line(self.annotations.folds(), self.text, self.line_pos);
+        let end = line_end_char_index(&self.text, line);
+        if end <= self.char_pos {
+            return 0;
+        }
+        let skipped = end - self.char_pos;
+        self.graphemes = self.text.slice(end..).graphemes();
+        self.annotations.skip_hidden(end);
+        self.inline_annotation_graphemes = None;
+        self.char_pos = end;
+        self.line_pos = line;
+        skipped
     }
 
     /// returns the char index at the end of the last yielded grapheme

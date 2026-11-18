@@ -671,6 +671,10 @@ impl<'a> TextAnnotations<'a> {
     pub(crate) fn skip_hidden(&self, end: usize) {
         reset_pos(&self.inline_annotations, end, |annot| annot.char_idx);
         reset_pos(&self.overlays, end, |annot| annot.char_idx);
+        let folds = &self.folds;
+        folds
+            .next
+            .set(folds.folds.partition_point(|fold| fold.start < end));
         if let Some(conceals) = &self.conceals {
             conceals.reset_pos(end);
         }

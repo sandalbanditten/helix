@@ -414,3 +414,40 @@ async fn set_start_folded() -> anyhow::Result<()> {
     )
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rows_past_the_right_edge() -> anyhow::Result<()> {
+    // without soft wrap a row ends at the right edge, also when it continues after a fold
+    let long = "x".repeat(3000);
+    let mut app = AppBuilder::new()
+        .with_file("foo.rs", None)
+        .with_input_text(format!(
+            "fn f() {{ // {long}\n    1\n}}\n#[f|]#n g() {{}}\n"
+        ))
+        .build()?;
+    test_key_sequence(
+        &mut app,
+        Some("zF"),
+        Some(&|app| {
+            assert_eq!(
+                folded(app),
+                format!("fn f() {{ // {long}…}}\nfn g() {{}}\n")
+            );
+            let screen = app.screen();
+            let row = |y| -> String {
+                let cells = (0..screen.area.width).map(|x| screen.get(x, y).unwrap());
+                cells.map(|cell| cell.symbol.as_str()).collect()
+            };
+            let (first, second) = (row(0), row(1));
+            let x = first.find("fn f() { // x").unwrap();
+            assert!(first.trim_end().ends_with('x'), "{first}");
+            assert_eq!(second.find("fn g() {}"), Some(x), "{second}");
+            // highlighting goes on after the skipped text
+            let keyword = |y| screen.get(x as u16, y).unwrap().fg;
+            assert_ne!(keyword(0), screen.get(x as u16 + 9, 0).unwrap().fg);
+            assert_eq!(keyword(1), keyword(0));
+        }),
+        false,
+    )
+    .await
+}

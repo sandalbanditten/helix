@@ -189,6 +189,21 @@ pub fn render_text<'a>(
             decorations.decorate_line(renderer, last_line_pos);
         }
 
+        // the rest of a row past the right edge is never drawn, up to the line break that ends it
+        if !text_fmt.soft_wrap
+            && grapheme.raw != Grapheme::Newline
+            && grapheme.visual_pos.col >= renderer.offset.col + renderer.viewport.width as usize
+        {
+            let skipped = formatter.skip_to_row_end();
+            if skipped > 0 {
+                // a new highlighter costs a query, which a few highlight events don't
+                if skipped > 1024 {
+                    syntax_highlighter.skip_to(formatter.next_char_pos());
+                }
+                continue;
+            }
+        }
+
         // acquire the correct grapheme style
         while grapheme.char_idx >= syntax_highlighter.pos {
             syntax_highlighter.advance();
