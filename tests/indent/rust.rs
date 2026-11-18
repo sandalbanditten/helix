@@ -280,3 +280,35 @@ raw line
     indented raw"#;
     println!("{s}{r}");
 }
+
+// Dioxus `rsx!` bodies are an `rsx` injection.
+fn app() -> Element {
+    rsx! {
+        div { class: "counter",
+            onclick: move |_| {
+                count += 1;
+                log("{count}");
+            },
+            h1 { "High-Five counter: {count}" }
+            for item in items.iter() {
+                li { key: "{item.id}",
+                    "{item.name}"
+                }
+            }
+            if let Some(x) = show() {
+                MyComponent {
+                    title: "x",
+                    on_close: move |_| show.set(false),
+                }
+            } else {
+                p { "hidden" }
+            }
+            match open {
+                None => rsx! {
+                    Welcome { gm: true }
+                },
+                Some(id) => rsx! { FolderView { id } },
+            }
+        }
+    }
+}

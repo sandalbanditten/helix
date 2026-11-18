@@ -255,6 +255,7 @@
 | rpmspec | ✓ |  |  |  |  |  |  |  |  |  |
 | rshtml | ✓ | ✓ |  |  |  |  |  |  |  | `rshtml-analyzer`, `vscode-html-language-server`, `superhtml` |
 | rst | ✓ |  |  | ✓ |  |  |  |  |  |  |
+| rsx | ✓ | ✓ |  |  | ✓ | ✓ | ✓ |  |  |  |
 | ruby | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  |  | `ruby-lsp`, `solargraph` |
 | rust | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  |  | `rust-analyzer` |
 | rust-format-args | ✓ |  |  |  |  |  |  |  |  |  |

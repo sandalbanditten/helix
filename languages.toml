@@ -5044,6 +5044,15 @@ file-types = []
 grammar = "rust"
 
 [[language]]
+name = "rsx"
+scope = "source.rsx"
+file-types = []
+
+[[grammar]]
+name = "rsx"
+source = { git = "https://github.com/sandalbanditten/tree-sitter-rsx", rev = "7cd636130f9d30e5d0b36fbf1770fa8a7bd4291a" }
+
+[[language]]
 name = "clarity"
 scope = "source.clar"
 injection-regex = "clarity"

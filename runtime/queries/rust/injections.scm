@@ -42,6 +42,18 @@
 ((macro_invocation
    macro:
      [
+       (scoped_identifier
+         name: (_) @_macro_name)
+       (identifier) @_macro_name
+     ]
+   (token_tree) @injection.content)
+ (#eq? @_macro_name "rsx")
+ (#set! injection.language "rsx")
+ (#set! injection.include-children))
+
+((macro_invocation
+   macro:
+     [
        (scoped_identifier name: (_) @_macro_name)
        (identifier) @_macro_name
      ]
@@ -177,10 +189,6 @@
 
     ; std
     "assert_eq" "debug_assert_eq" "assert_ne" "debug_assert_ne"
-
-    ; Dioxus's rsx! macro accepts string interpolation in all
-    ; strings, across the entire token tree
-    "rsx"
   )
   (#set! injection.language "rust-format-args-macro")
   (#set! injection.include-children)
