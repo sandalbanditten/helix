@@ -120,6 +120,8 @@ fn git(repo: &Path) -> Command {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        // Paths are names, not globs: `[id].tsx` must not match `d.tsx`.
+        .env("GIT_LITERAL_PATHSPECS", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
     command
@@ -380,6 +382,15 @@ mod tests {
         run(repo, Action::DiscardAll, &[repo.join("a.txt")]).unwrap();
         assert_eq!(porcelain(repo), "");
         assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one");
+
+        // Discarding `[ab].txt` leaves `a.txt` alone.
+        fs::write(repo.join("[ab].txt"), "one").unwrap();
+        run(repo, Action::Stage, &[repo.join("[ab].txt")]).unwrap();
+        exec(repo, &["commit", "-qm", "glob"]);
+        fs::write(repo.join("a.txt"), "two").unwrap();
+        fs::write(repo.join("[ab].txt"), "two").unwrap();
+        run(repo, Action::Discard, &[repo.join("[ab].txt")]).unwrap();
+        assert_eq!(porcelain(repo), " M a.txt\n");
     }
 
     #[test]
