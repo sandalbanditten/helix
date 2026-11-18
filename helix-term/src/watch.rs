@@ -71,17 +71,21 @@ impl Watcher {
     }
 
     /// Watches exactly the directories `dirs`, each without its subdirectories.
-    pub fn watch(&mut self, dirs: HashSet<PathBuf>) {
+    pub fn watch(&mut self, mut dirs: HashSet<PathBuf>) {
         for dir in self.watched.difference(&dirs) {
             // The directory may be gone already.
             let _ = self.inner.unwatch(dir);
         }
-        for dir in dirs.difference(&self.watched) {
-            if let Err(err) = self.inner.watch(dir, RecursiveMode::NonRecursive) {
-                // Out of inotify watches, for example; focusing the terminal still refreshes.
-                log::warn!("cannot watch {}: {err}", dir.display());
-            }
-        }
+        // Those that cannot be watched are tried again next time.
+        dirs.retain(|dir| {
+            self.watched.contains(dir)
+                || self
+                    .inner
+                    .watch(dir, RecursiveMode::NonRecursive)
+                    // Out of inotify watches, for example; focusing the terminal still refreshes.
+                    .inspect_err(|err| log::warn!("cannot watch {}: {err}", dir.display()))
+                    .is_ok()
+        });
         self.watched = dirs;
     }
 }
@@ -104,5 +108,22 @@ impl AsyncHook for Changes {
     fn finish_debounce(&mut self) {
         let (handle, paths) = (self.handle.clone(), std::mem::take(&mut self.paths));
         job::dispatch_blocking(move |editor, compositor| handle(paths, editor, compositor));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_watches_are_tried_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let mut watcher = Watcher::new(|_, _, _| {}).unwrap();
+        watcher.watch(HashSet::from([missing.clone()]));
+        assert!(watcher.watched.is_empty());
+        std::fs::create_dir(&missing).unwrap();
+        watcher.watch(HashSet::from([missing.clone()]));
+        assert!(watcher.watched.contains(&missing));
     }
 }
