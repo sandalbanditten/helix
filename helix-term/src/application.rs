@@ -897,11 +897,11 @@ impl Application {
                     Notification::LogMessage(params) => {
                         log::info!("window/logMessage: {:?}", params);
                     }
-                    Notification::ProgressMessage(params)
-                        if !self
+                    Notification::ProgressMessage(params) => {
+                        // The status line holds the prompt while it's open
+                        let show_status = !self
                             .compositor
-                            .has_component(std::any::type_name::<ui::Prompt>()) =>
-                    {
+                            .has_component(std::any::type_name::<ui::Prompt>());
                         let editor_view = self
                             .compositor
                             .find::<ui::EditorView>()
@@ -934,7 +934,9 @@ impl Application {
                                             server_id,
                                         );
                                     }
-                                    self.editor.clear_status();
+                                    if show_status {
+                                        self.editor.clear_status();
+                                    }
 
                                     // we want to render to clear any leftover spinners or messages
                                     return;
@@ -942,7 +944,7 @@ impl Application {
                             }
                         };
 
-                        if self.editor.config().lsp.display_progress_messages {
+                        if show_status && self.editor.config().lsp.display_progress_messages {
                             let title =
                                 title.or_else(|| self.lsp_progress.title(server_id, &token));
                             if title.is_some() || percentage.is_some() || message.is_some() {
@@ -984,9 +986,6 @@ impl Application {
                                 };
                             }
                         }
-                    }
-                    Notification::ProgressMessage(_params) => {
-                        // do nothing
                     }
                     Notification::Exit => {
                         let status =
