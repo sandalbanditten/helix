@@ -854,12 +854,9 @@ impl View {
                 color_swatches_padding,
             }) = &doc.color_swatches
             {
-                for (color_swatch, color) in color_swatches.iter().zip(colors) {
-                    text_annotations
-                        .add_inline_annotations(std::slice::from_ref(color_swatch), Some(*color));
-                }
-
-                text_annotations.add_inline_annotations(color_swatches_padding, None);
+                text_annotations
+                    .add_highlighted_inline_annotations(color_swatches, colors)
+                    .add_inline_annotations(color_swatches_padding, None);
             }
         }
 

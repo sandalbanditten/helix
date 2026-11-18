@@ -459,11 +459,18 @@ impl Debug for ConcealLayer<'_> {
     }
 }
 
+/// The highlight of a layer of inline annotations, or of each of its annotations.
+#[derive(Debug, Clone, Copy)]
+enum InlineHighlight<'a> {
+    Layer(Option<Highlight>),
+    Each(&'a [Highlight]),
+}
+
 /// Annotations that change that is displayed when the document is render.
 /// Also commonly called virtual text.
 #[derive(Default)]
 pub struct TextAnnotations<'a> {
-    inline_annotations: Vec<Layer<'a, InlineAnnotation, Option<Highlight>>>,
+    inline_annotations: Vec<Layer<'a, InlineAnnotation, InlineHighlight<'a>>>,
     overlays: Vec<Layer<'a, Overlay, Option<Highlight>>>,
     line_annotations: Vec<(Cell<usize>, RawBox<dyn LineAnnotation + 'a>)>,
     folds: FoldLayer<'a>,
@@ -546,7 +553,22 @@ impl<'a> TextAnnotations<'a> {
         highlight: Option<Highlight>,
     ) -> &mut Self {
         if !layer.is_empty() {
-            self.inline_annotations.push((layer, highlight).into());
+            self.inline_annotations
+                .push((layer, InlineHighlight::Layer(highlight)).into());
+        }
+        self
+    }
+
+    /// Add new inline annotations like [`Self::add_inline_annotations`], each rendered with the
+    /// highlight at its index in `highlights`.
+    pub fn add_highlighted_inline_annotations(
+        &mut self,
+        layer: &'a [InlineAnnotation],
+        highlights: &'a [Highlight],
+    ) -> &mut Self {
+        if !layer.is_empty() {
+            self.inline_annotations
+                .push((layer, InlineHighlight::Each(highlights)).into());
         }
         self
     }
@@ -659,8 +681,13 @@ impl<'a> TextAnnotations<'a> {
         char_idx: usize,
     ) -> Option<(&InlineAnnotation, Option<Highlight>)> {
         self.inline_annotations.iter().find_map(|layer| {
+            let index = layer.current_index.get();
             let annotation = layer.consume(char_idx, |annot| annot.char_idx)?;
-            Some((annotation, layer.metadata))
+            let highlight = match layer.metadata {
+                InlineHighlight::Layer(highlight) => highlight,
+                InlineHighlight::Each(highlights) => highlights.get(index).copied(),
+            };
+            Some((annotation, highlight))
         })
     }
 
@@ -718,4 +745,34 @@ impl<'a> TextAnnotations<'a> {
 /// The columns `text` takes, which may be several graphemes.
 pub(crate) fn text_width(text: &str) -> usize {
     text.graphemes(true).map(grapheme_width).sum()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn inline_annotations_with_a_highlight_each() {
+        let swatches = [
+            InlineAnnotation::new(1, "■"),
+            InlineAnnotation::new(1, "■"),
+            InlineAnnotation::new(4, "■"),
+        ];
+        let colors = [Highlight::new(1), Highlight::new(2), Highlight::new(3)];
+        let padding = [InlineAnnotation::new(1, " "), InlineAnnotation::new(4, " ")];
+        let mut annotations = TextAnnotations::default();
+        annotations
+            .add_highlighted_inline_annotations(&swatches, &colors)
+            .add_inline_annotations(&padding, None);
+
+        let at = |char_idx| {
+            std::iter::from_fn(|| annotations.next_inline_annotation_at(char_idx))
+                .map(|(annotation, highlight)| (annotation.text.to_string(), highlight))
+                .collect::<Vec<_>>()
+        };
+        let swatch = |highlight| ("■".to_string(), Some(Highlight::new(highlight)));
+        let space = (" ".to_string(), None);
+        assert_eq!(at(1), [swatch(1), swatch(2), space.clone()]);
+        assert_eq!(at(4), [swatch(3), space]);
+    }
 }
