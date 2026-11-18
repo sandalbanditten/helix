@@ -5044,6 +5044,15 @@ file-types = []
 grammar = "rust"
 
 [[language]]
+name = "rsx"
+scope = "source.rsx"
+file-types = []
+
+[[grammar]]
+name = "rsx"
+source = { path = "/home/notroot/Code/soft/tree-sitter-rsx" }
+
+[[language]]
 name = "clarity"
 scope = "source.clar"
 injection-regex = "clarity"
