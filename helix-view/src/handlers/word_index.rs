@@ -30,8 +30,19 @@ struct Change {
     ///
     /// Set when this change is the result of coalescing several observed changes (see
     /// [`Hook::handle_event`]). The observed changesets cannot be reliably chained, so the
-    /// coalesced changeset is recomputed once, lazily, at [`Hook::finish_debounce`].
+    /// coalesced changeset is recomputed once, lazily, by the worker that indexes it.
     dirty: bool,
+}
+
+impl Change {
+    /// Recomputes the changeset of a coalesced change from its real endpoints. This diff is valid
+    /// regardless of any ghost edits skipped between the observed changes.
+    fn settle(&mut self) {
+        if self.dirty {
+            self.changes = compare_ropes(&self.old_text, &self.text).changes().clone();
+            self.dirty = false;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -114,7 +125,7 @@ impl AsyncHook for Hook {
                     // ghost transactions (see `register_hooks`), so a ghost edit may have altered
                     // the document between these two observed changes, which may leave them
                     // non-contiguous in ways a cheap check can't catch. Instead, mark the change
-                    // dirty and recompute the changeset from the real ropes at `finish_debounce`,
+                    // dirty and recompute the changeset from the real ropes in the worker,
                     // i.e.  once per debounce window rather than once per keystroke.
                     pending_change.text = change.text;
                     pending_change.dirty = true;
@@ -146,15 +157,7 @@ impl AsyncHook for Hook {
     }
 
     fn finish_debounce(&mut self) {
-        for (doc, mut change) in self.changes.drain() {
-            // A coalesced change carries a stale changeset; recompute it from the real endpoints.
-            // This diff is valid regardless of any ghost edits skipped between observed changes.
-            if change.dirty {
-                change.changes = compare_ropes(&change.old_text, &change.text)
-                    .changes()
-                    .clone();
-                change.dirty = false;
-            }
+        for (doc, change) in self.changes.drain() {
             send(&self.coordinator, Event::Update(doc, change));
         }
     }
@@ -299,16 +302,9 @@ impl WordIndex {
                 Event::Insert(text) => {
                     this.add_document(&text, &cancel);
                 }
-                Event::Update(
-                    _doc,
-                    Change {
-                        old_text,
-                        text,
-                        changes,
-                        ..
-                    },
-                ) => {
-                    this.update_document(&old_text, &text, &changes, &cancel);
+                Event::Update(_doc, mut change) => {
+                    change.settle();
+                    this.update_document(&change.old_text, &change.text, &change.changes, &cancel);
                 }
                 Event::Delete(_doc, text) => {
                     this.remove_document(&text, &cancel);
@@ -584,7 +580,10 @@ mod tests {
         }
         hook.finish_debounce();
         match rx.try_recv() {
-            Ok(Event::Update(_, change)) => Some(change),
+            Ok(Event::Update(_, mut change)) => {
+                change.settle();
+                Some(change)
+            }
             _ => None,
         }
     }
