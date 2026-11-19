@@ -676,9 +676,34 @@ fn is_trivia(node: &Node) -> bool {
 /// Handle extend queries. deepest_preceding is the deepest descendant of node that directly precedes the cursor position.
 /// Any ancestor of deepest_preceding which is also a descendant of node may be "extended". In that case, node will be updated,
 /// so that the indent computation starts with the correct syntax node.
+/// The ancestors of `node` in the tree with the `root`, innermost first. They're found going down
+/// from the root once, where each `Node::parent` call goes down from it again.
+fn ancestors<'a>(root: &Node<'a>, node: &Node<'a>) -> Vec<Node<'a>> {
+    let mut cursor = root.walk();
+    let mut chain = Vec::new();
+    loop {
+        let current = cursor.node();
+        if current == *node {
+            chain.reverse();
+            return chain;
+        }
+        chain.push(current);
+        // the first child that ends past the start of `node` holds it, unless it has no width
+        if cursor
+            .goto_first_child_for_byte(node.start_byte())
+            .is_none()
+        {
+            break;
+        }
+    }
+    std::iter::successors(node.parent(), Node::parent).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn extend_nodes<'a>(
+    root: &Node<'a>,
     node: &mut Node<'a>,
-    mut deepest_preceding: Node<'a>,
+    deepest_preceding: Node<'a>,
     extend_captures: &HashMap<usize, Vec<ExtendCapture>>,
     text: RopeSlice,
     line: usize,
@@ -689,7 +714,13 @@ fn extend_nodes<'a>(
     // Ancestors may also span trailing comments
     let content_end_line = text.byte_to_line(deepest_preceding.end_byte() as usize);
 
-    while deepest_preceding != *node {
+    let ancestors = ancestors(root, &deepest_preceding);
+    // If the tree contains a syntax error, `deepest_preceding` may not
+    // have an ancestor in `node` despite being a descendant of it.
+    for deepest_preceding in std::iter::once(deepest_preceding).chain(ancestors) {
+        if deepest_preceding == *node {
+            break;
+        }
         let mut extend_node = false;
         // This will be set to true if this node is captured, regardless of whether
         // it actually will be extended (e.g. because the cursor isn't indented
@@ -735,12 +766,6 @@ fn extend_nodes<'a>(
             *node = deepest_preceding.clone();
             return true;
         }
-        // If the tree contains a syntax error, `deepest_preceding` may not
-        // have a parent despite being a descendant of `node`.
-        deepest_preceding = match deepest_preceding.parent() {
-            Some(parent) => parent,
-            None => return false,
-        }
     }
     false
 }
@@ -759,11 +784,12 @@ fn extend_nodes<'a>(
 /// alone says what is a body. A statement-list child is not header-scoped in any
 /// query, so `foo();` then `bar();` correctly finds no descent target.
 fn candidate_body_for_new_line<'a>(
+    root: &Node<'a>,
     deepest_preceding: &Node<'a>,
     byte_pos: u32,
 ) -> Option<Node<'a>> {
     let mut node = deepest_preceding.clone();
-    while let Some(parent) = node.parent() {
+    for parent in ancestors(root, deepest_preceding) {
         // Only consider ancestors that lie entirely before the cursor: those are
         // part of the header. Once an ancestor extends past the cursor it
         // *contains* the new line (an already-open body like `if (c) {`), which
@@ -776,25 +802,32 @@ fn candidate_body_for_new_line<'a>(
         // the *immediate* next sibling avoids jumping to a later body such as
         // an `else` arm while the cursor is still in the consequence.
         let mut cursor = parent.walk();
-        if cursor.goto_first_child() {
-            loop {
-                if cursor.node().id() == node.id() {
-                    if cursor.goto_next_sibling() {
-                        // Step over a trailing comment on the header line.
-                        while is_trivia(&cursor.node())
-                            && cursor.node().end_byte() <= byte_pos
-                            && cursor.goto_next_sibling()
-                        {}
-                        let child = cursor.node();
-                        if child.start_byte() >= byte_pos {
-                            return Some(child);
+        // `node` is the first child that ends past its start, unless it has no width
+        let at_node = cursor
+            .goto_first_child_for_byte(node.start_byte())
+            .is_some()
+            && cursor.node() == node
+            || {
+                cursor.reset(&parent);
+                cursor.goto_first_child()
+                    && loop {
+                        if cursor.node() == node {
+                            break true;
+                        }
+                        if !cursor.goto_next_sibling() {
+                            break false;
                         }
                     }
-                    break;
-                }
-                if !cursor.goto_next_sibling() {
-                    break;
-                }
+            };
+        if at_node && cursor.goto_next_sibling() {
+            // Step over a trailing comment on the header line.
+            while is_trivia(&cursor.node())
+                && cursor.node().end_byte() <= byte_pos
+                && cursor.goto_next_sibling()
+            {}
+            let child = cursor.node();
+            if child.start_byte() >= byte_pos {
+                return Some(child);
             }
         }
         node = parent;
@@ -848,7 +881,7 @@ fn init_indent_query<'a, 'b>(
         // of the body and its ancestors are read, and those all contain its start.
         let candidate_body = new_line_byte_pos
             .and(deepest_preceding.as_ref())
-            .and_then(|dp| candidate_body_for_new_line(dp, byte_pos));
+            .and_then(|dp| candidate_body_for_new_line(root, dp, byte_pos));
         let upper = candidate_body
             .as_ref()
             .map(|b| b.start_byte() + 1)
@@ -886,6 +919,7 @@ fn init_indent_query<'a, 'b>(
     if let Some(deepest_preceding) = deepest_preceding {
         if !descended {
             extended = extend_nodes(
+                root,
                 &mut node,
                 deepest_preceding,
                 &extend_captures,
@@ -1129,8 +1163,9 @@ fn containment_accounting<'a>(
     // it opens on.
     let mut counted_start_lines: Vec<usize> = Vec::new();
 
-    let mut node = start_node;
-    loop {
+    let ancestors = ancestors(root, &start_node);
+    let mut nodes = std::iter::once(start_node).chain(ancestors).peekable();
+    while let Some(node) = nodes.next() {
         if let Some(defs) = captures.get(&node.id()) {
             // Aggregate this node's captures.
             let mut has_indent = false;
@@ -1166,8 +1201,9 @@ fn containment_accounting<'a>(
             // body's own first line is contained. The query selects the body node,
             // so its parent is the header by construction.
             let start = if header_scoped {
-                node.parent()
-                    .map(|p| get_node_start_line(text, &p, new_line_byte_pos))
+                nodes
+                    .peek()
+                    .map(|parent| get_node_start_line(text, parent, new_line_byte_pos))
                     .unwrap_or(node_start)
             } else {
                 node_start
@@ -1204,10 +1240,6 @@ fn containment_accounting<'a>(
                     align = Some(a);
                 }
             }
-        }
-        match node.parent() {
-            Some(parent) => node = parent,
-            None => break,
         }
     }
 
