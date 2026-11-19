@@ -813,6 +813,7 @@ impl Syntax {
         }
 
         let mut scope_stack = Vec::<RainbowScope>::new();
+        let end = range.end;
         let mut query_iter = self.query_iter::<_, (), _>(
             source,
             |lang| loader.rainbow_query(lang).map(|q| &q.query),
@@ -820,8 +821,12 @@ impl Syntax {
         );
 
         while let Some(event) = query_iter.next() {
-            let QueryIterEvent::Match(mat) = event else {
-                continue;
+            let mat = match event {
+                QueryIterEvent::Match(mat) => mat,
+                // Events come in the order they start, and the iterator would go on to enter
+                // every injection up to the end of the text.
+                QueryIterEvent::EnterInjection(injection) if injection.range.start >= end => break,
+                _ => continue,
             };
 
             let rainbow_query = loader
@@ -1913,6 +1918,22 @@ mod test {
         // The query used in this test case only captures the first line_comment node.
         // Determine if this behavior is intentional in tree-sitter.
         // test("multiple_nodes_grouped", 1..37);
+    }
+
+    #[test]
+    fn rainbow_highlights_in_a_range_before_injections() {
+        let source = Rope::from_str("fn f() { (1) }\n// a comment\nfn g() { [2] }\n");
+        let language = LOADER.language_for_name("rust").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &LOADER).unwrap();
+        let highlights =
+            |range| match syntax.rainbow_highlights(source.slice(..), 4, &LOADER, [range]) {
+                OverlayHighlights::Heterogenous { highlights } => highlights,
+                OverlayHighlights::Homogeneous { .. } => unreachable!(),
+            };
+        let first_line = highlights(0..15);
+        assert_eq!(first_line.len(), 6);
+        let all = highlights(0..source.len_bytes() as u32);
+        assert_eq!(first_line, all[..6]);
     }
 
     #[test]
