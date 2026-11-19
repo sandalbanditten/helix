@@ -8,7 +8,6 @@ use helix_core::syntax::{self, HighlightEvent, Highlighter, OverlayHighlights};
 use helix_core::text_annotations::{ConcealStyle, TextAnnotations};
 use helix_core::unicode::segmentation::UnicodeSegmentation;
 use helix_core::{anchor_row, Position, RopeSlice, Syntax};
-use helix_stdx::rope::RopeSliceExt;
 use helix_view::editor::{WhitespaceConfig, WhitespaceRenderValue};
 use helix_view::graphics::Rect;
 use helix_view::theme::Style;
@@ -686,9 +685,16 @@ impl<'a, 't> SyntaxHighlighter<'a, 't> {
                 let next_byte_idx = highlighter.next_event_offset();
                 (next_byte_idx != u32::MAX).then(|| {
                     // Move the byte index to the nearest character boundary (rounding up) and
-                    // convert it to a character index.
-                    self.text
-                        .byte_to_char(self.text.ceil_char_boundary(next_byte_idx as usize))
+                    // convert it to a character index, within the chunk holding it: a char never
+                    // spans chunks.
+                    let byte_idx = (next_byte_idx as usize).min(self.text.len_bytes());
+                    let (chunk, chunk_byte_idx, chunk_char_idx, _) =
+                        self.text.chunk_at_byte(byte_idx);
+                    let mut offset = byte_idx - chunk_byte_idx;
+                    while !chunk.is_char_boundary(offset) {
+                        offset += 1;
+                    }
+                    chunk_char_idx + helix_core::str_utils::byte_to_char_idx(chunk, offset)
                 })
             })
             .unwrap_or(usize::MAX);
