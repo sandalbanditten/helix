@@ -86,24 +86,27 @@ fn find_pair(
     let mut node = root.descendant_for_byte_range(pos, pos)?;
 
     loop {
-        if node.is_named() && node.child_count() >= 2 {
-            let open = node.child(0).unwrap();
-            let close = node.child(node.child_count() - 1).unwrap();
-
-            if let (Some((start_pos, open)), Some((end_pos, close))) =
-                (as_char(doc, &open), as_char(doc, &close))
-            {
-                if PAIRS.contains(&(open, close)) && start_pos <= pos_ && pos_ <= end_pos {
-                    if end_pos == pos_ {
-                        return Some(start_pos);
-                    }
-
-                    // We return the end char if the cursor is either on the start char
-                    // or at some arbitrary position between start and end char.
-                    if traverse_parents || start_pos == pos_ {
-                        return Some(end_pos);
-                    }
+        if let Some((start_pos, end_pos)) = enclosing_pair(doc, &node) {
+            if start_pos <= pos_ && pos_ <= end_pos {
+                if end_pos == pos_ {
+                    return Some(start_pos);
                 }
+
+                // We return the end char if the cursor is either on the start char
+                // or at some arbitrary position between start and end char.
+                if traverse_parents || start_pos == pos_ {
+                    return Some(end_pos);
+                }
+            }
+        }
+        // A bracket usually opens or closes its parent, which the next round matches without
+        // scanning siblings: each step to a sibling searches for it from the root.
+        if !node.is_named() {
+            if let Some(parent) = node.parent().filter(|parent| {
+                enclosing_pair(doc, parent).is_some_and(|(start, end)| start == pos_ || end == pos_)
+            }) {
+                node = parent;
+                continue;
             }
         }
         // this node itselt wasn't a pair but maybe its siblings are
@@ -152,6 +155,18 @@ fn find_pair(
     let node_start = doc.byte_to_char(node.start_byte() as usize);
     let node_text = doc.byte_slice(node.start_byte() as usize..node.end_byte() as usize);
     find_matching_bracket_plaintext(node_text, pos_ - node_start).map(|pos| pos + node_start)
+}
+
+/// The positions of the brackets that are the first and the last child of `node`, if they pair.
+fn enclosing_pair(doc: RopeSlice, node: &Node) -> Option<(usize, usize)> {
+    if !node.is_named() || node.child_count() < 2 {
+        return None;
+    }
+    let (start_pos, open) = as_char(doc, &node.child(0)?)?;
+    let (end_pos, close) = as_char(doc, &node.child(node.child_count() - 1)?)?;
+    PAIRS
+        .contains(&(open, close))
+        .then_some((start_pos, end_pos))
 }
 
 /// Returns the position of the matching bracket under cursor.

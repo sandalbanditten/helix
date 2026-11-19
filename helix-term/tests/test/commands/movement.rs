@@ -840,6 +840,16 @@ async fn match_bracket() -> anyhow::Result<()> {
                 fn foo(x: usize) -> usize #[{|]# x + 1 }
             "##},
         ),
+        // from the brackets of a long list, which close the node they enclose
+        (
+            indoc! {r##"
+                const A: [u8; 20] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20#[]|]#;
+            "##},
+            "mm",
+            indoc! {r##"
+                const A: [u8; 20] = #[[|]#1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+            "##},
+        ),
         // avoid false positive inside string literal
         (
             indoc! {r##"
