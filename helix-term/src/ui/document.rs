@@ -384,7 +384,7 @@ impl<'a> TextRenderer<'a> {
         col: u16,
     ) -> bool {
         if (row as usize) < self.offset.row
-            || row >= self.viewport.height
+            || row as usize >= self.offset.row + self.viewport.height as usize
             || col >= self.viewport.width
         {
             return false;
