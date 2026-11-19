@@ -174,16 +174,21 @@ impl History {
     /// Returns the changes since the given revision composed into a transaction.
     /// Returns None if there are no changes between the current and given revisions.
     pub fn changes_since(&self, revision: usize) -> Option<Transaction> {
-        let lca = self.lowest_common_ancestor(revision, self.current);
-        let up = self.path_up(revision, lca);
-        let down = self.path_up(self.current, lca);
-        let up_txns = up
-            .iter()
-            .rev()
-            .map(|&n| self.revisions[n].inversion.clone());
-        let down_txns = down.iter().map(|&n| self.revisions[n].transaction.clone());
-
-        down_txns.chain(up_txns).reduce(|acc, tx| tx.compose(acc))
+        // Composing neighbors keeps both sides small, where composing onto one growing
+        // transaction takes quadratic time
+        let mut transactions = self.transactions_since(revision);
+        while transactions.len() > 1 {
+            let mut pairs = transactions.into_iter();
+            transactions = std::iter::from_fn(|| {
+                let first = pairs.next()?;
+                Some(match pairs.next() {
+                    Some(second) => first.compose(second),
+                    None => first,
+                })
+            })
+            .collect();
+        }
+        transactions.pop()
     }
 
     /// The transactions leading from `revision` to the current revision, in the order they apply.
@@ -550,6 +555,43 @@ mod test {
         assert!(history
             .transactions_since(history.current_revision())
             .is_empty());
+    }
+
+    #[test]
+    fn changes_since_lead_across_branches() {
+        let mut history = History::default();
+        let mut state = State {
+            doc: Rope::from("a"),
+            selection: Selection::point(0),
+        };
+        let commit = |history: &mut History, state: &mut State, text: &str| {
+            let end = state.doc.len_chars();
+            let transaction =
+                Transaction::change(&state.doc, [(end, end, Some(text.into()))].into_iter())
+                    .with_selection(Selection::point(end));
+            history.commit_revision(&transaction, state);
+            transaction.apply(&mut state.doc);
+        };
+        for text in ["b", "c", "d", "e", "f"] {
+            commit(&mut history, &mut state, text);
+        }
+        // Undo `f` and `e` and branch off.
+        for _ in 0..2 {
+            let undo = history.undo().unwrap().clone();
+            undo.apply(&mut state.doc);
+        }
+        for text in ["x", "y", "z"] {
+            commit(&mut history, &mut state, text);
+        }
+        assert_eq!(state.doc, "abcdxyz");
+
+        // From `abcdef`, revision 5
+        let mut doc = Rope::from("abcdef");
+        let changes = history.changes_since(5).unwrap();
+        changes.apply(&mut doc);
+        assert_eq!(doc, "abcdxyz");
+        assert_eq!(changes.selection(), Some(&Selection::point(6)));
+        assert!(history.changes_since(history.current_revision()).is_none());
     }
 
     #[test]
