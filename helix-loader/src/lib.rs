@@ -40,7 +40,7 @@ pub fn initialize_log_file(specified_file: Option<PathBuf>) {
 /// 4. `HELIX_DEFAULT_RUNTIME` (if environment variable is set *at build time*)
 /// 5. subdirectory of path to helix executable (always included)
 ///
-/// Postcondition: returns at least two paths (they might not exist).
+/// Postcondition: returns at least one path (it might not exist), without adjacent duplicates.
 fn prioritize_runtime_dirs() -> Vec<PathBuf> {
     const RT_DIR: &str = "runtime";
     // Adding higher priority first
@@ -76,6 +76,8 @@ fn prioritize_runtime_dirs() -> Vec<PathBuf> {
         .and_then(|path| path.parent().map(|path| path.to_path_buf().join(RT_DIR)))
         .unwrap();
     rt_dirs.push(exe_rt_dir);
+    // `HELIX_RUNTIME` is often the runtime in the config directory
+    rt_dirs.dedup();
     rt_dirs
 }
 
