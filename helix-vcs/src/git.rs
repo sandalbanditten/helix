@@ -19,7 +19,7 @@ use gix::status::{
 };
 use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 
-use crate::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
+use crate::{Change, DirStatus, FileChange, HeadName, Side, SideChange, StatusOptions};
 
 #[cfg(test)]
 mod test;
@@ -114,15 +114,23 @@ fn committed_version(repo: &Repository, file: &Path) -> Result<Vec<u8>> {
     }
 }
 
-pub fn get_current_head_name(file: &Path, trust_full: bool) -> Result<Arc<ArcSwap<Box<str>>>> {
+/// The diff base of `file` and the name of the current HEAD, from one opening of its repository.
+pub fn get_diff_base_and_head(
+    file: &Path,
+    trust_full: bool,
+) -> Result<(Result<Vec<u8>>, Result<HeadName>)> {
     debug_assert!(!file.exists() || file.is_file());
     debug_assert!(file.is_absolute());
-    let file = gix::path::realpath(file).context("resolve symlinks")?;
+    let file = realpath(file)?;
 
     let repo_dir = get_repo_dir(&file)?;
     let repo = open_repo(repo_dir, trust_full)
         .context("failed to open git repo")?
         .to_thread_local();
+    Ok((committed_version(&repo, &file), head_name(&repo)))
+}
+
+fn head_name(repo: &Repository) -> Result<HeadName> {
     let head_ref = repo.head_ref()?;
     let head_commit = repo.head_commit()?;
 

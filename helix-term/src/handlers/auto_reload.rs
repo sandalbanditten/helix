@@ -344,11 +344,12 @@ impl Candidate {
         if self.modified {
             return Outcome::Conflict(disk);
         }
+        let (diff_base, head) = registry.get_diff_base_and_head(&self.path, self.trust_full);
         Outcome::Changed(Reload {
             changes: compare_ropes(&self.text, &disk.text),
             disk,
-            diff_base: registry.get_diff_base(&self.path, self.trust_full),
-            head: registry.get_current_head_name(&self.path, self.trust_full),
+            diff_base,
+            head,
         })
     }
 }

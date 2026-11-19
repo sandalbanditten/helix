@@ -2973,12 +2973,13 @@ impl Editor {
                 .workspace_trust
                 .query(doc.workspace_root(), TrustQuery::Git)
                 .is_trusted();
-            if let Some(diff_base) = self.diff_providers.get_diff_base(&path, trust_full) {
+            let (diff_base, head) = self
+                .diff_providers
+                .get_diff_base_and_head(&path, trust_full);
+            if let Some(diff_base) = diff_base {
                 doc.set_diff_base(diff_base);
             }
-            doc.set_version_control_head(
-                self.diff_providers.get_current_head_name(&path, trust_full),
-            );
+            doc.set_version_control_head(head);
 
             let id = self.new_document(doc);
             self.launch_language_servers(id);
@@ -3198,8 +3199,9 @@ impl Editor {
             .workspace_trust
             .query(doc.workspace_root(), TrustQuery::Git)
             .is_trusted();
-        let diff_base = self.diff_providers.get_diff_base(&path, trust_full);
-        let head = self.diff_providers.get_current_head_name(&path, trust_full);
+        let (diff_base, head) = self
+            .diff_providers
+            .get_diff_base_and_head(&path, trust_full);
         self.apply_reload(doc_id, disk, &changes);
         doc_mut!(self, &doc_id).set_vcs(diff_base, head);
         Ok(())

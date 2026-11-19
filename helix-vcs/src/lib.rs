@@ -20,6 +20,9 @@ mod status;
 
 pub use status::{Change, DirStatus, FileChange, Side, SideChange, StatusOptions};
 
+/// The name of a repository's current HEAD, which can change while a document shows it.
+pub type HeadName = Arc<ArcSwap<Box<str>>>;
+
 /// Contains all active diff providers. Diff providers are compiled in via features. Currently
 /// only `git` is supported.
 #[derive(Clone)]
@@ -66,22 +69,30 @@ impl DiffProviderRegistry {
         }
     }
 
-    /// Get the current name of the current [HEAD](https://stackoverflow.com/questions/2304087/what-is-head-in-git).
-    pub fn get_current_head_name(
+    /// The diff base of `file`, like [`Self::get_diff_base`], and the name of the current
+    /// [HEAD](https://stackoverflow.com/questions/2304087/what-is-head-in-git).
+    pub fn get_diff_base_and_head(
         &self,
         file: &Path,
         trust_full: bool,
-    ) -> Option<Arc<ArcSwap<Box<str>>>> {
-        self.providers.iter().find_map(|provider| {
-            match provider.get_current_head_name(file, trust_full) {
+    ) -> (Option<Vec<u8>>, Option<HeadName>) {
+        let found = self.providers.iter().find_map(|provider| {
+            match provider.get_diff_base_and_head(file, trust_full) {
                 Ok(res) => Some(res),
                 Err(err) => {
                     log::debug!("{err:#?}");
-                    log::debug!("failed to obtain current head name for {}", file.display());
+                    log::debug!("failed to open the repository of {}", file.display());
                     None
                 }
             }
-        })
+        });
+        let Some((diff_base, head)) = found else {
+            return (None, None);
+        };
+        let diff_base = diff_base
+            .inspect_err(|err| log::debug!("no diff base for {}: {err:#?}", file.display()));
+        let head = head.inspect_err(|err| log::debug!("no head name: {err:#?}"));
+        (diff_base.ok(), head.ok())
     }
 
     /// The files whose changes move HEAD of the repository holding `file`.
@@ -220,14 +231,14 @@ impl DiffProvider {
         }
     }
 
-    fn get_current_head_name(
+    fn get_diff_base_and_head(
         &self,
         file: &Path,
         trust_full: bool,
-    ) -> Result<Arc<ArcSwap<Box<str>>>> {
+    ) -> Result<(Result<Vec<u8>>, Result<HeadName>)> {
         match self {
             #[cfg(feature = "git")]
-            Self::Git => git::get_current_head_name(file, trust_full),
+            Self::Git => git::get_diff_base_and_head(file, trust_full),
             Self::None => bail!("No diff support compiled in"),
         }
     }

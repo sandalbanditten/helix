@@ -25,8 +25,7 @@ pub(super) fn refresh(paths: HashSet<PathBuf>, editor: &Editor) {
         move || {
             docs.into_iter()
                 .map(|(doc, path, trust_full)| {
-                    let diff_base = registry.get_diff_base(&path, trust_full);
-                    let head = registry.get_current_head_name(&path, trust_full);
+                    let (diff_base, head) = registry.get_diff_base_and_head(&path, trust_full);
                     (doc, diff_base, head)
                 })
                 .collect::<Vec<_>>()

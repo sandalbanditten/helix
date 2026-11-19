@@ -76,6 +76,22 @@ fn unmodified_file() {
 }
 
 #[test]
+fn diff_base_and_head_name() {
+    let temp_git = empty_git_repo();
+    let file = temp_git.path().join("file.txt");
+    File::create(&file).unwrap().write_all(b"foo").unwrap();
+    create_commit(temp_git.path(), true);
+    let (base, head) = git::get_diff_base_and_head(&file, true).unwrap();
+    assert_eq!(base.unwrap(), b"foo");
+    assert_eq!(&**head.unwrap().load_full(), "main");
+
+    // a new file has no diff base, but its repository has a HEAD
+    let (base, head) = git::get_diff_base_and_head(&temp_git.path().join("new.txt"), true).unwrap();
+    assert!(base.is_err());
+    assert_eq!(&**head.unwrap().load_full(), "main");
+}
+
+#[test]
 fn diff_base_follows_gitattributes() {
     let temp_git = empty_git_repo();
     let dir = temp_git.path().join("dir");
