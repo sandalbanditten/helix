@@ -88,7 +88,7 @@ use std::{
 
 use helix_stdx::Url;
 use serde::de::{self, Deserialize, Deserializer};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
@@ -2565,22 +2565,12 @@ fn search_text_file<S: grep_searcher::Sink<Error = std::io::Error>>(
 
 fn global_search(cx: &mut Context) {
     #[derive(Debug)]
-    struct FileResult<'a> {
-        path: Cow<'a, Path>,
+    struct FileResult {
+        path: Arc<Path>,
         /// 0 indexed line start
         line_start: usize,
         /// 0 indexed line end
         line_end: usize,
-    }
-
-    impl FileResult<'_> {
-        fn new(path: &Path, line_start: usize, line_end: usize) -> Self {
-            Self {
-                path: helix_stdx::path::get_relative_path(path.to_path_buf()),
-                line_start,
-                line_end,
-            }
-        }
     }
 
     struct GlobalSearchConfig {
@@ -2619,9 +2609,9 @@ fn global_search(cx: &mut Context) {
                 .boxed();
         }
 
-        let documents: Vec<_> = editor
+        let documents: HashMap<_, _> = editor
             .documents()
-            .map(|doc| (doc.path().map(ToOwned::to_owned), doc.text().to_owned()))
+            .filter_map(|doc| Some((doc.path()?.to_owned(), doc.text().to_owned())))
             .collect();
 
         let matcher = match RegexMatcherBuilder::new()
@@ -2647,89 +2637,100 @@ fn global_search(cx: &mut Context) {
 
         let injector = injector.clone();
         async move {
-            let searcher = SearcherBuilder::new()
-                .binary_detection(BinaryDetection::quit(b'\x00'))
-                .multi_line(true)
-                .build();
-            WalkBuilder::new(search_root)
-                .hidden(config.file_picker_config.hidden)
-                .parents(config.file_picker_config.parents)
-                .ignore(config.file_picker_config.ignore)
-                .follow_links(config.file_picker_config.follow_symlinks)
-                .git_ignore(config.file_picker_config.git_ignore)
-                .git_global(config.file_picker_config.git_global)
-                .git_exclude(config.file_picker_config.git_exclude)
-                .max_depth(config.file_picker_config.max_depth)
-                .filter_entry(move |entry| {
-                    filter_picker_entry(entry, &absolute_root, dedup_symlinks)
-                })
-                .add_custom_ignore_filename(helix_loader::config_dir().join("ignore"))
-                .add_custom_ignore_filename(".helix/ignore")
-                .build_parallel()
-                .run(|| {
-                    let mut searcher = searcher.clone();
-                    let matcher = matcher.clone();
-                    let injector = injector.clone();
-                    let documents = &documents;
-                    Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
-                        if injector.is_closed() {
-                            return WalkState::Quit;
-                        }
-                        let entry = match entry {
-                            Ok(entry) => entry,
-                            Err(_) => return WalkState::Continue,
-                        };
-
-                        if !crate::entry_is_file(&entry) {
-                            return WalkState::Continue;
-                        }
-
-                        let mut stop = false;
-                        let sink = sinks::UTF8(|line_start, line_content| {
-                            let line_start = line_start as usize - 1;
-                            let line_end = line_start + line_content.lines().count() - 1;
-                            stop = injector
-                                .push(FileResult::new(entry.path(), line_start, line_end))
-                                .is_err();
-
-                            Ok(!stop)
-                        });
-                        let doc = documents.iter().find(|&(doc_path, _)| {
-                            doc_path
-                                .as_ref()
-                                .is_some_and(|doc_path| doc_path == entry.path())
-                        });
-
-                        let result = if let Some((_, doc)) = doc {
-                            // there is already a buffer for this file
-                            // search the buffer instead of the file because it's faster
-                            // and captures new edits without requiring a save
-                            if searcher.multi_line_with_matcher(&matcher) {
-                                // in this case a continuous buffer is required
-                                // convert the rope to a string
-                                let text = doc.to_string();
-                                searcher.search_slice(&matcher, text.as_bytes(), sink)
-                            } else {
-                                searcher.search_reader(
-                                    &matcher,
-                                    RopeReader::new(doc.slice(..)),
-                                    sink,
-                                )
-                            }
-                        } else {
-                            search_text_file(&mut searcher, &matcher, entry.path(), sink)
-                        };
-
-                        if let Err(err) = result {
-                            log::error!("Global search error: {}, {}", entry.path().display(), err);
-                        }
-                        if stop {
-                            WalkState::Quit
-                        } else {
-                            WalkState::Continue
-                        }
+            // the walk blocks, for as long as the search takes
+            tokio::task::spawn_blocking(move || {
+                let searcher = SearcherBuilder::new()
+                    .binary_detection(BinaryDetection::quit(b'\x00'))
+                    .multi_line(true)
+                    .build();
+                WalkBuilder::new(search_root)
+                    .hidden(config.file_picker_config.hidden)
+                    .parents(config.file_picker_config.parents)
+                    .ignore(config.file_picker_config.ignore)
+                    .follow_links(config.file_picker_config.follow_symlinks)
+                    .git_ignore(config.file_picker_config.git_ignore)
+                    .git_global(config.file_picker_config.git_global)
+                    .git_exclude(config.file_picker_config.git_exclude)
+                    .max_depth(config.file_picker_config.max_depth)
+                    .filter_entry(move |entry| {
+                        filter_picker_entry(entry, &absolute_root, dedup_symlinks)
                     })
-                });
+                    .add_custom_ignore_filename(helix_loader::config_dir().join("ignore"))
+                    .add_custom_ignore_filename(".helix/ignore")
+                    .build_parallel()
+                    .run(|| {
+                        let mut searcher = searcher.clone();
+                        let matcher = matcher.clone();
+                        let injector = injector.clone();
+                        let documents = &documents;
+                        Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
+                            if injector.is_closed() {
+                                return WalkState::Quit;
+                            }
+                            let entry = match entry {
+                                Ok(entry) => entry,
+                                Err(_) => return WalkState::Continue,
+                            };
+
+                            if !crate::entry_is_file(&entry) {
+                                return WalkState::Continue;
+                            }
+
+                            let mut stop = false;
+                            let mut path = None;
+                            let sink = sinks::UTF8(|line_start, line_content| {
+                                let line_start = line_start as usize - 1;
+                                let line_end = line_start + line_content.lines().count() - 1;
+                                let path = path.get_or_insert_with(|| {
+                                    helix_stdx::path::get_relative_path(entry.path()).into()
+                                });
+                                stop = injector
+                                    .push(FileResult {
+                                        path: Arc::clone(path),
+                                        line_start,
+                                        line_end,
+                                    })
+                                    .is_err();
+
+                                Ok(!stop)
+                            });
+
+                            let result = if let Some(doc) = documents.get(entry.path()) {
+                                // there is already a buffer for this file
+                                // search the buffer instead of the file because it's faster
+                                // and captures new edits without requiring a save
+                                if searcher.multi_line_with_matcher(&matcher) {
+                                    // in this case a continuous buffer is required
+                                    // convert the rope to a string
+                                    let text = doc.to_string();
+                                    searcher.search_slice(&matcher, text.as_bytes(), sink)
+                                } else {
+                                    searcher.search_reader(
+                                        &matcher,
+                                        RopeReader::new(doc.slice(..)),
+                                        sink,
+                                    )
+                                }
+                            } else {
+                                search_text_file(&mut searcher, &matcher, entry.path(), sink)
+                            };
+
+                            if let Err(err) = result {
+                                log::error!(
+                                    "Global search error: {}, {}",
+                                    entry.path().display(),
+                                    err
+                                );
+                            }
+                            if stop {
+                                WalkState::Quit
+                            } else {
+                                WalkState::Continue
+                            }
+                        })
+                    });
+            })
+            .await?;
             Ok(())
         }
         .boxed()
