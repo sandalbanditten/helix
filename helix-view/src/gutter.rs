@@ -59,6 +59,10 @@ pub fn diagnostic<'doc>(
     let info = theme.get("info");
     let hint = theme.get("hint");
     let diagnostics = &doc.diagnostics;
+    let servers: Vec<_> = doc
+        .language_servers_with_feature(LanguageServerFeature::Diagnostics)
+        .map(|ls| ls.id())
+        .collect();
 
     Box::new(
         move |line: usize, _selected: bool, first_visual_line: bool, out: &mut String| {
@@ -71,10 +75,9 @@ pub fn diagnostic<'doc>(
                 .iter()
                 .take_while(|d| {
                     d.line == line
-                        && d.provider.language_server_id().is_none_or(|id| {
-                            doc.language_servers_with_feature(LanguageServerFeature::Diagnostics)
-                                .any(|ls| ls.id() == id)
-                        })
+                        && d.provider
+                            .language_server_id()
+                            .is_none_or(|id| servers.contains(&id))
                 })
                 .filter(|d| doc.shows_diagnostic(d));
             diagnostics_on_line.max_by_key(|d| d.severity).map(|d| {
