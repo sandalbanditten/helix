@@ -70,14 +70,16 @@ pub(super) fn register_hooks(handlers: &Handlers) {
                         })
                 })
                 .map(|language_server| language_server.id())
-                .collect();
+                .collect::<HashSet<_>>();
 
-            send_blocking(
-                &tx_all_documents,
-                PullAllDocumentsDiagnosticsEvent {
-                    language_servers: inter_file_dependencies_language_servers,
-                },
-            );
+            if !inter_file_dependencies_language_servers.is_empty() {
+                send_blocking(
+                    &tx_all_documents,
+                    PullAllDocumentsDiagnosticsEvent {
+                        language_servers: inter_file_dependencies_language_servers,
+                    },
+                );
+            }
         }
         Ok(())
     });
@@ -168,8 +170,6 @@ fn request_document_diagnostics_for_language_servers(
         return;
     };
 
-    let cancel = doc.pull_diagnostic_controller.restart();
-
     let mut futures: FuturesUnordered<_> = language_servers
         .iter()
         .filter_map(|x| doc.language_servers().find(|y| &y.id() == x))
@@ -212,6 +212,8 @@ fn request_document_diagnostics_for_language_servers(
     if futures.is_empty() {
         return;
     }
+    // only now, so that a refresh for other servers doesn't cancel pulls in flight
+    let cancel = doc.pull_diagnostic_controller.restart();
 
     tokio::spawn(async move {
         let mut retry_language_servers = HashSet::new();
