@@ -1437,9 +1437,37 @@ pub struct TextObjectQuery {
     query: Query,
 }
 
+impl Syntax {
+    /// The textobject query and syntax tree of the innermost layer at `byte_pos` whose language
+    /// has one of the `capture_names`. Injected languages without them, like comments, leave their
+    /// objects to the language around.
+    pub fn textobject_layer<'a>(
+        &'a self,
+        loader: &'a Loader,
+        byte_pos: u32,
+        capture_names: &[&str],
+    ) -> Option<(&'a TextObjectQuery, Node<'a>)> {
+        let layers: Vec<_> = self.layers_for_byte_range(byte_pos, byte_pos).collect();
+        layers.into_iter().rev().find_map(|layer| {
+            let layer = self.layer(layer);
+            let query = loader.textobject_query(layer.language)?;
+            let tree = layer.tree()?;
+            query
+                .has_capture(capture_names)
+                .then(|| (query, tree.root_node()))
+        })
+    }
+}
+
 impl TextObjectQuery {
     pub fn new(query: Query) -> Self {
         Self { query }
+    }
+
+    pub fn has_capture(&self, capture_names: &[&str]) -> bool {
+        capture_names
+            .iter()
+            .any(|name| self.query.get_capture(name).is_some())
     }
 
     /// Run the query on the given node and return sub nodes which match given

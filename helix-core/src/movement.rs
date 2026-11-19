@@ -590,15 +590,6 @@ pub fn goto_treesitter_object(
     let get_range = move |range: Range| -> Option<Range> {
         let byte_pos = slice.char_to_byte(range.cursor(slice));
 
-        // Walk the layer at the cursor with that language's own tree and textobject query.
-        // Resolved per step so the motion can cross into and out of injected regions.
-        let layer = syntax.layer_for_byte_range(byte_pos as u32, byte_pos as u32);
-        let slice_tree = syntax
-            .tree_for_byte_range(byte_pos as u32, byte_pos as u32)
-            .root_node();
-        let textobject_query = loader.textobject_query(syntax.layer(layer).language);
-
-        let textobject_query = textobject_query?;
         let cap_name = |t: TextObject| format!("{}.{}", object_name, t);
         let cap_names = [
             cap_name(TextObject::Movement),
@@ -606,6 +597,10 @@ pub fn goto_treesitter_object(
             cap_name(TextObject::Inside),
         ];
         let cap_names = cap_names.each_ref().map(String::as_str);
+        // Walk the layer at the cursor with that language's own tree and textobject query.
+        // Resolved per step so the motion can cross into and out of injected regions.
+        let (textobject_query, slice_tree) =
+            syntax.textobject_layer(loader, byte_pos as u32, &cap_names)?;
 
         // Query a window from the cursor, doubled until it holds the nearest object: the query
         // finds every object that intersects it.

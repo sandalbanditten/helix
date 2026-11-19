@@ -265,15 +265,12 @@ pub fn textobject_treesitter(
     _count: usize,
 ) -> Range {
     let byte_pos = slice.char_to_byte(range.cursor(slice));
-    let layer = syntax.layer_for_byte_range(byte_pos as u32, byte_pos as u32);
-    let root = syntax
-        .tree_for_byte_range(byte_pos as u32, byte_pos as u32)
-        .root_node();
-    let textobject_query = loader.textobject_query(syntax.layer(layer).language);
     let get_range = move || -> Option<Range> {
         let capture_name = format!("{}.{}", object_name, textobject); // eg. function.inner
-                                                                      // objects that contain the cursor intersect its byte
-        let node = textobject_query?
+        let (textobject_query, root) =
+            syntax.textobject_layer(loader, byte_pos as u32, &[&capture_name])?;
+        // objects that contain the cursor intersect its byte
+        let node = textobject_query
             .capture_nodes(
                 &capture_name,
                 &root,

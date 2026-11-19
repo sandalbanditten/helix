@@ -576,6 +576,28 @@ async fn tree_sitter_objects_far_from_the_cursor() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tree_sitter_objects_in_comments() -> anyhow::Result<()> {
+    // comments inject a language of their own, which has no objects
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        (
+            "// a\n// #[b|]#\n// c\nfn f() {}\n",
+            "mac",
+            "#[// a\n// b\n// c|]#\nfn f() {}\n",
+        ),
+    )
+    .await?;
+
+    test_with_config(
+        AppBuilder::new().with_file("foo.rs", None),
+        ("// #[a|]#\nfn f() {}\n", "]f", "// a\n#[fn f() {}|]#\n"),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tree_sitter_objects_at_end_of_file() -> anyhow::Result<()> {
     test_with_config(
         AppBuilder::new().with_file("foo.rs", None),
