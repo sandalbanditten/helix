@@ -827,10 +827,10 @@ impl Application {
 
     pub async fn handle_language_server_message(
         &mut self,
-        call: helix_lsp::Call,
+        call: helix_lsp::ServerCall,
         server_id: LanguageServerId,
     ) {
-        use helix_lsp::{Call, MethodCall, Notification};
+        use helix_lsp::{MethodCall, Notification, ServerCall};
 
         macro_rules! language_server {
             () => {
@@ -845,8 +845,8 @@ impl Application {
         }
 
         match call {
-            Call::Notification(helix_lsp::jsonrpc::Notification { method, params, .. }) => {
-                let notification = match Notification::parse(&method, params) {
+            ServerCall::Notification(notification) => {
+                let notification = match notification {
                     Ok(notification) => notification,
                     Err(helix_lsp::Error::Unhandled) => {
                         info!("Ignoring Unhandled notification from Language Server");
@@ -1028,10 +1028,8 @@ impl Application {
                     }
                 }
             }
-            Call::MethodCall(helix_lsp::jsonrpc::MethodCall {
-                method, params, id, ..
-            }) => {
-                let reply = match MethodCall::parse(&method, params) {
+            ServerCall::MethodCall { method, id, call } => {
+                let reply = match call {
                     Err(helix_lsp::Error::Unhandled) => {
                         error!(
                             "Language Server: Method {} not found in request {}",
@@ -1234,7 +1232,7 @@ impl Application {
                     );
                 }
             }
-            Call::Invalid { id } => log::error!("LSP invalid method call id={:?}", id),
+            ServerCall::Invalid { id } => log::error!("LSP invalid method call id={:?}", id),
         }
     }
 

@@ -2,7 +2,7 @@ use crate::{
     file_operations::FileOperationsInterest,
     find_lsp_workspace, jsonrpc,
     transport::{LaterNotification, Payload, Transport},
-    Call, Error, LanguageServerId, OffsetEncoding, Result,
+    Error, LanguageServerId, OffsetEncoding, Result, ServerCall,
 };
 use log::info;
 
@@ -263,7 +263,7 @@ impl Client {
         req_timeout: u64,
     ) -> Result<(
         Self,
-        UnboundedReceiver<(LanguageServerId, Call)>,
+        UnboundedReceiver<(LanguageServerId, ServerCall)>,
         Arc<Notify>,
     )> {
         info!("Starting lsp {name:?} in root {root_path:?}");

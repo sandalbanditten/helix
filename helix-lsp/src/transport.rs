@@ -1,7 +1,7 @@
 use crate::{
     jsonrpc,
     lsp::{self, notification::Notification as _},
-    Error, LanguageServerId, Result,
+    Error, LanguageServerId, Result, ServerCall,
 };
 use anyhow::Context;
 use log::{error, info};
@@ -71,7 +71,7 @@ impl Transport {
         id: LanguageServerId,
         name: String,
     ) -> (
-        UnboundedReceiver<(LanguageServerId, jsonrpc::Call)>,
+        UnboundedReceiver<(LanguageServerId, ServerCall)>,
         UnboundedSender<Payload>,
         Arc<Notify>,
         Arc<Notify>,
@@ -226,7 +226,7 @@ impl Transport {
 
     async fn process_server_message(
         &self,
-        client_tx: &UnboundedSender<(LanguageServerId, jsonrpc::Call)>,
+        client_tx: &UnboundedSender<(LanguageServerId, ServerCall)>,
         msg: ServerMessage,
         language_server_name: &str,
     ) -> Result<()> {
@@ -256,8 +256,9 @@ impl Transport {
                     )));
             }
             ServerMessage::Call(call) => {
+                // parsed here, as large params take a while
                 client_tx
-                    .send((self.id, call))
+                    .send((self.id, call.into()))
                     .context("failed to send a message to server")?;
             }
         };
@@ -304,7 +305,7 @@ impl Transport {
     async fn recv(
         transport: Arc<Self>,
         mut server_stdout: BufReader<ChildStdout>,
-        client_tx: UnboundedSender<(LanguageServerId, jsonrpc::Call)>,
+        client_tx: UnboundedSender<(LanguageServerId, ServerCall)>,
     ) {
         let mut recv_buffer = String::new();
         let mut content_buffer = Vec::new();
@@ -387,7 +388,7 @@ impl Transport {
     async fn send(
         transport: Arc<Self>,
         mut server_stdin: BufWriter<ChildStdin>,
-        client_tx: UnboundedSender<(LanguageServerId, jsonrpc::Call)>,
+        client_tx: UnboundedSender<(LanguageServerId, ServerCall)>,
         mut client_rx: UnboundedReceiver<Payload>,
         mut inject_rx: UnboundedReceiver<Payload>,
         initialize_notify: Arc<Notify>,

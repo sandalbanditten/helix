@@ -24,7 +24,7 @@ use helix_vcs::DiffProviderRegistry;
 
 use futures_util::stream::select_all::SelectAll;
 use futures_util::StreamExt;
-use helix_lsp::{Call, LanguageServerId};
+use helix_lsp::{LanguageServerId, ServerCall};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use std::{
@@ -2004,7 +2004,7 @@ pub type Motion = Box<dyn Fn(&mut Editor)>;
 pub enum EditorEvent {
     DocumentSaved(DocumentSavedEventResult),
     ConfigEvent(ConfigEvent),
-    LanguageServerMessage((LanguageServerId, Call)),
+    LanguageServerMessage((LanguageServerId, ServerCall)),
     DebuggerEvent((DebugAdapterId, dap::Payload)),
     IdleTimer,
     Redraw,

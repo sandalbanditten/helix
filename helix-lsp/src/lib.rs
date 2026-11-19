@@ -503,6 +503,37 @@ pub mod util {
     }
 }
 
+/// A call from a language server, parsed on the task that reads it.
+#[derive(Debug)]
+pub enum ServerCall {
+    Notification(Result<Notification>),
+    MethodCall {
+        method: String,
+        id: jsonrpc::Id,
+        call: Result<MethodCall>,
+    },
+    Invalid {
+        id: jsonrpc::Id,
+    },
+}
+
+impl From<Call> for ServerCall {
+    fn from(call: Call) -> Self {
+        match call {
+            Call::Notification(jsonrpc::Notification { method, params, .. }) => {
+                Self::Notification(Notification::parse(&method, params))
+            }
+            Call::MethodCall(jsonrpc::MethodCall {
+                method, params, id, ..
+            }) => {
+                let call = MethodCall::parse(&method, params);
+                Self::MethodCall { method, id, call }
+            }
+            Call::Invalid { id } => Self::Invalid { id },
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum MethodCall {
     WorkDoneProgressCreate(lsp::WorkDoneProgressCreateParams),
@@ -608,7 +639,7 @@ pub struct Registry {
     inner: SlotMap<LanguageServerId, Arc<Client>>,
     inner_by_name: HashMap<LanguageServerName, Vec<Arc<Client>>>,
     syn_loader: Arc<ArcSwap<helix_core::syntax::Loader>>,
-    pub incoming: SelectAll<UnboundedReceiverStream<(LanguageServerId, Call)>>,
+    pub incoming: SelectAll<UnboundedReceiverStream<(LanguageServerId, ServerCall)>>,
     pub file_event_handler: file_event::Handler,
 }
 
@@ -899,7 +930,10 @@ impl LspProgressMap {
     }
 }
 
-struct NewClient(Arc<Client>, UnboundedReceiver<(LanguageServerId, Call)>);
+struct NewClient(
+    Arc<Client>,
+    UnboundedReceiver<(LanguageServerId, ServerCall)>,
+);
 
 enum StartupError {
     NoRequiredRootFound,
