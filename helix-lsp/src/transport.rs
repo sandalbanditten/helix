@@ -260,7 +260,12 @@ impl Transport {
         let (id, result) = match output {
             jsonrpc::Output::Success(jsonrpc::Success { id, result, .. }) => (id, Ok(result)),
             jsonrpc::Output::Failure(jsonrpc::Failure { id, error, .. }) => {
-                error!("{language_server_name} <- {error}");
+                // requests are cancelled when nothing waits for their reply anymore
+                if error.code == jsonrpc::ErrorCode::ServerError(-32800) {
+                    log::debug!("{language_server_name} <- {error}");
+                } else {
+                    error!("{language_server_name} <- {error}");
+                }
                 (id, Err(error.into()))
             }
         };

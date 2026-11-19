@@ -72,6 +72,27 @@ pub struct Client {
     req_timeout: u64,
 }
 
+/// Asks the server to stop working on a request that is dropped, or timed out, before its reply.
+struct CancelOnDrop {
+    server_tx: UnboundedSender<Payload>,
+    id: Option<jsonrpc::Id>,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        let notification = jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method: <lsp::notification::Cancel as lsp::notification::Notification>::METHOD
+                .to_string(),
+            params: Client::value_into_params(serde_json::json!({ "id": id })),
+        };
+        let _ = self.server_tx.send(Payload::Notification(notification));
+    }
+}
+
 impl Client {
     pub fn try_add_doc(
         self: &Arc<Self>,
@@ -489,13 +510,19 @@ impl Client {
                 Ok(rx)
             });
 
+        let mut cancel = CancelOnDrop {
+            server_tx,
+            id: Some(id.clone()),
+        };
         async move {
             use std::time::Duration;
             use tokio::time::timeout;
             // TODO: delay other calls until initialize success
-            timeout(Duration::from_secs(timeout_secs), rx?.recv())
+            let reply = timeout(Duration::from_secs(timeout_secs), rx?.recv())
                 .await
-                .map_err(|_| Error::Timeout(id))? // return Timeout
+                .map_err(|_| Error::Timeout(id))?; // return Timeout
+            cancel.id = None;
+            reply
                 .ok_or(Error::StreamClosed)?
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
         }
