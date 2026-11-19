@@ -26,7 +26,18 @@ pub enum Payload {
         value: jsonrpc::MethodCall,
     },
     Notification(jsonrpc::Notification),
+    /// A notification that the transport makes, for one too large to make on the editor's thread
+    LaterNotification(LaterNotification),
     Response(jsonrpc::Output),
+}
+
+/// Makes a notification serialized.
+pub struct LaterNotification(pub Box<dyn FnOnce() -> serde_json::Result<String> + Send + Sync>);
+
+impl std::fmt::Debug for LaterNotification {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("LaterNotification")
+    }
 }
 
 /// A type representing all possible values sent from the server to the client.
@@ -185,6 +196,7 @@ impl Transport {
                 serde_json::to_string(&value)?
             }
             Payload::Notification(value) => serde_json::to_string(&value)?,
+            Payload::LaterNotification(LaterNotification(make)) => make()?,
             Payload::Response(error) => serde_json::to_string(&error)?,
         };
         self.send_string_to_server(server_stdin, json, &self.name)
@@ -460,7 +472,7 @@ impl Transport {
                             break;
                         } else if is_pending && !is_initialize(&msg) {
                             // ignore notifications
-                            if let Payload::Notification(_) = msg {
+                            if let Payload::Notification(_) | Payload::LaterNotification(_) = msg {
                                 continue;
                             }
 

@@ -1,7 +1,7 @@
 use crate::{
     file_operations::FileOperationsInterest,
     find_lsp_workspace, jsonrpc,
-    transport::{Payload, Transport},
+    transport::{LaterNotification, Payload, Transport},
     Call, Error, LanguageServerId, OffsetEncoding, Result,
 };
 use log::info;
@@ -70,6 +70,28 @@ pub struct Client {
     shutdown_flushed: Arc<Notify>,
     /// workspace folders added while the server is still initializing
     req_timeout: u64,
+}
+
+/// A notification made, and serialized, by the transport.
+fn later_notification<R: lsp::notification::Notification>(
+    params: impl FnOnce() -> R::Params + Send + Sync + 'static,
+) -> LaterNotification
+where
+    R::Params: serde::Serialize,
+{
+    #[derive(serde::Serialize)]
+    struct Notification<P> {
+        jsonrpc: jsonrpc::Version,
+        method: &'static str,
+        params: P,
+    }
+    LaterNotification(Box::new(move || {
+        serde_json::to_string(&Notification {
+            jsonrpc: jsonrpc::Version::V2,
+            method: R::METHOD,
+            params: params(),
+        })
+    }))
 }
 
 /// Asks the server to stop working on a request that is dropped, or timed out, before its reply.
@@ -554,6 +576,24 @@ impl Client {
         };
 
         if let Err(err) = server_tx.send(Payload::Notification(notification)) {
+            log::error!(
+                "Failed to send notification '{}' to server '{}': {err}",
+                R::METHOD,
+                self.name
+            );
+        }
+    }
+
+    /// Sends a notification whose params the transport makes and serializes, for those too large
+    /// to make on the editor's thread.
+    fn notify_later<R: lsp::notification::Notification>(
+        &self,
+        params: impl FnOnce() -> R::Params + Send + Sync + 'static,
+    ) where
+        R::Params: serde::Serialize,
+    {
+        let notification = Payload::LaterNotification(later_notification::<R>(params));
+        if let Err(err) = self.server_tx.send(notification) {
             log::error!(
                 "Failed to send notification '{}' to server '{}': {err}",
                 R::METHOD,
@@ -1129,12 +1169,20 @@ impl Client {
 
         let changes = match sync_capabilities {
             lsp::TextDocumentSyncKind::FULL => {
-                vec![lsp::TextDocumentContentChangeEvent {
-                    // range = None -> whole document
-                    range: None,        //Some(Range)
-                    range_length: None, // u64 apparently deprecated
-                    text: String::from(new_text),
-                }]
+                // the transport copies the whole text, not the editor's thread
+                let new_text = new_text.clone();
+                self.notify_later::<lsp::notification::DidChangeTextDocument>(move || {
+                    lsp::DidChangeTextDocumentParams {
+                        text_document,
+                        content_changes: vec![lsp::TextDocumentContentChangeEvent {
+                            // range = None -> whole document
+                            range: None,
+                            range_length: None, // u64 apparently deprecated
+                            text: String::from(&new_text),
+                        }],
+                    }
+                });
+                return Some(());
             }
             lsp::TextDocumentSyncKind::INCREMENTAL => {
                 Self::changeset_to_changes(old_text, new_text, changes, self.offset_encoding())
@@ -1839,5 +1887,35 @@ impl Client {
         self.notify::<lsp::notification::DidChangeWatchedFiles>(lsp::DidChangeWatchedFilesParams {
             changes,
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn later_notifications_serialize_like_notifications() {
+        use lsp::notification::{DidChangeTextDocument, Notification};
+        let params = || lsp::DidChangeTextDocumentParams {
+            text_document: lsp::VersionedTextDocumentIdentifier {
+                uri: "file:///a.txt".parse().unwrap(),
+                version: 3,
+            },
+            content_changes: vec![lsp::TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "a \"text\"\n".into(),
+            }],
+        };
+        let later = (later_notification::<DidChangeTextDocument>(params).0)().unwrap();
+        let now = serde_json::to_string(&jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method: DidChangeTextDocument::METHOD.to_string(),
+            params: Client::value_into_params(serde_json::to_value(params()).unwrap()),
+        })
+        .unwrap();
+        let value = |json: &str| serde_json::from_str::<Value>(json).unwrap();
+        assert_eq!(value(&later), value(&now));
     }
 }
