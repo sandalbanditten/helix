@@ -2239,6 +2239,27 @@ fn merge_consecutive_selections(cx: &mut Context) {
     doc.set_selection(view.id, selection);
 }
 
+/// The last match of `regex` in the bytes `range` of `text`. It's searched for in windows growing
+/// back from the end of the range, which leaves the text before them alone.
+fn last_match(
+    regex: &rope::Regex,
+    text: RopeSlice,
+    range: std::ops::Range<usize>,
+) -> Option<rope::RegexMatch> {
+    let mut size = 64 * 1024;
+    loop {
+        let start = text.floor_char_boundary(range.end.saturating_sub(size).max(range.start));
+        let found = regex
+            .find_iter(text.regex_input_at_bytes(start..range.end))
+            .last();
+        // a match at the start of a window may go on before it
+        if start == range.start || found.as_ref().is_some_and(|found| found.start() > start) {
+            return found;
+        }
+        size *= 2;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_impl(
     editor: &mut Editor,
@@ -2276,14 +2297,14 @@ fn search_impl(
     // Careful, `Regex` uses `bytes` as offsets, not character indices!
     let mut mat = match direction {
         Direction::Forward => regex.find(doc.regex_input_at_bytes(start..)),
-        Direction::Backward => regex.find_iter(doc.regex_input_at_bytes(..start)).last(),
+        Direction::Backward => last_match(regex, doc, 0..start),
     };
 
     if mat.is_none() {
         if wrap_around {
             mat = match direction {
                 Direction::Forward => regex.find(doc.regex_input()),
-                Direction::Backward => regex.find_iter(doc.regex_input_at_bytes(start..)).last(),
+                Direction::Backward => last_match(regex, doc, start..doc.len_bytes()),
             };
         }
         if show_warnings {

@@ -1029,3 +1029,23 @@ async fn cursors_are_drawn_when_others_are_off_screen() -> anyhow::Result<()> {
     )
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn search_backward_far_and_around() -> anyhow::Result<()> {
+    // further back than the first window searched
+    let filler = "x\n".repeat(40_000);
+    test((
+        format!("foo\n{filler}#[b|]#ar\n"),
+        "?foo<ret>",
+        format!("#[foo|]#\n{filler}bar\n"),
+    ))
+    .await?;
+    test((
+        format!("#[b|]#ar\nfoo\n{filler}foo\n"),
+        "?foo<ret>",
+        format!("bar\nfoo\n{filler}#[foo|]#\n"),
+    ))
+    .await?;
+
+    Ok(())
+}

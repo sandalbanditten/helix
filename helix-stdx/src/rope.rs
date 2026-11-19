@@ -4,6 +4,7 @@ use std::ops::{Bound, RangeBounds};
 
 pub use regex_cursor::engines::meta::{Builder as RegexBuilder, Regex};
 pub use regex_cursor::regex_automata::util::syntax::Config;
+pub use regex_cursor::regex_automata::Match as RegexMatch;
 /// What a [`Regex`] searches: also a plain `&str`.
 pub use regex_cursor::Input as RegexInput;
 use regex_cursor::RopeyCursor;
