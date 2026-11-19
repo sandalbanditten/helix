@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::HashSet, fmt::Display};
 
 use crate::{
     graphemes::next_grapheme_boundary,
@@ -10,6 +10,20 @@ use crate::{
     search, Range, Selection, Syntax,
 };
 use ropey::RopeSlice;
+
+/// Pairs further apart than this from a range are not looked for: with many ranges, scanning to
+/// the ends of a large text would take seconds.
+const MAX_PAIR_SCAN: usize = 100_000;
+
+/// The text around `range` that its pairs are looked for in, and where it starts.
+fn scanned_text(text: RopeSlice, range: Range) -> (RopeSlice, usize) {
+    let start = range.from().saturating_sub(MAX_PAIR_SCAN);
+    let end = range
+        .to()
+        .saturating_add(MAX_PAIR_SCAN)
+        .min(text.len_chars());
+    (text.slice(start..end), start)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -46,7 +60,12 @@ pub fn find_nth_closest_pairs_pos(
 ) -> Result<(usize, usize)> {
     match syntax {
         Some(syntax) => find_nth_closest_pairs_ts(syntax, text, range, skip),
-        None => find_nth_closest_pairs_plain(text, range, skip),
+        None => {
+            let (text, offset) = scanned_text(text, range);
+            let range = Range::new(range.anchor - offset, range.head - offset);
+            find_nth_closest_pairs_plain(text, range, skip)
+                .map(|(anchor, head)| (anchor + offset, head + offset))
+        }
     }
 }
 
@@ -195,15 +214,19 @@ pub fn find_nth_pairs_pos(
                 })
                 .ok_or(Error::CursorOnAmbiguousPair)?
         } else {
+            let (text, offset) = scanned_text(text, range);
             (
-                search::find_nth_char(n, text, open, pos, Direction::Backward),
-                search::find_nth_char(n, text, close, pos, Direction::Forward),
+                search::find_nth_char(n, text, open, pos - offset, Direction::Backward)
+                    .map(|pos| pos + offset),
+                search::find_nth_char(n, text, close, pos - offset, Direction::Forward)
+                    .map(|pos| pos + offset),
             )
         }
     } else {
+        let (text, offset) = scanned_text(text, range);
         (
-            find_nth_open_pair(text, open, close, pos, n),
-            find_nth_close_pair(text, open, close, pos, n),
+            find_nth_open_pair(text, open, close, pos - offset, n).map(|pos| pos + offset),
+            find_nth_close_pair(text, open, close, pos - offset, n).map(|pos| pos + offset),
         )
     };
 
@@ -310,6 +333,7 @@ pub fn get_surround_pos(
     skip: usize,
 ) -> Result<Vec<usize>> {
     let mut change_pos = Vec::new();
+    let mut taken = HashSet::new();
 
     for &range in selection {
         let (open_pos, close_pos) = {
@@ -320,7 +344,7 @@ pub fn get_surround_pos(
             let range = Range::new(range_raw.0, range_raw.1);
             (range.from(), range.to())
         };
-        if change_pos.contains(&open_pos) || change_pos.contains(&close_pos) {
+        if !taken.insert(open_pos) || !taken.insert(close_pos) {
             return Err(Error::CursorOverlap);
         }
         // ensure the positions are always paired in the forward direction
@@ -336,6 +360,29 @@ mod test {
 
     use ropey::Rope;
     use smallvec::SmallVec;
+
+    #[test]
+    fn pairs_are_looked_for_near_the_range() {
+        let far = "x".repeat(MAX_PAIR_SCAN + 10);
+        let doc = Rope::from(format!("{far}(ab)"));
+        let a = far.len() + 1;
+        let range = Range::point(a);
+        assert_eq!(
+            find_nth_pairs_pos(None, doc.slice(..), '(', range, 1),
+            Ok((a - 1, a + 2))
+        );
+        assert_eq!(
+            find_nth_closest_pairs_pos(None, doc.slice(..), range, 1),
+            Ok((a - 1, a + 2))
+        );
+
+        let doc = Rope::from(format!("({far}a)"));
+        let range = Range::point(far.len() + 1);
+        assert_eq!(
+            find_nth_pairs_pos(None, doc.slice(..), '(', range, 1),
+            Err(Error::PairNotFound)
+        );
+    }
 
     #[test]
     fn test_get_surround_pos() {
