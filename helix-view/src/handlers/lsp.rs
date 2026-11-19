@@ -299,7 +299,7 @@ impl Editor {
         let doc = self
             .documents
             .values_mut()
-            .find(|doc| doc.uri().is_some_and(|u| u == uri));
+            .find(|doc| doc.path().is_some_and(|path| uri.as_path() == Some(path)));
 
         if let Some((version, doc)) = version.zip(doc.as_ref()) {
             if version != doc.version() {
