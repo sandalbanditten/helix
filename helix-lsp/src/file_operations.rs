@@ -33,7 +33,7 @@ impl FileOperationFilter {
                 .and_then(|opts| opts.ignore_case)
                 .unwrap_or(false);
             let mut glob_builder = GlobBuilder::new(&filter.pattern.glob);
-            glob_builder.case_insensitive(!ignore_case);
+            glob_builder.case_insensitive(ignore_case);
             let glob = match glob_builder.build() {
                 Ok(glob) => glob,
                 Err(err) => {
@@ -104,5 +104,31 @@ impl FileOperationsInterest {
             did_delete: FileOperationFilter::new(capabilities.did_delete.as_ref()),
             will_delete: FileOperationFilter::new(capabilities.will_delete.as_ref()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn globs_ignore_case_only_when_asked() {
+        let filter = |ignore_case| {
+            FileOperationFilter::new(Some(&lsp::FileOperationRegistrationOptions {
+                filters: vec![lsp::FileOperationFilter {
+                    scheme: None,
+                    pattern: lsp::FileOperationPattern {
+                        glob: "**/*.rs".into(),
+                        matches: None,
+                        options: Some(lsp::FileOperationPatternOptions {
+                            ignore_case: Some(ignore_case),
+                        }),
+                    },
+                }],
+            }))
+        };
+        assert!(!filter(false).has_interest(Path::new("/a/B.RS"), false));
+        assert!(filter(true).has_interest(Path::new("/a/B.RS"), false));
+        assert!(filter(false).has_interest(Path::new("/a/b.rs"), false));
     }
 }
