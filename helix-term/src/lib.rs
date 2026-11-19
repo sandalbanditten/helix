@@ -105,6 +105,24 @@ fn filter_picker_entry(entry: &DirEntry, root: &Path, dedup_symlinks: bool) -> b
     true
 }
 
+/// Whether a walked `entry` is a file, like [`Path::is_file`], without asking the file system again
+/// for anything but symbolic links.
+fn entry_is_file(entry: &DirEntry) -> bool {
+    match entry.file_type() {
+        Some(file_type) if !file_type.is_symlink() => file_type.is_file(),
+        _ => entry.path().is_file(),
+    }
+}
+
+/// Whether a walked `entry` is a directory, like [`Path::is_dir`], without asking the file system
+/// again for anything but symbolic links.
+fn entry_is_dir(entry: &DirEntry) -> bool {
+    match entry.file_type() {
+        Some(file_type) if !file_type.is_symlink() => file_type.is_dir(),
+        _ => entry.path().is_dir(),
+    }
+}
+
 /// Opens URL in external program.
 fn open_external_url_callback(
     url: Url,

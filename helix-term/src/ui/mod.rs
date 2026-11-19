@@ -228,7 +228,7 @@ pub fn workspace_files(root: &Path, config: &FilePickerConfig) -> impl Iterator<
         .build()
         .filter_map(|entry| {
             let entry = entry.ok()?;
-            if !entry.path().is_file() {
+            if !crate::entry_is_file(&entry) {
                 return None;
             }
             Some(entry.into_path())
@@ -376,9 +376,8 @@ fn directory_content(root: &Path, editor: &Editor) -> Result<Vec<(PathBuf, bool)
         .filter_map(|entry| {
             entry
                 .map(|entry| {
-                    let path = entry.path();
-                    let is_dir = path.is_dir();
-                    let mut path = path.to_path_buf();
+                    let is_dir = crate::entry_is_dir(&entry);
+                    let mut path = entry.path().to_path_buf();
                     if is_dir && path != root && config.file_explorer.flatten_dirs {
                         while let Some(single_child_directory) = get_child_if_single_dir(&path) {
                             path = single_child_directory;
@@ -525,7 +524,7 @@ pub mod completers {
         git_ignore: bool,
     ) -> Vec<Completion> {
         filename_impl(editor, input, git_ignore, |entry| {
-            if entry.path().is_dir() {
+            if crate::entry_is_dir(entry) {
                 FileMatch::AcceptIncomplete
             } else {
                 FileMatch::Accept
@@ -597,7 +596,7 @@ pub mod completers {
         git_ignore: bool,
     ) -> Vec<Completion> {
         filename_impl(editor, input, git_ignore, |entry| {
-            if entry.path().is_dir() {
+            if crate::entry_is_dir(entry) {
                 FileMatch::Accept
             } else {
                 FileMatch::Reject
@@ -677,7 +676,7 @@ pub mod completers {
                     }
 
                     let path = entry.path();
-                    let is_dir = path.is_dir();
+                    let is_dir = crate::entry_is_dir(&entry);
                     let file_type = entry.file_type();
                     let is_symlink = file_type.is_some_and(|ft| ft.is_symlink());
                     let mut path = if is_tilde {

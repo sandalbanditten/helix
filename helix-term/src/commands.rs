@@ -2680,7 +2680,7 @@ fn global_search(cx: &mut Context) {
                             Err(_) => return WalkState::Continue,
                         };
 
-                        if !entry.path().is_file() {
+                        if !crate::entry_is_file(&entry) {
                             return WalkState::Continue;
                         }
 
