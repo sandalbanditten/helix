@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::Context;
 use log::{error, info};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,14 +41,89 @@ impl std::fmt::Debug for LaterNotification {
 }
 
 /// A type representing all possible values sent from the server to the client.
-#[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-#[serde(untagged)]
+#[derive(Debug, PartialEq, Clone)]
 enum ServerMessage {
     /// A regular JSON-RPC request output (single response).
     Output(jsonrpc::Output),
     /// A JSON-RPC request or notification.
     Call(jsonrpc::Call),
+}
+
+/// The fields of any message from a server, which tell what kind of message it is. Deserializing
+/// one struct reads a message once, where trying each kind in turn would read it for each.
+#[derive(Deserialize)]
+struct RawMessage {
+    jsonrpc: Option<jsonrpc::Version>,
+    #[serde(default, deserialize_with = "present")]
+    id: Option<jsonrpc::Id>,
+    method: Option<String>,
+    params: Option<Value>,
+    #[serde(default, deserialize_with = "present")]
+    result: Option<Value>,
+    error: Option<jsonrpc::Error>,
+}
+
+/// Deserializes a field that is present, even as `null`.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+impl TryFrom<RawMessage> for ServerMessage {
+    type Error = Error;
+
+    fn try_from(raw: RawMessage) -> Result<Self> {
+        let RawMessage {
+            jsonrpc,
+            id,
+            method,
+            params,
+            result,
+            error,
+        } = raw;
+        let params = match params {
+            None | Some(Value::Null) => jsonrpc::Params::None,
+            Some(Value::Array(params)) => jsonrpc::Params::Array(params),
+            Some(Value::Object(params)) => jsonrpc::Params::Map(params),
+            Some(params) => return Err(anyhow::anyhow!("invalid params: {params}").into()),
+        };
+        let message = match (id, method, result, error) {
+            (Some(id), _, _, Some(error)) => {
+                Self::Output(jsonrpc::Output::Failure(jsonrpc::Failure {
+                    jsonrpc,
+                    error,
+                    id,
+                }))
+            }
+            (Some(id), _, Some(result), None) => {
+                Self::Output(jsonrpc::Output::Success(jsonrpc::Success {
+                    jsonrpc,
+                    result,
+                    id,
+                }))
+            }
+            (Some(id), Some(method), None, None) => {
+                Self::Call(jsonrpc::Call::MethodCall(jsonrpc::MethodCall {
+                    jsonrpc,
+                    method,
+                    params,
+                    id,
+                }))
+            }
+            (None, Some(method), None, None) => {
+                Self::Call(jsonrpc::Call::Notification(jsonrpc::Notification {
+                    jsonrpc,
+                    method,
+                    params,
+                }))
+            }
+            (id, ..) => Self::Call(jsonrpc::Call::Invalid {
+                id: id.unwrap_or(jsonrpc::Id::Null),
+            }),
+        };
+        Ok(message)
+    }
 }
 
 #[derive(Debug)]
@@ -160,7 +235,9 @@ impl Transport {
         // NOTE: We avoid using `?` here, since it would return early on error
         // and skip clearing `content`. By returning the result directly instead,
         // we ensure `content.clear()` is always called.
-        let output = sonic_rs::from_slice(content).map_err(Into::into);
+        let output = sonic_rs::from_slice::<RawMessage>(content)
+            .map_err(Into::into)
+            .and_then(ServerMessage::try_from);
 
         content.clear();
 
@@ -519,6 +596,48 @@ impl Transport {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The messages the untagged enums of `jsonrpc` read, as the server message they read them as.
+    #[test]
+    fn messages_are_read_as_their_kind() {
+        let message = |json: &str| {
+            ServerMessage::try_from(sonic_rs::from_str::<RawMessage>(json).unwrap()).unwrap()
+        };
+        let output = |json| match message(json) {
+            ServerMessage::Output(output) => output,
+            other => panic!("{json}: {other:?}"),
+        };
+        let call = |json| match message(json) {
+            ServerMessage::Call(call) => call,
+            other => panic!("{json}: {other:?}"),
+        };
+        let untagged_output = |json| serde_json::from_str::<jsonrpc::Output>(json).unwrap();
+        let untagged_call = |json| serde_json::from_str::<jsonrpc::Call>(json).unwrap();
+
+        for json in [
+            r#"{"jsonrpc":"2.0","id":1,"result":{"a":[1,2]}}"#,
+            r#"{"jsonrpc":"2.0","id":"x","result":null}"#,
+            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32800,"message":"cancelled"}}"#,
+            r#"{"id":3,"result":1,"error":{"code":-32601,"message":"both"}}"#,
+        ] {
+            assert_eq!(output(json), untagged_output(json), "{json}");
+        }
+        for json in [
+            r#"{"jsonrpc":"2.0","id":4,"method":"workspace/configuration","params":{"items":[]}}"#,
+            r#"{"jsonrpc":"2.0","id":null,"method":"m"}"#,
+            r#"{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///a","diagnostics":[]}}"#,
+            r#"{"jsonrpc":"2.0","method":"exit"}"#,
+            r#"{"method":"m","params":[1,null]}"#,
+            r#"{"id":5}"#,
+        ] {
+            assert_eq!(call(json), untagged_call(json), "{json}");
         }
     }
 }
