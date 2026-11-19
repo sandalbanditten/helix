@@ -3517,11 +3517,19 @@ fn jumplist_picker(cx: &mut Context) {
     let new_meta = |view: &View, doc_id: DocumentId, selection: Selection| {
         let doc = doc!(cx.editor, &doc_id);
         let text = doc.text().slice(..);
-        let contents = selection
-            .fragments(text)
-            .map(Cow::into_owned)
-            .collect::<Vec<_>>()
-            .join(" ");
+        // more of a huge selection than a row shows would be copied and laid out in vain
+        const MAX_CONTENTS_LEN: usize = 512;
+        let mut contents = String::new();
+        for range in selection.ranges() {
+            if contents.len() >= MAX_CONTENTS_LEN {
+                break;
+            }
+            if !contents.is_empty() {
+                contents.push(' ');
+            }
+            let room = MAX_CONTENTS_LEN - contents.len();
+            contents.extend(range.slice(text).chars().take(room));
+        }
         let line_start = selection.primary().cursor_line(text);
 
         JumpMeta {
