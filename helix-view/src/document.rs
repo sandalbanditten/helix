@@ -1753,13 +1753,14 @@ impl Document {
         self.modified_since_accessed = true;
         self.version += 1;
 
-        for selection in self.selections.values_mut() {
-            *selection = selection
-                .clone()
-                // Map through changes
-                .map(transaction.changes())
-                // Ensure all selections across all views still adhere to invariants.
-                .ensure_invariants(self.text.slice(..));
+        for (id, selection) in self.selections.iter_mut() {
+            // The view's own selection is the transaction's, the others map through the changes
+            let new_selection = match transaction.selection() {
+                Some(own) if *id == view_id => own.clone(),
+                _ => selection.clone().map(transaction.changes()),
+            };
+            // Ensure all selections across all views still adhere to invariants.
+            *selection = new_selection.ensure_invariants(self.text.slice(..));
         }
 
         for (view_id, view_data) in &mut self.view_data {
@@ -1932,7 +1933,15 @@ impl Document {
 
         // if specified, the current selection should instead be replaced by transaction.selection
         if let Some(selection) = transaction.selection() {
-            self.set_selection(view_id, selection.clone());
+            if self.selections.contains_key(&view_id) {
+                // set and revealed with the selections of the other views
+                helix_event::dispatch(SelectionDidChange {
+                    doc: self,
+                    view: view_id,
+                });
+            } else {
+                self.set_selection(view_id, selection.clone());
+            }
         }
 
         true

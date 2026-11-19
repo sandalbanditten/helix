@@ -661,7 +661,6 @@ impl Selection {
     // 4. Ranges are sorted by their position in the text.
     pub fn ensure_invariants(self, text: RopeSlice) -> Self {
         self.transform(|r| r.min_width_1(text).grapheme_aligned(text))
-            .normalize()
     }
 
     /// Transforms the selection into all of the left-side head positions,
