@@ -330,6 +330,8 @@ impl EditorView {
                 overlays.push(tabstops);
             }
             if draw_cursor {
+                // at most the text of the lines of as many rows as the view has
+                let shown = Self::viewport_byte_range(text, folds, first, inner.height);
                 overlays.push(Self::doc_selection_highlights(
                     editor.mode(),
                     doc,
@@ -337,6 +339,7 @@ impl EditorView {
                     theme,
                     &config.cursor_shape,
                     self.terminal_focused,
+                    text.byte_to_char(shown.start)..text.byte_to_char(shown.end),
                 ));
                 if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
                     overlays.push(overlay);
@@ -872,10 +875,15 @@ impl EditorView {
         theme: &Theme,
         cursor_shape_config: &CursorShapeConfig,
         is_terminal_focused: bool,
+        shown: std::ops::Range<usize>,
     ) -> OverlayHighlights {
         let text = doc.text().slice(..);
         let selection = view.render_selection(doc);
         let primary_idx = selection.primary_index();
+        // the ranges on the text shown, which are all that the view draws of many cursors
+        let ranges = selection.ranges();
+        let first = ranges.partition_point(|range| range.to() < shown.start);
+        let last = first + ranges[first..].partition_point(|range| range.from() <= shown.end);
 
         let cursorkind = cursor_shape_config.from_mode(mode);
         let cursor_is_block = cursorkind == CursorKind::Block;
@@ -909,7 +917,7 @@ impl EditorView {
         .unwrap_or(base_primary_cursor_scope);
 
         let mut spans = Vec::new();
-        for (i, range) in selection.iter().enumerate() {
+        for (i, range) in ranges.iter().enumerate().take(last).skip(first) {
             let selection_is_primary = i == primary_idx;
             let (cursor_scope, selection_scope) = if selection_is_primary {
                 (primary_cursor_scope, primary_selection_scope)

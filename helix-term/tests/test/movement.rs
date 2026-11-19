@@ -1002,3 +1002,30 @@ async fn jump_labels_show_over_document_links() -> anyhow::Result<()> {
     };
     test_key_sequence(&mut app, Some("gw"), Some(&labelled), false).await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cursors_are_drawn_when_others_are_off_screen() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new()
+        .with_input_text(format!("#[a|]#\n{}", "a\n".repeat(299)))
+        .build()?;
+    test_key_sequence(
+        &mut app,
+        Some("%sa<ret>"),
+        Some(&|app| {
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            assert_eq!(doc.selection(view.id).len(), 300);
+            let screen = app.screen();
+            let x = (0..screen.area.width)
+                .find(|&x| screen.get(x, 0).unwrap().symbol.as_str() == "a")
+                .unwrap();
+            for y in 0..view.inner_height() as u16 {
+                let (cursor, after) = (screen.get(x, y).unwrap(), screen.get(x + 1, y).unwrap());
+                assert_eq!(cursor.symbol.as_str(), "a");
+                let style = |cell: &tui::buffer::Cell| (cell.fg, cell.bg, cell.modifier);
+                assert_ne!(style(cursor), style(after), "row {y}");
+            }
+        }),
+        false,
+    )
+    .await
+}
