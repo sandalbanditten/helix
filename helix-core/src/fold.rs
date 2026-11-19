@@ -310,7 +310,7 @@ impl Folds {
     /// opened.
     pub fn reveal(&mut self, text: RopeSlice, selection: &Selection) -> bool {
         let mut revealed = false;
-        loop {
+        while !self.outermost.is_empty() {
             let mut open = Vec::new();
             for range in selection {
                 let cursor = range.cursor(text);
@@ -332,6 +332,7 @@ impl Folds {
             self.open(&open);
             revealed = true;
         }
+        revealed
     }
 
     /// Moves the parts of `selection` that lie inside a fold's interior out of it.
