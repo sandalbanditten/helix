@@ -4849,9 +4849,9 @@ pub mod insert {
         let line_start_pos = text.line_to_char(range.cursor_line(text));
 
         // consider to delete by indent level if all characters before `pos` are indent units.
-        let fragment = Cow::from(text.slice(line_start_pos..pos));
+        let fragment = text.slice(line_start_pos..pos);
 
-        if fragment.is_empty() || !fragment.chars().all(|ch| ch == ' ' || ch == '\t') {
+        if fragment.len_chars() == 0 || !fragment.chars().all(|ch| ch == ' ' || ch == '\t') {
             return None;
         }
 
@@ -4884,7 +4884,7 @@ pub mod insert {
             drop = indent_width
         };
 
-        let mut chars = fragment.chars().rev();
+        let mut chars = fragment.chars_at(fragment.len_chars()).reversed();
         let mut start = pos;
 
         for _ in 0..drop {

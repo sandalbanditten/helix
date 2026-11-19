@@ -484,6 +484,9 @@ async fn test_delete_char_backward() -> anyhow::Result<()> {
         "#(a|)##(|a)#xx#[|a]#",
     ))
     .await?;
+    // in indentation, back to the previous indent unit
+    test(("        #[x|]#", "i<backspace><esc>", "    #[|x]#")).await?;
+    test(("      #[x|]#", "i<backspace><esc>", "    #[|x]#")).await?;
 
     Ok(())
 }
