@@ -100,20 +100,36 @@ impl<F: FnMut(&mut TextRenderer, LinePos)> Decoration for F {
 #[derive(Default)]
 pub struct DecorationManager<'a> {
     decorations: Vec<(Box<dyn Decoration + 'a>, usize)>,
+    /// The first char idx of the graphemes any decoration is called for
+    next_hook: usize,
 }
 
 impl<'a> DecorationManager<'a> {
     pub fn add_decoration(&mut self, decoration: impl Decoration + 'a) {
         self.decorations.push((Box::new(decoration), 0));
+        self.next_hook = 0;
     }
 
     pub fn prepare_for_rendering(&mut self, first_visible_char: usize) {
         for (decoration, next_position) in &mut self.decorations {
             *next_position = decoration.reset_pos(first_visible_char)
         }
+        self.update_next_hook();
+    }
+
+    fn update_next_hook(&mut self) {
+        self.next_hook = self
+            .decorations
+            .iter()
+            .map(|&(_, hook)| hook)
+            .min()
+            .unwrap_or(usize::MAX);
     }
 
     pub fn decorate_grapheme(&mut self, renderer: &mut TextRenderer, grapheme: &FormattedGrapheme) {
+        if grapheme.char_idx < self.next_hook {
+            return;
+        }
         for (decoration, hook_char_idx) in &mut self.decorations {
             loop {
                 match (*hook_char_idx).cmp(&grapheme.char_idx) {
@@ -131,6 +147,7 @@ impl<'a> DecorationManager<'a> {
                 }
             }
         }
+        self.update_next_hook();
     }
 
     pub fn decorate_line(&mut self, renderer: &mut TextRenderer, pos: LinePos) {
