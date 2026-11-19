@@ -1852,29 +1852,34 @@ impl Document {
         }
 
         // The text before the first change keeps its lines, so the diagnostics there keep theirs,
-        // like the loci a compilation buffer holds above the output appended to it.
+        // like the loci a compilation buffer holds above the output appended to it. The text after
+        // the last change moves by the lines the changes add.
         let first_change = changes
             .changes_iter()
             .next()
             .map_or(usize::MAX, |(from, ..)| from);
+        let unchanged_end = match changes.changes().last() {
+            Some(helix_core::Operation::Retain(len)) => *len,
+            _ => 0,
+        };
+        let last_change_end = self.text.len_chars() - unchanged_end;
+        let added_lines = self.text.len_lines() as isize - old_doc.len_lines() as isize;
         self.diagnostics.retain_mut(|diagnostic| {
             if diagnostic.zero_width {
                 diagnostic.range.end = diagnostic.range.start
             } else if diagnostic.range.start >= diagnostic.range.end {
                 return false;
             }
-            if diagnostic.range.start >= first_change {
+            if diagnostic.range.start >= last_change_end {
+                diagnostic.line = diagnostic.line.saturating_add_signed(added_lines);
+            } else if diagnostic.range.start >= first_change {
                 diagnostic.line = self.text.char_to_line(diagnostic.range.start);
             }
             true
         });
 
-        self.diagnostics.sort_by_key(|diagnostic| {
-            (
-                diagnostic.range,
-                diagnostic.severity,
-                diagnostic.provider.clone(),
-            )
+        self.diagnostics.sort_by(|a, b| {
+            (a.range, a.severity, &a.provider).cmp(&(b.range, b.severity, &b.provider))
         });
 
         // Update the inlay hint annotations' positions, helping ensure they are displayed in the proper place
@@ -1904,26 +1909,17 @@ impl Document {
             apply_inlay_hint_changes(padding_after_inlay_hints);
         }
 
+        let text_len = self.text.len_chars();
         for highlights in self.document_highlights.values_mut() {
-            let text_len = self.text.len_chars();
-            let mut updated = Vec::with_capacity(highlights.ranges.len());
-            for mut range in highlights.ranges.drain(..) {
-                changes.update_positions(
-                    [
-                        (&mut range.start, Assoc::After),
-                        (&mut range.end, Assoc::After),
-                    ]
-                    .into_iter(),
-                );
-                if range.start >= text_len {
-                    continue;
-                }
-                let end = range.end.min(text_len);
-                if range.start < end {
-                    updated.push(range.start..end);
-                }
-            }
-            highlights.ranges = updated;
+            // the ranges are sorted and disjoint, so their ends are mapped in one pass
+            changes.update_positions(highlights.ranges.iter_mut().flat_map(|range| {
+                let std::ops::Range { start, end } = range;
+                [(start, Assoc::After), (end, Assoc::After)]
+            }));
+            highlights.ranges.retain_mut(|range| {
+                range.end = range.end.min(text_len);
+                range.start < range.end
+            });
         }
 
         helix_event::dispatch(DocumentDidChange {
@@ -3184,6 +3180,42 @@ mod test {
         // where the last one starts but not its line.
         assert_eq!(edit(4, 4, "new\n"), [(0, 0), (12, 3)]);
         assert_eq!(edit(0, 3, "o\nn"), [(2, 1), (12, 4)]);
+    }
+
+    #[test]
+    fn several_edits_renumber_the_diagnostics_between_and_after_them() {
+        let mut doc = Document::from(
+            Rope::from("a\nb\nc\nd\ne\n"),
+            None,
+            Arc::new(ArcSwap::new(Arc::new(Config::default()))),
+            Arc::new(ArcSwap::from_pointee(syntax::Loader::default())),
+        );
+        let view = ViewId::default();
+        doc.ensure_view_init(view);
+        let diagnostics = [(2, 1), (6, 3), (8, 4)].map(|(start, line)| Diagnostic {
+            line,
+            ..diagnostic(start, start + 1, DiagnosticProvider::Spelling)
+        });
+        doc.replace_diagnostics(diagnostics, &[], &DiagnosticProvider::Spelling);
+        let changes = [(0, 0, Some("x\n".into())), (4, 4, Some("y\ny\n".into()))];
+        let transaction = Transaction::change(doc.text(), changes.into_iter());
+        doc.apply(&transaction, view);
+        for diag in doc.diagnostics() {
+            assert_eq!(diag.line, doc.text().char_to_line(diag.range.start));
+        }
+        assert_eq!(doc.diagnostics()[2].line, 7);
+    }
+
+    #[test]
+    fn document_highlights_follow_edits() {
+        let (mut doc, view) = doc_in_view("ab cd ef\n");
+        doc.set_document_highlights(view.id, vec![0..2, 3..5, 6..8]);
+        let changes = [(2, 2, Some("zz".into())), (3, 5, None)];
+        let transaction = Transaction::change(doc.text(), changes.into_iter());
+        doc.apply(&transaction, view.id);
+        assert_eq!(doc.text(), "abzz  ef\n");
+        // an insertion at the end of a highlight joins it
+        assert_eq!(doc.document_highlights(view.id), Some(&[0..4, 6..8][..]));
     }
 
     #[test]
