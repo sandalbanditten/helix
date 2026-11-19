@@ -1,8 +1,9 @@
 use std::{
     collections::HashSet,
     iter,
+    ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use dashmap::DashMap;
@@ -101,10 +102,12 @@ impl UriOrDocumentId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Tag {
     kind: TagKind,
     name: String,
+    /// The bytes of the name in the text
+    name_bytes: Range<usize>,
     start: usize,
     end: usize,
     start_line: usize,
@@ -170,6 +173,7 @@ fn tags_iter<'a>(
         return Some(Tag {
             kind,
             name: text.slice(name_start..name_end).to_string(),
+            name_bytes: name_byte_range.start as usize..name_byte_range.end as usize,
             start: def_start,
             end: def_end,
             start_line: text.char_to_line(def_start),
@@ -229,6 +233,8 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
         search_root: PathBuf,
         /// A cache of files that have been parsed in prior searches.
         syntax_cache: DashMap<PathBuf, Option<(Rope, Syntax)>>,
+        /// The tags of the open documents, with their texts, collected for the first search.
+        open_tags: OnceLock<Vec<(Rope, Vec<Tag>)>>,
     }
 
     let mut searcher_builder = SearcherBuilder::new();
@@ -274,6 +280,7 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
         rope_regex_builder,
         search_root,
         syntax_cache: DashMap::default(),
+        open_tags: OnceLock::new(),
     };
     let reg = cx.register.unwrap_or('/');
     cx.editor.registers.last_search_register = reg;
@@ -313,15 +320,28 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
             Err(err) => return async { Err(anyhow::anyhow!(err)) }.boxed(),
         };
         let loader = editor.syn_loader.load();
-        for doc in editor.documents() {
-            let Some(syntax) = doc.syntax() else { continue };
-            let text = doc.text().slice(..);
-            let uri_or_id = doc
-                .uri()
-                .map(UriOrDocumentId::Uri)
-                .unwrap_or_else(|| UriOrDocumentId::Id(doc.id()));
-            for tag in tags_iter(syntax, &loader, text.slice(..), uri_or_id, Some(&pattern)) {
-                if injector.push(tag).is_err() {
+        let open_tags = state.open_tags.get_or_init(|| {
+            editor
+                .documents()
+                .filter_map(|doc| {
+                    let syntax = doc.syntax()?;
+                    let uri_or_id = doc
+                        .uri()
+                        .map(UriOrDocumentId::Uri)
+                        .unwrap_or_else(|| UriOrDocumentId::Id(doc.id()));
+                    let text = doc.text().slice(..);
+                    let tags = tags_iter(syntax, &loader, text, uri_or_id, None).collect();
+                    Some((doc.text().clone(), tags))
+                })
+                .collect()
+        });
+        for (text, tags) in open_tags {
+            let text = text.slice(..);
+            for tag in tags {
+                if !pattern.is_match(text.regex_input_at_bytes(tag.name_bytes.clone())) {
+                    continue;
+                }
+                if injector.push(tag.clone()).is_err() {
                     return async { Ok(()) }.boxed();
                 }
             }
