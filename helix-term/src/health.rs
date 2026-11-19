@@ -217,7 +217,7 @@ fn languages(selection: Option<HashSet<String>>) -> std::io::Result<()> {
     let fit = |s: &str| -> Stylized<'static> {
         format!(
             "{:column_width$}",
-            s.get(..column_width - 2)
+            s.get(..column_width.saturating_sub(2))
                 .map(|s| format!("{}…", s))
                 .unwrap_or_else(|| s.to_string())
         )
