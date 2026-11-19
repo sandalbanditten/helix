@@ -1294,8 +1294,19 @@ pub struct OverlayHighlighter {
 }
 
 impl OverlayHighlighter {
-    pub fn new(overlays: impl IntoIterator<Item = OverlayHighlights>) -> Self {
-        let overlays: Vec<_> = overlays.into_iter().filter_map(Overlay::new).collect();
+    /// Highlights from the char index `start` on: the ranges that end before it are skipped.
+    pub fn new(overlays: impl IntoIterator<Item = OverlayHighlights>, start: usize) -> Self {
+        let mut overlays: Vec<_> = overlays.into_iter().filter_map(Overlay::new).collect();
+        for overlay in &mut overlays {
+            overlay.idx = match &overlay.highlights {
+                OverlayHighlights::Homogeneous { ranges, .. } => {
+                    ranges.partition_point(|range| range.end <= start)
+                }
+                OverlayHighlights::Heterogenous { highlights } => {
+                    highlights.partition_point(|(_, range)| range.end <= start)
+                }
+            };
+        }
         let next_highlight_start = overlays
             .iter()
             .filter_map(|overlay| overlay.start())
@@ -1902,6 +1913,19 @@ mod test {
         // The query used in this test case only captures the first line_comment node.
         // Determine if this behavior is intentional in tree-sitter.
         // test("multiple_nodes_grouped", 1..37);
+    }
+
+    #[test]
+    fn overlay_highlights_from_a_start() {
+        let overlays = OverlayHighlights::Homogeneous {
+            highlight: Highlight::new(0),
+            ranges: vec![0..2, 4..8, 10..12],
+        };
+        // 0..2 ends before the start, 4..8 goes on past it
+        let mut highlighter = OverlayHighlighter::new([overlays], 6);
+        assert_eq!(highlighter.next_event_offset(), 4);
+        assert_eq!(highlighter.advance().1.count(), 1);
+        assert_eq!(highlighter.next_event_offset(), 8);
     }
 
     #[test]

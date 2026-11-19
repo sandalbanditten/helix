@@ -114,7 +114,8 @@ pub fn render_text<'a>(
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, text_annotations, anchor);
     let mut syntax_highlighter =
         SyntaxHighlighter::new(syntax_highlighting, text, theme, renderer.text_style);
-    let mut overlay_highlighter = OverlayHighlighter::new(overlay_highlights, theme);
+    let mut overlay_highlighter =
+        OverlayHighlighter::new(overlay_highlights, formatter.next_char_pos(), theme);
     let mut span_styler = SpanStyler {
         spans: style_spans,
         next: 0,
@@ -749,8 +750,8 @@ struct OverlayHighlighter<'t> {
 }
 
 impl<'t> OverlayHighlighter<'t> {
-    fn new(overlays: Vec<OverlayHighlights>, theme: &'t Theme) -> Self {
-        let inner = syntax::OverlayHighlighter::new(overlays);
+    fn new(overlays: Vec<OverlayHighlights>, start: usize, theme: &'t Theme) -> Self {
+        let inner = syntax::OverlayHighlighter::new(overlays, start);
         let mut highlighter = Self {
             inner,
             pos: 0,

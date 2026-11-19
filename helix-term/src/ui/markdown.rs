@@ -62,7 +62,7 @@ pub fn highlighted_code_block<'a>(
     let mut syntax_highlighter = syntax.highlighter(ropeslice, loader, ..);
     let mut syntax_highlight_stack = Vec::new();
     let mut overlay_highlight_stack = Vec::new();
-    let mut overlay_highlighter = syntax::OverlayHighlighter::new(additional_highlight_spans);
+    let mut overlay_highlighter = syntax::OverlayHighlighter::new(additional_highlight_spans, 0);
     let mut pos = 0;
 
     while pos < ropeslice.len_bytes() as u32 {
