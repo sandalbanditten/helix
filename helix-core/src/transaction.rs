@@ -450,12 +450,13 @@ impl ChangeSet {
                         let Some((pos, assoc)) = positions.peek_mut() else {
                             return;
                         };
-                        if **pos < old_pos {
+                        // an insertion at `old_pos` that was passed maps positions there too
+                        let passed_insert =
+                            **pos == old_pos && $i > 0 && matches!(self.changes[$i - 1], Insert(_));
+                        if **pos < old_pos || passed_insert {
                             // Positions are not sorted, revert to the last Operation that
-                            // contains this position and continue iterating from there.
-                            // We can unwrap here since `pos` can not be negative
-                            // (unsigned integer) and iterating backwards to the start
-                            // should always move us back to the start
+                            // contains this position and continue iterating from there. An
+                            // insertion right before it maps positions at its start too.
                             for (i, change) in self.changes[..$i].iter().enumerate().rev() {
                                 match change {
                                     Retain(i) => {
@@ -469,12 +470,17 @@ impl ChangeSet {
                                         new_pos -= ins.chars().count();
                                     }
                                 }
-                                if old_pos <= **pos {
-                                    iter = self.changes[i..].iter().enumerate().peekable();
+                                let after_insert =
+                                    i > 0 && matches!(self.changes[i - 1], Insert(_));
+                                if old_pos <= **pos && !after_insert {
+                                    iter = self.changes.iter().enumerate().peekable();
+                                    if i > 0 {
+                                        iter.nth(i - 1);
+                                    }
+                                    continue 'outer;
                                 }
                             }
-                            debug_assert!(old_pos <= **pos, "Reverse Iter across changeset works");
-                            continue 'outer;
+                            unreachable!("the first operation starts at 0");
                         }
                         #[allow(clippy::redundant_closure_call)]
                         let Some(new_pos) = $map(**pos, *assoc) else {
@@ -1190,6 +1196,50 @@ mod test {
         };
         assert_eq!(cs.map_pos(2, Assoc::BeforeWord), 1);
         assert_eq!(cs.map_pos(4, Assoc::AfterWord), 4);
+    }
+
+    #[test]
+    fn update_unsorted_positions() {
+        // a small deterministic generator, as positions out of order take rare paths
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut random = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _ in 0..500 {
+            let doc = Rope::from("abcdefghijklmnopqrst");
+            let mut changes = Vec::new();
+            let mut pos = 0;
+            while pos < doc.len_chars() {
+                let from = (pos + random(4)).min(doc.len_chars());
+                let to = (from + random(3)).min(doc.len_chars());
+                let insert = ["", "x", "yz"][random(3)];
+                changes.push((from, to, (!insert.is_empty()).then(|| insert.into())));
+                pos = to + 1;
+            }
+            let changes = Transaction::change(&doc, changes.into_iter())
+                .changes()
+                .clone();
+            for assoc in [
+                Assoc::Before,
+                Assoc::After,
+                Assoc::BeforeWord,
+                Assoc::AfterWord,
+                Assoc::BeforeSticky,
+                Assoc::AfterSticky,
+            ] {
+                let mut positions: Vec<_> = (0..12).map(|_| random(21)).collect();
+                let original = positions.clone();
+                let expected: Vec<_> = positions
+                    .iter()
+                    .map(|&pos| changes.map_pos(pos, assoc))
+                    .collect();
+                changes.update_positions(positions.iter_mut().map(|pos| (pos, assoc)));
+                assert_eq!(positions, expected, "{changes:?} {assoc:?} {original:?}");
+            }
+        }
     }
 
     #[test]
