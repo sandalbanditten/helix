@@ -124,16 +124,20 @@ impl AsyncHook for SpellingHook {
     }
 
     fn finish_debounce(&mut self) {
-        for (doc, mut change) in self.changes.drain() {
-            if change.dirty {
-                change.changes = compare_ropes(&change.old_text, &change.text)
-                    .changes()
-                    .clone();
-            }
-            let changes = change.changes;
-            let version = change.version;
-            job::dispatch_blocking(move |editor, _| {
-                recheck_document(editor, doc, changes, version);
+        for (doc, change) in self.changes.drain() {
+            // diffing a coalesced change of a large document takes a while
+            tokio::task::spawn_blocking(move || {
+                let changes = if change.dirty {
+                    compare_ropes(&change.old_text, &change.text)
+                        .changes()
+                        .clone()
+                } else {
+                    change.changes
+                };
+                let version = change.version;
+                job::dispatch_blocking(move |editor, _| {
+                    recheck_document(editor, doc, changes, version);
+                });
             });
         }
     }
