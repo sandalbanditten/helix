@@ -603,6 +603,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
         match path_or_id {
             PathOrId::Path(path) => {
+                // pickers may list paths relative to the working directory
+                let path = helix_stdx::path::canonicalize(path);
+                let path = path.as_path();
                 if let Some(doc) = editor.document_by_path(path) {
                     return Some((Preview::EditorDocument(doc), range));
                 }
