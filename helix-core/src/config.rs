@@ -47,8 +47,14 @@ pub fn user_lang_config(trust: &WorkspaceTrust) -> Result<Configuration, toml::d
 pub fn user_lang_loader(trust: &WorkspaceTrust) -> Result<Loader, LanguageLoaderError> {
     let config_val = helix_loader::config::user_lang_config(trust)
         .map_err(LanguageLoaderError::DeserializeError)?;
-    let config = config_val.clone().try_into().map_err(|e| {
-        if let Some(languages) = config_val.get("language").and_then(|v| v.as_array()) {
+    let config = config_val.try_into().map_err(|e| {
+        // read anew to find the language that failed, instead of keeping a copy of the config
+        let config_val = helix_loader::config::user_lang_config(trust).ok();
+        if let Some(languages) = config_val
+            .as_ref()
+            .and_then(|v| v.get("language"))
+            .and_then(|v| v.as_array())
+        {
             for lang in languages.iter() {
                 let res: Result<LanguageConfiguration, _> = lang.clone().try_into();
                 if let Err(inner_err) = res {

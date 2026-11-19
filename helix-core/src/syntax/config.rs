@@ -731,7 +731,13 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<String>::deserialize(deserializer)?
-        .map(|buf| rope::Regex::new(&buf).map_err(serde::de::Error::custom))
+        .map(|buf| {
+            // Injection regexes only match names, for which building full DFAs at startup doesn't pay
+            rope::Regex::builder()
+                .configure(rope::Regex::config().dfa(false))
+                .build(&buf)
+                .map_err(serde::de::Error::custom)
+        })
         .transpose()
 }
 
