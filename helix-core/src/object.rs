@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{movement::Direction, syntax::TreeCursor, Range, RopeSlice, Selection, Syntax};
 
 pub fn expand_selection(syntax: &Syntax, text: RopeSlice, selection: Selection) -> Selection {
@@ -54,11 +56,16 @@ pub fn select_next_sibling(syntax: &Syntax, text: RopeSlice, selection: Selectio
 
 pub fn select_all_siblings(syntax: &Syntax, text: RopeSlice, selection: Selection) -> Selection {
     let mut cursor = syntax.walk();
+    // The children of a parent are selected once: a range in one of them merges into it, where
+    // selecting them all for each range would make as many ranges as their product.
+    let mut parents = HashSet::new();
     selection.transform_iter(move |range| {
         let (from, to) = range.into_byte_range(text);
         cursor.reset_to_byte_range(from as u32, to as u32);
 
-        if !cursor.goto_parent_with(|parent| parent.child_count() > 1) {
+        if !cursor.goto_parent_with(|parent| parent.child_count() > 1)
+            || !parents.insert(cursor.node().id())
+        {
             return vec![range].into_iter();
         }
 

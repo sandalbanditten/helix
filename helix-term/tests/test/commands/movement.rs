@@ -464,6 +464,16 @@ async fn select_all_siblings() -> anyhow::Result<()> {
                 let foo = bar(#[a|]#, #(b|)#, #(c|)#);
             "##},
         ),
+        // siblings already selected stay so
+        (
+            indoc! {r##"
+                let foo = bar(#[a|]#, b, c);
+            "##},
+            "<A-a><A-a>",
+            indoc! {r##"
+                let foo = bar(#[a|]#, #(b|)#, #(c|)#);
+            "##},
+        ),
         (
             indoc! {r##"
                 let a = [
