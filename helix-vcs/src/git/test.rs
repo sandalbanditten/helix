@@ -76,6 +76,24 @@ fn unmodified_file() {
 }
 
 #[test]
+fn diff_base_follows_gitattributes() {
+    let temp_git = empty_git_repo();
+    let dir = temp_git.path().join("dir");
+    std::fs::create_dir(&dir).unwrap();
+    File::create(dir.join(".gitattributes"))
+        .unwrap()
+        .write_all(b"*.txt text eol=crlf\n")
+        .unwrap();
+    let file = dir.join("file.txt");
+    File::create(&file)
+        .unwrap()
+        .write_all(b"a\r\nb\r\n")
+        .unwrap();
+    create_commit(temp_git.path(), true);
+    assert_eq!(git::get_diff_base(&file, true).unwrap(), b"a\r\nb\r\n");
+}
+
+#[test]
 fn modified_file() {
     let temp_git = empty_git_repo();
     let file = temp_git.path().join("file.txt");

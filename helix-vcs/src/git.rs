@@ -97,7 +97,13 @@ fn committed_version(repo: &Repository, file: &Path) -> Result<Vec<u8>> {
     if let Some(work_dir) = repo.workdir() {
         let rela_path = file.strip_prefix(work_dir)?;
         let rela_path = gix::path::try_into_bstr(rela_path)?;
-        let (mut pipeline, _) = repo.filter_pipeline(None)?;
+        // Like `filter_pipeline`, but with the attributes of the worktree alone, which skips
+        // reading and checking the whole index: it can be tens of MB in a big repository.
+        let attributes = repo.attributes_only(
+            &gix::index::State::new(repo.object_hash()),
+            gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+        )?;
+        let mut pipeline = gix::filter::Pipeline::new(repo, attributes.detach())?;
         let mut worktree_outcome =
             pipeline.convert_to_worktree(&data, rela_path.as_ref(), Delay::Forbid)?;
         let mut buf = Vec::with_capacity(data.len());
