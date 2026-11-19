@@ -1,4 +1,5 @@
 use std::iter::Peekable;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use helix_core::Rope;
@@ -41,6 +42,7 @@ pub struct DiffHandle {
     channel: UnboundedSender<Event>,
     diff: Arc<RwLock<DiffInner>>,
     inverted: bool,
+    slow: Arc<AtomicBool>,
 }
 
 impl DiffHandle {
@@ -51,17 +53,20 @@ impl DiffHandle {
     fn new_with_handle(diff_base: Rope, doc: Rope) -> (DiffHandle, JoinHandle<()>) {
         let (sender, receiver) = unbounded_channel();
         let diff: Arc<RwLock<DiffInner>> = Arc::default();
+        let slow = Arc::<AtomicBool>::default();
         let worker = DiffWorker {
             channel: receiver,
             diff: diff.clone(),
             diff_finished_notify: Arc::default(),
             diff_alloc: imara_diff::Diff::default(),
+            slow: slow.clone(),
         };
         let handle = tokio::spawn(worker.run(diff_base, doc));
         let differ = DiffHandle {
             channel: sender,
             diff,
             inverted: false,
+            slow,
         };
         (differ, handle)
     }
@@ -83,6 +88,10 @@ impl DiffHandle {
     /// This function is only intended to be called from within the rendering loop
     /// if called from elsewhere it may fail to acquire the render lock and panic
     pub fn update_document(&self, doc: Rope, block: bool) -> bool {
+        // frames would wait for slow diffs while typing, so these update the gutter after them
+        if !block && self.slow.load(Ordering::Relaxed) {
+            return self.update_document_impl(doc, self.inverted, None);
+        }
         let lock = helix_event::lock_frame();
         let timeout = if block {
             None

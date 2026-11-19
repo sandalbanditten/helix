@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use helix_core::{Rope, RopeSlice};
 use imara_diff::{IndentHeuristic, IndentLevel, InternedInput};
@@ -9,6 +11,7 @@ use tokio::time::{timeout, timeout_at, Duration};
 
 use crate::diff::{
     DiffInner, Event, RenderLock, ALGORITHM, DIFF_DEBOUNCE_TIME_ASYNC, DIFF_DEBOUNCE_TIME_SYNC,
+    SYNC_DIFF_TIMEOUT,
 };
 
 use super::line_cache::InternedRopeLines;
@@ -21,6 +24,8 @@ pub(super) struct DiffWorker {
     pub diff: Arc<RwLock<DiffInner>>,
     pub diff_finished_notify: Arc<Notify>,
     pub diff_alloc: imara_diff::Diff,
+    /// Whether the last diff took longer than rendering waits for one
+    pub slow: Arc<AtomicBool>,
 }
 
 impl DiffWorker {
@@ -34,14 +39,17 @@ impl DiffWorker {
     }
 
     pub async fn run(mut self, diff_base: Rope, doc: Rope) {
+        let start = Instant::now();
         let mut interner = InternedRopeLines::new(diff_base, doc);
         if let Some(lines) = interner.interned_lines() {
             self.perform_diff(lines);
         }
+        self.time(start);
         self.apply_hunks(interner.diff_base(), interner.doc());
         while let Some(event) = self.channel.recv().await {
             let (doc, diff_base) = self.accumulate_events(event).await;
 
+            let start = Instant::now();
             let process_accumulated_events = || {
                 if let Some(new_base) = diff_base {
                     interner.update_diff_base(new_base, doc)
@@ -62,8 +70,14 @@ impl DiffWorker {
             #[cfg(not(test))]
             tokio::task::block_in_place(process_accumulated_events);
 
+            self.time(start);
             self.apply_hunks(interner.diff_base(), interner.doc());
         }
+    }
+
+    fn time(&self, start: Instant) {
+        let slow = start.elapsed() > Duration::from_millis(SYNC_DIFF_TIMEOUT);
+        self.slow.store(slow, Ordering::Relaxed);
     }
 
     /// update the hunks (used by the gutter) by replacing it with `self.new_hunks`.
@@ -164,8 +178,9 @@ impl EventAccumulator {
             // diff is performed outside of the rendering loop
             // request a redraw after the diff is done
             None => {
+                let notified = diff_finished_notify.notified_owned();
                 tokio::spawn(async move {
-                    diff_finished_notify.notified().await;
+                    notified.await;
                     helix_event::request_redraw();
                 });
             }
@@ -175,12 +190,15 @@ impl EventAccumulator {
                 lock,
                 timeout: Some(timeout),
             }) => {
+                // waits for the diff from now, also if it finishes before the task runs
+                let notified = diff_finished_notify.notified_owned();
                 tokio::spawn(async move {
+                    tokio::pin!(notified);
                     let res = {
                         // Acquire a lock on the redraw handle.
                         // The lock will block the rendering from occurring while held.
                         // The rendering waits for the diff if it doesn't time out
-                        timeout_at(timeout, diff_finished_notify.notified()).await
+                        timeout_at(timeout, notified.as_mut()).await
                     };
                     // we either reached the timeout or the diff is finished, release the render lock
                     drop(lock);
@@ -191,7 +209,7 @@ impl EventAccumulator {
                     // Diff failed to complete in time log the event
                     // and wait until the diff occurs to trigger an async redraw
                     log::info!("Diff computation timed out, update of diffs might appear delayed");
-                    diff_finished_notify.notified().await;
+                    notified.await;
                     helix_event::request_redraw()
                 });
             }
@@ -201,8 +219,9 @@ impl EventAccumulator {
                 lock,
                 timeout: None,
             }) => {
+                let notified = diff_finished_notify.notified_owned();
                 tokio::spawn(async move {
-                    diff_finished_notify.notified().await;
+                    notified.await;
                     // diff is done release the lock
                     drop(lock)
                 });

@@ -143,3 +143,18 @@ async fn update_base() {
         ]
     )
 }
+
+#[tokio::test]
+async fn slow_diffs_dont_hold_up_frames() {
+    let diff_time = |text: &str| {
+        let (differ, handle) = DiffHandle::new_test(text, text);
+        let slow = differ.slow.clone();
+        async move {
+            differ.into_diff(handle).await;
+            slow.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    };
+    let long: String = (0..300_000).map(|i| format!("{i}\n")).collect();
+    assert!(diff_time(&long).await);
+    assert!(!diff_time("foo\n").await);
+}
