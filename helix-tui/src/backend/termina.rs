@@ -546,7 +546,7 @@ impl Backend for TerminaBackend {
                 )?;
             }
 
-            write!(self.terminal, "{}", &cell.symbol)?;
+            self.terminal.write_all(cell.symbol.as_bytes())?;
         }
 
         write!(self.terminal, "{}", Csi::Sgr(csi::Sgr::Reset))?;
