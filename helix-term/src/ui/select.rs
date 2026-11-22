@@ -71,12 +71,12 @@ impl<T: Item> Component for Select<T> {
         let max_width = 80.min(((area.width as u32) * 80u32 / 100) as u16);
         let (message_width, message_height) =
             super::text::required_size(&self.message.contents, max_width);
-        let (_, menu_height) = self
+        let (menu_width, menu_height) = self
             .options
             .required_size((max_width, area.height))
             .unwrap();
         // + 2 for borders and another + 2 for horizontal padding
-        let width = message_width + 4;
+        let width = (message_width + 4).max(menu_width).min(area.width);
         let height = message_height + 2 + menu_height;
         let area = Rect {
             x: (area.width / 2) - width / 2,
