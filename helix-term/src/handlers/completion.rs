@@ -7,6 +7,7 @@ use helix_event::{register_hook, TaskHandle};
 use helix_lsp::lsp;
 use helix_stdx::rope::RopeSliceExt;
 use helix_view::document::Mode;
+use helix_view::editor::CompleteAction;
 use helix_view::handlers::completion::{CompletionEvent, ResponseContext};
 use helix_view::Editor;
 use tokio::task::JoinSet;
@@ -62,7 +63,7 @@ async fn replace_completions(
                 return;
             }
 
-            completion.replace_provider_completions(&mut response, is_incomplete);
+            completion.replace_provider_completions(editor, &mut response, is_incomplete);
             if completion.is_empty() {
                 editor_view.clear_completion(editor);
                 // clearing completions might mean we want to immediately re-request them (usually
@@ -121,30 +122,13 @@ pub fn trigger_auto_completion(editor: &Editor, trigger_char_only: bool) {
         return;
     }
     let (view, doc): (&helix_view::View, &helix_view::Document) = current_ref!(editor);
-    let mut text = doc.text().slice(..);
-    let cursor = doc.selection(view.id).primary().cursor(text);
-    text = doc.text().slice(..cursor);
-
-    let is_trigger_char = doc
-        .language_servers_with_feature(LanguageServerFeature::Completion)
-        .any(|ls| {
-            matches!(&ls.capabilities().completion_provider, Some(lsp::CompletionOptions {
-                        trigger_characters: Some(triggers),
-                        ..
-                    }) if triggers.iter().any(|trigger| text.ends_with(trigger)))
-        });
-
-    let cursor_char = text
-        .get_bytes_at(text.len_bytes())
-        .and_then(|t| t.reversed().next());
-
-    #[cfg(windows)]
-    let is_path_completion_trigger = matches!(cursor_char, Some(b'/' | b'\\'));
-    #[cfg(not(windows))]
-    let is_path_completion_trigger = matches!(cursor_char, Some(b'/'));
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc.text().slice(..));
 
     let handler = &editor.handlers.completions;
-    if is_trigger_char || (is_path_completion_trigger && doc.path_completion_enabled()) {
+    if ends_with_trigger(editor) {
         handler.event(CompletionEvent::TriggerChar {
             cursor,
             doc: doc.id(),
@@ -170,12 +154,47 @@ pub fn trigger_auto_completion(editor: &Editor, trigger_char_only: bool) {
     }
 }
 
+/// Whether the text before the cursor ends with a character that triggers completion.
+fn ends_with_trigger(editor: &Editor) -> bool {
+    let (view, doc): (&helix_view::View, &helix_view::Document) = current_ref!(editor);
+    let mut text = doc.text().slice(..);
+    let cursor = doc.selection(view.id).primary().cursor(text);
+    text = doc.text().slice(..cursor);
+
+    let is_trigger_char = doc
+        .language_servers_with_feature(LanguageServerFeature::Completion)
+        .any(|ls| {
+            matches!(&ls.capabilities().completion_provider, Some(lsp::CompletionOptions {
+                        trigger_characters: Some(triggers),
+                        ..
+                    }) if triggers.iter().any(|trigger| text.ends_with(trigger)))
+        });
+
+    let cursor_char = text
+        .get_bytes_at(text.len_bytes())
+        .and_then(|t| t.reversed().next());
+
+    #[cfg(windows)]
+    let is_path_completion_trigger = matches!(cursor_char, Some(b'/' | b'\\'));
+    #[cfg(not(windows))]
+    let is_path_completion_trigger = matches!(cursor_char, Some(b'/'));
+
+    is_trigger_char || (is_path_completion_trigger && doc.path_completion_enabled())
+}
+
 fn update_completion_filter(cx: &mut commands::Context, c: Option<char>) {
     cx.callback.push(Box::new(move |compositor, cx| {
         let editor_view = compositor.find::<ui::EditorView>().unwrap();
         if let Some(completion) = &mut editor_view.completion {
             completion.update_filter(c);
-            if completion.is_empty() || c.is_some_and(|c| !char_is_word(c)) {
+            // Items matching past other characters, like names with spaces, keep the menu open
+            // until a selected item is accepted or a trigger character asks for new ones.
+            let restart = c.is_some_and(|c| {
+                !char_is_word(c)
+                    && (!matches!(cx.editor.last_completion, Some(CompleteAction::Triggered))
+                        || ends_with_trigger(cx.editor))
+            });
+            if completion.is_empty() || restart {
                 editor_view.clear_completion(cx.editor);
                 // clearing completions might mean we want to immediately rerequest them (usually
                 // this occurs if typing a trigger char)

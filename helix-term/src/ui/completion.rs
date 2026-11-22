@@ -6,9 +6,10 @@ use crate::{
         trigger_auto_completion, CompletionItem, CompletionResponse, ResolveHandler,
     },
 };
+use helix_core::completion::CompletionProvider;
 use helix_core::snippets::{ActiveSnippet, RenderedSnippet, Snippet};
 use helix_core::{self as core, chars, fuzzy::MATCHER, Change, Transaction};
-use helix_lsp::{lsp, util, OffsetEncoding};
+use helix_lsp::{lsp, util, LanguageServerId, OffsetEncoding};
 use helix_view::{
     editor::CompleteAction,
     handlers::lsp::SignatureHelpInvoked,
@@ -24,6 +25,7 @@ use tui::text::Spans;
 use tui::{buffer::Buffer as Surface, text::Span};
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 impl menu::Item for CompletionItem {
     type Data = Style;
@@ -121,11 +123,69 @@ pub struct Completion {
     popup: Popup<Menu<CompletionItem>>,
     #[allow(dead_code)]
     trigger_offset: usize,
-    filter: String,
+    filter: Filter,
     // TODO: move to helix-view/central handler struct in the future
     resolve_handler: ResolveHandler,
     /// The documentation of the selected item, kept while it doesn't change
     doc: Option<Markdown>,
+}
+
+/// The text before the cursor that items are filtered with.
+struct Filter {
+    /// The cursor's line up to the cursor.
+    text: String,
+    line: usize,
+    /// Where the word before the cursor started when the menu opened.
+    word_start: usize,
+    /// The offset encodings of the items' language servers.
+    encodings: HashMap<LanguageServerId, OffsetEncoding>,
+}
+
+impl Filter {
+    /// Where in `text` the text `item` is filtered with starts, or `None` once the cursor is
+    /// before it. Per the LSP spec, an item's edit range denotes the word to filter with, which
+    /// may reach before the word, like a name with spaces.
+    fn start(&self, item: &CompletionItem) -> Option<usize> {
+        let word = (self.word_start <= self.text.len()).then_some(self.word_start);
+        let CompletionItem::Lsp(item) = item else {
+            return word;
+        };
+        let start = match &item.item.text_edit {
+            Some(lsp::CompletionTextEdit::Edit(edit)) => edit.range.start,
+            Some(lsp::CompletionTextEdit::InsertAndReplace(edit)) => edit.insert.start,
+            None => return word,
+        };
+        let Some(encoding) = self.encodings.get(&item.provider) else {
+            return word;
+        };
+        if start.line as usize != self.line {
+            return word;
+        }
+        let mut units = 0;
+        for (i, c) in self.text.char_indices() {
+            if units >= start.character as usize {
+                return Some(i);
+            }
+            units += match encoding {
+                OffsetEncoding::Utf8 => c.len_utf8(),
+                OffsetEncoding::Utf16 => c.len_utf16(),
+                OffsetEncoding::Utf32 => 1,
+            };
+        }
+        (units >= start.character as usize).then_some(self.text.len())
+    }
+}
+
+fn add_encoding(
+    encodings: &mut HashMap<LanguageServerId, OffsetEncoding>,
+    editor: &Editor,
+    provider: CompletionProvider,
+) {
+    if let CompletionProvider::Lsp(id) = provider {
+        if let Some(server) = editor.language_servers.get_by_id(id) {
+            encodings.insert(id, server.offset_encoding());
+        }
+    }
 }
 
 impl Completion {
@@ -136,6 +196,10 @@ impl Completion {
         let replace_mode = editor.config().completion_replace;
 
         let dir_style = editor.theme.get("ui.text.directory");
+        let mut encodings = HashMap::new();
+        for item in &items {
+            add_encoding(&mut encodings, editor, item.provider());
+        }
 
         // Then create the menu
         let menu = Menu::new(items, dir_style, move |editor: &mut Editor, item, event| {
@@ -299,6 +363,8 @@ impl Completion {
         let (view, doc) = current_ref!(editor);
         let text = doc.text().slice(..);
         let cursor = doc.selection(view.id).primary().cursor(text);
+        let line = text.char_to_line(cursor);
+        let line_start = text.line_to_char(line);
         let offset = text
             .chars_at(cursor)
             .reversed()
@@ -306,13 +372,17 @@ impl Completion {
             .count();
         let start_offset = cursor.saturating_sub(offset);
 
-        let fragment = doc.text().slice(start_offset..cursor);
         let mut completion = Self {
             popup,
             trigger_offset,
             // TODO: expand nucleo api to allow moving straight to a Utf32String here
             // and avoid allocation during matching
-            filter: String::from(fragment),
+            filter: Filter {
+                text: String::from(text.slice(line_start..cursor)),
+                line,
+                word_start: text.slice(line_start..start_offset).len_bytes(),
+                encodings,
+            },
             resolve_handler: ResolveHandler::new(),
             doc: None,
         };
@@ -324,56 +394,68 @@ impl Completion {
     }
 
     fn score(&mut self, incremental: bool) {
-        let pattern = &self.filter;
+        let filter = &self.filter;
         let mut matcher = MATCHER.lock();
         matcher.config = Config::DEFAULT;
         // slight preference towards prefix matches
         matcher.config.prefer_prefix = true;
-        let pattern = Atom::new(
-            pattern,
-            CaseMatching::Ignore,
-            Normalization::Smart,
-            AtomKind::Fuzzy,
-            false,
-        );
+        // The pattern and minimum score (see below) of each start of the text items match
+        let mut patterns: Vec<(usize, Atom, u32)> = Vec::new();
         let mut buf = Vec::new();
         let (matches, options) = self.popup.contents_mut().update_matches();
-        if incremental {
-            matches.retain_mut(|(index, score)| {
-                let option = &options[*index as usize];
-                let text = option.filter_text();
-                let new_score = pattern.score(Utf32Str::new(text, &mut buf), &mut matcher);
-                match new_score {
-                    Some(new_score) => {
-                        *score = new_score as u32 / 2;
-                        true
-                    }
-                    None => false,
+        let mut min_scores = vec![0; options.len()];
+        let mut score_of = |i: usize| {
+            let option = &options[i];
+            let start = filter.start(option)?;
+            let pattern = match patterns.iter().position(|&(s, ..)| s == start) {
+                Some(pattern) => &patterns[pattern],
+                None => {
+                    let pattern = Atom::new(
+                        &filter.text[start..],
+                        CaseMatching::Ignore,
+                        Normalization::Smart,
+                        AtomKind::Fuzzy,
+                        false,
+                    );
+                    // Nucleo is meant as an FZF-like fuzzy matcher and only hides matches that
+                    // are truly impossible - as in the sequence of characters just doesn't
+                    // appear. That doesn't work well for completions with multiple language
+                    // servers where all completions of the next server are below the current
+                    // one (so you would get good suggestions from the second server below those
+                    // of the first). Setting a reasonable cutoff below which to move bad
+                    // completions out of the way helps with that.
+                    //
+                    // The score computation is a heuristic derived from Nucleo internal
+                    // constants that may move upstream in the future. I want to test this out
+                    // here to settle on a good number.
+                    let min_score = (7 + pattern.needle_text().len() as u32 * 14) / 3;
+                    patterns.push((start, pattern, min_score));
+                    patterns.last().unwrap()
                 }
+            };
+            min_scores[i] = pattern.2;
+            let text = option.filter_text();
+            pattern
+                .1
+                .score(Utf32Str::new(text, &mut buf), &mut matcher)
+                .map(u32::from)
+        };
+        if incremental {
+            matches.retain_mut(|(index, score)| match score_of(*index as usize) {
+                Some(new_score) => {
+                    *score = new_score / 2;
+                    true
+                }
+                None => false,
             })
         } else {
             matches.clear();
-            matches.extend(options.iter().enumerate().filter_map(|(i, option)| {
-                let text = option.filter_text();
-                pattern
-                    .score(Utf32Str::new(text, &mut buf), &mut matcher)
-                    .map(|score| (i as u32, score as u32 / 3))
-            }));
+            matches.extend((0..options.len()).filter_map(|i| Some((i as u32, score_of(i)? / 3))));
         }
-        // Nucleo is meant as an FZF-like fuzzy matcher and only hides matches that are truly
-        // impossible - as in the sequence of characters just doesn't appear. That doesn't work
-        // well for completions with multiple language servers where all completions of the next
-        // server are below the current one (so you would get good suggestions from the second
-        // server below those of the first). Setting a reasonable cutoff below which to move bad
-        // completions out of the way helps with that.
-        //
-        // The score computation is a heuristic derived from Nucleo internal constants that may
-        // move upstream in the future. I want to test this out here to settle on a good number.
-        let min_score = (7 + pattern.needle_text().len() as u32 * 14) / 3;
         matches.sort_unstable_by_key(|&(i, score)| {
             let option = &options[i as usize];
             (
-                score <= min_score,
+                score <= min_scores[i as usize],
                 Reverse(option.preselect()),
                 option.provider_priority(),
                 Reverse(score),
@@ -414,10 +496,17 @@ impl Completion {
         // recompute menu based on matches
         let menu = self.popup.contents_mut();
         match c {
-            Some(c) => self.filter.push(c),
+            Some(c) => self.filter.text.push(c),
             None => {
-                self.filter.pop();
-                if self.filter.is_empty() {
+                self.filter.text.pop();
+                let (_, options) = menu.update_matches();
+                let filter = &self.filter;
+                let empty = |item| {
+                    filter
+                        .start(item)
+                        .is_none_or(|start| start == filter.text.len())
+                };
+                if options.iter().all(empty) {
                     menu.clear();
                     return;
                 }
@@ -429,9 +518,11 @@ impl Completion {
 
     pub fn replace_provider_completions(
         &mut self,
+        editor: &Editor,
         response: &mut CompletionResponse,
         is_incomplete: bool,
     ) {
+        add_encoding(&mut self.filter.encodings, editor, response.provider);
         let menu = self.popup.contents_mut();
         let (_, options) = menu.update_options();
         if is_incomplete {
@@ -666,4 +757,47 @@ fn completion_changes(transaction: &Transaction, trigger_offset: usize) -> Vec<C
         .changes_iter()
         .filter(|(start, end, _)| (*start..=*end).contains(&trigger_offset))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_items_from_their_edits() {
+        let id = LanguageServerId::default();
+        let filter = Filter {
+            text: "é [[Some No".into(),
+            line: 3,
+            word_start: "é [[Some ".len(),
+            encodings: HashMap::from([(id, OffsetEncoding::Utf16)]),
+        };
+        let item = |start: Option<(u32, u32)>| {
+            let edit = start.map(|(line, character)| {
+                let range = lsp::Range::new(
+                    lsp::Position::new(line, character),
+                    lsp::Position::new(line, 11),
+                );
+                lsp::CompletionTextEdit::Edit(lsp::TextEdit::new(range, String::new()))
+            });
+            CompletionItem::Lsp(LspCompletionItem {
+                item: lsp::CompletionItem {
+                    text_edit: edit,
+                    ..Default::default()
+                },
+                provider: id,
+                resolved: false,
+                provider_priority: 0,
+            })
+        };
+        let filtered = |start| {
+            let start = filter.start(&item(start))?;
+            Some(&filter.text[start..])
+        };
+        assert_eq!(filtered(Some((3, 4))), Some("Some No"));
+        assert_eq!(filtered(Some((3, 11))), Some(""));
+        assert_eq!(filtered(Some((3, 12))), None);
+        assert_eq!(filtered(Some((2, 4))), Some("No"));
+        assert_eq!(filtered(None), Some("No"));
+    }
 }
