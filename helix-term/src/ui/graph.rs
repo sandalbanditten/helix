@@ -85,8 +85,8 @@ pub struct Graph {
     screen: Rect,
     bordered: bool,
     inner: Rect,
-    /// The least size of the popup's inside, which only shrinks when the graph is fitted again.
-    least: (i32, i32),
+    /// The size of the popup's inside: the largest the graph fits in at any depth in either view.
+    size: (i32, i32),
     /// Whether to scroll the cursor to the middle of the area when the graph is drawn next.
     recentre: bool,
     pending: Vec<KeyEvent>,
@@ -150,7 +150,7 @@ impl Graph {
             screen: Rect::default(),
             bordered: true,
             inner: Rect::default(),
-            least: (0, 0),
+            size: (0, 0),
             recentre: true,
             pending: Vec::new(),
             info: None,
@@ -317,7 +317,6 @@ impl Graph {
 
     /// Scales the graph to fill the room it gets, the cursor on the shown node `on`.
     fn fit_view(&mut self, on: usize) {
-        self.least = (0, 0);
         if self.view == GraphView::Map {
             self.arrange_map();
             self.cursor = self.cell(on);
@@ -362,6 +361,29 @@ impl Graph {
         self.cursor = self.cell(on);
         self.recentre = true;
         self.settle();
+    }
+
+    /// Sizes the popup for the largest of the graph's depths and views, so that it keeps its size
+    /// when they change, and fits the graph with the cursor on the shown node `on`.
+    fn measure(&mut self, on: usize) {
+        let (depth, view) = (self.depth, self.view);
+        self.size = (0, 0);
+        // The current depth and view last, to end up laid out and fitted as they are.
+        for depth in (1..=3).filter(|&d| d != depth).chain([depth]) {
+            self.depth = depth;
+            self.relayout();
+            let views = [GraphView::Graph, GraphView::Map];
+            for view in views.into_iter().filter(|&v| v != view).chain([view]) {
+                self.view = view;
+                self.fit_view(0);
+                let (min, max) = self.content();
+                self.size = (
+                    self.size.0.max(max.0 - min.0),
+                    self.size.1.max(max.1 - min.1),
+                );
+            }
+        }
+        self.cursor = self.cell(on);
     }
 
     /// Keeps the cursor on the graph and in view, and the graph in the middle where it fits.
@@ -460,8 +482,7 @@ impl Graph {
             Action::Centre => {
                 if let Some(i) = self.hovered() {
                     self.centre = self.shown[i].0;
-                    self.relayout();
-                    self.fit_view(0);
+                    self.measure(0);
                 }
             }
             Action::View => {
@@ -523,7 +544,8 @@ impl Graph {
         );
         let popup = Popup::new(Hover::ID, contents)
             .auto_close(true)
-            .position(Some(at));
+            .position(Some(at))
+            .fixed();
         EventResult::Consumed(Some(Box::new(move |compositor, _| {
             compositor.replace_or_push(Hover::ID, popup)
         })))
@@ -1044,20 +1066,19 @@ impl Graph {
         self.screen = area;
         self.bordered = bordered;
         if resized {
-            self.fit_view(self.hovered().unwrap_or(0));
+            self.measure(self.hovered().unwrap_or(0));
         }
 
-        // A popup in the middle of the screen as big as the graph, or as much of it as fits.
+        // A popup in the middle of the screen as big as the graph gets, or as much of it as fits.
         let title = format!(" {} ", self.params.nodes[self.centre].label);
-        let (room, (min, max)) = (self.room(), self.content());
-        self.least = (
-            (max.0 - min.0)
+        let room = self.room();
+        let size = (
+            self.size
+                .0
                 .max(title.width() as i32 + 2)
-                .max(self.least.0)
-                .min(i32::from(room.0)),
-            (max.1 - min.1).max(self.least.1).min(i32::from(room.1)),
+                .min(i32::from(room.0)) as u16,
+            self.size.1.min(i32::from(room.1)) as u16,
         );
-        let size = (self.least.0 as u16, self.least.1 as u16);
         let chrome = if self.bordered { (2, 2) } else { (0, 1) };
         let popup = Rect::new(
             area.x + area.width.saturating_sub(size.0 + chrome.0) / 2,
@@ -1125,20 +1146,20 @@ impl panel_keys::Action for Action {
             Self::Down => "Move down",
             Self::Up => "Move up",
             Self::Right => "Move right",
-            Self::JumpLeft => "Go to the nearest document on the left",
-            Self::JumpDown => "Go to the nearest document below",
-            Self::JumpUp => "Go to the nearest document above",
-            Self::JumpRight => "Go to the nearest document on the right",
+            Self::JumpLeft => "Go to node left",
+            Self::JumpDown => "Go to node below",
+            Self::JumpUp => "Go to node above",
+            Self::JumpRight => "Go to node right",
             Self::ZoomIn => "Zoom in",
             Self::ZoomOut => "Zoom out",
             Self::Fit => "Fit the whole graph",
-            Self::Depth(1) => "Show the documents a link away",
-            Self::Depth(2) => "Show the documents up to two links away",
-            Self::Depth(_) => "Show the documents up to three links away",
-            Self::View => "Toggle the mind map",
-            Self::Centre => "Centre the graph on the document",
-            Self::Preview => "Preview the document",
-            Self::Open => "Open the document",
+            Self::Depth(1) => "Show nodes 1 link away",
+            Self::Depth(2) => "Show nodes 1-2 links away",
+            Self::Depth(_) => "Show nodes 1-3 links away",
+            Self::View => "Toggle mind map layout",
+            Self::Centre => "Open graph for node",
+            Self::Preview => "Preview the node",
+            Self::Open => "Open the node",
             Self::Help => "Show these keys",
             Self::Close => "Close the graph",
         }
@@ -1156,7 +1177,7 @@ const BINDINGS: Bindings<Action> = Bindings(&[
     bind(&[&[key!('L')]], Action::JumpRight),
     bind(&[&[key!('+')]], Action::ZoomIn),
     bind(&[&[key!('-')]], Action::ZoomOut),
-    bind(&[&[key!('0')]], Action::Fit),
+    bind(&[&[key!('=')]], Action::Fit),
     bind(&[&[key!('1')]], Action::Depth(1)),
     bind(&[&[key!('2')]], Action::Depth(2)),
     bind(&[&[key!('3')]], Action::Depth(3)),
@@ -1319,23 +1340,39 @@ mod tests {
     }
 
     #[test]
-    fn popups_fit_the_screen_and_keep_their_size_when_zoomed_out() {
-        let mut graph = graph(&[(0, 1), (0, 2), (1, 3), (2, 4), (1, 4)], 5);
+    fn popups_keep_the_largest_size_of_their_graph_until_the_screen_changes() {
+        // Paths out to three links away.
+        let edges = [(0, 1), (1, 2), (2, 3), (0, 4), (4, 5), (4, 6), (5, 7)];
+        let mut graph = graph(&edges, 8);
         let theme = Theme::default();
         let paint = |graph: &mut Graph, width, height| {
             let area = Rect::new(0, 0, width, height);
             graph.paint(area, &mut Surface::empty(area), &theme, true);
             graph.inner
         };
-        let small = paint(&mut graph, 60, 16);
-        graph.zoom_by(1.0 / ZOOM_STEP);
-        assert_eq!(paint(&mut graph, 60, 16), small);
-        let big = paint(&mut graph, 160, 48);
+        let small = paint(&mut graph, 90, 24);
+        for (depth, view) in [
+            (1, GraphView::Graph),
+            (3, GraphView::Map),
+            (1, GraphView::Map),
+        ] {
+            (graph.depth, graph.view) = (depth, view);
+            graph.relayout();
+            graph.fit_view(0);
+            assert_eq!(paint(&mut graph, 90, 24), small, "{depth} {view:?}");
+        }
+        // Smaller than the popup, which is sized for a larger graph.
+        let (min, max) = graph.content();
+        assert!(max.0 - min.0 < i32::from(small.width) && max.1 - min.1 < i32::from(small.height));
+        graph.zoom_by(ZOOM_STEP);
+        graph.zoom_by(1.0 / ZOOM_STEP / ZOOM_STEP);
+        assert_eq!(paint(&mut graph, 90, 24), small);
+        let big = paint(&mut graph, 180, 60);
         assert!(
             big.width > small.width && big.height > small.height,
             "{small:?} {big:?}"
         );
-        assert_eq!(paint(&mut graph, 60, 16), small);
+        assert_eq!(paint(&mut graph, 90, 24), small);
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub struct Popup<T: Component> {
     editor_origin: Option<Position>,
     area: Rect,
     position_bias: Open,
+    /// Whether to stay at `position` when the cursor is on another line.
+    fixed: bool,
     scroll_half_pages: usize,
     smooth_scroll: SmoothOffset,
     auto_close: bool,
@@ -53,6 +55,7 @@ impl<T: Component> Popup<T> {
             position: None,
             editor_origin: None,
             position_bias: Open::Below,
+            fixed: false,
             area: Rect::new(0, 0, 0, 0),
             scroll_half_pages: 0,
             smooth_scroll: SmoothOffset::default(),
@@ -69,6 +72,13 @@ impl<T: Component> Popup<T> {
     /// but rather the screen-space position of the information to which the popup refers.
     pub fn position(mut self, pos: Option<Position>) -> Self {
         self.position = pos;
+        self
+    }
+
+    /// Keeps the popup at its position when the cursor is on another line, for popups about
+    /// something other than the text at the cursor.
+    pub fn fixed(mut self) -> Self {
+        self.fixed = true;
         self
     }
 
@@ -155,7 +165,7 @@ impl<T: Component> Popup<T> {
         let mut position = editor.cursor().0.unwrap_or_default();
         if let Some(old_position) = self
             .position
-            .filter(|old_position| old_position.row == position.row)
+            .filter(|old_position| self.fixed || old_position.row == position.row)
         {
             position = old_position;
         } else {
