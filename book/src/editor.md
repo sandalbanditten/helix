@@ -361,7 +361,7 @@ Options for the [diff view](./diff-view.md).
 
 ### `[editor.graph]` Section
 
-Options for the [graphs](./lsp.md#graphs) that language servers show.
+Options for the graphs that [language servers](./lsp.md) show.
 
 | Key | Description | Default |
 | --- | --- | --- |
