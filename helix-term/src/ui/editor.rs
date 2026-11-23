@@ -2529,7 +2529,7 @@ fn is_panel_command(command: &commands::MappableCommand) -> bool {
     )
 }
 
-fn canonicalize_key(key: &mut KeyEvent) {
+pub(super) fn canonicalize_key(key: &mut KeyEvent) {
     if let KeyEvent {
         code: KeyCode::Char(_),
         modifiers: _,

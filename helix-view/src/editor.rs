@@ -327,6 +327,25 @@ pub struct DiffConfig {
     pub filler_character: Option<char>,
 }
 
+/// The graph of documents that language servers show, like notes and their links.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GraphConfig {
+    /// Which documents are named beside their dots. Defaults to `all`.
+    pub labels: GraphLabels,
+}
+
+/// Which documents of the graph are named.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphLabels {
+    /// All, where the names fit.
+    #[default]
+    All,
+    /// The centre, the one under the cursor and those it links with.
+    Linked,
+}
+
 /// What lines up the texts of the diff view.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -669,6 +688,8 @@ pub struct Config {
     pub undo: UndoConfig,
     /// The diff view, which shows two texts side by side.
     pub diff: DiffConfig,
+    /// The graph of documents that language servers show, like notes and their links.
+    pub graph: GraphConfig,
     /// Configuration of the statusline elements
     pub statusline: StatusLineConfig,
     /// Shape for cursor in each mode
@@ -1827,6 +1848,7 @@ impl Default for Config {
             compilation: CompilationConfig::default(),
             undo: UndoConfig::default(),
             diff: DiffConfig::default(),
+            graph: GraphConfig::default(),
             statusline: StatusLineConfig::default(),
             cursor_shape: CursorShapeConfig::default(),
             true_color: false,

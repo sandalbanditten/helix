@@ -58,5 +58,33 @@ or cursor changes, so that previews can follow the editor:
 | `cursor` | The position of the primary cursor |
 | `scrollDuration` | How long the view takes to scroll, in milliseconds: the [`smooth-scroll`](./editor.md#editorsmooth-scroll-section) duration, or 0 when it is disabled |
 
+## Graphs
+
+Servers can show a graph of documents, like notes and the links between them. Helix sets the
+experimental client capability `helixGraph`, and servers send the notification
+`helix/showGraph`:
+
+| Field | Description |
+| --- | --- |
+| `nodes` | The documents, each with a `label`, a `uri` and optionally a `preview`, markup content like a hover's |
+| `edges` | The links between documents, as pairs of indices into `nodes`, the linking one first |
+| `focus` | The index of the document the graph is centred on |
+
+A popup draws the documents up to two links from the centre, either way, in braille, and names
+them where the names fit (see [`[editor.graph]`](./editor.md#editorgraph-section)). Its keys:
+
+| Key | Description |
+| --- | --- |
+| `h`, `j`, `k`, `l`, arrow keys | Move the cursor |
+| `H`, `J`, `K`, `L` | Go to the nearest document on the left, below, above, on the right |
+| `+`, `-` | Zoom in, out |
+| `0` | Fit the whole graph |
+| `d` | Toggle one and two links out |
+| `Enter` | Centre the graph on the document under the cursor |
+| `Space-k` | Preview the document under the cursor |
+| `Space-Enter` | Open the document under the cursor |
+| `?` | Show these keys |
+| `Esc`, `Ctrl-c` | Close the graph |
+
 [lsp]: https://microsoft.github.io/language-server-protocol/
 [wiki]: https://github.com/helix-editor/helix/wiki/Language-Server-Configurations

@@ -1,4 +1,5 @@
-//! The keys of the panels docked beside the editor, for both key handling and the `?` help.
+//! The keys of the panels docked beside the editor and of the graph, for both key handling and
+//! the `?` help.
 
 use helix_view::{info::Info, input::KeyEvent};
 
@@ -55,6 +56,7 @@ impl<A: Action> Bindings<A> {
             [] => title,
             [key!('g')] => "Goto",
             [key!('z')] => "View",
+            [key!(' ')] => "Space",
             _ => "",
         };
         Info::new(title, &body)
@@ -87,6 +89,13 @@ impl<A: Action> Bindings<A> {
     }
 }
 
+/// The keys of a sequence, like `gg`, or `space k` where named keys need telling apart.
 fn sequence(keys: &[KeyEvent]) -> String {
-    keys.iter().map(ToString::to_string).collect()
+    let keys: Vec<String> = keys.iter().map(ToString::to_string).collect();
+    let separator = if keys.iter().any(|key| key.chars().count() > 1) {
+        " "
+    } else {
+        ""
+    };
+    keys.join(separator)
 }

@@ -828,7 +828,7 @@ impl Client {
                     ]),
                     ..Default::default()
                 }),
-                ..Default::default()
+                experimental: Some(serde_json::json!({ "helixGraph": true })),
             },
             trace: None,
             client_info: Some(lsp::ClientInfo {

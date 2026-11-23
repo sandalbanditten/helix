@@ -907,6 +907,17 @@ impl Application {
                     Notification::LogMessage(params) => {
                         log::info!("window/logMessage: {:?}", params);
                     }
+                    Notification::ShowGraph(params) => {
+                        let server = language_server!().name().to_owned();
+                        if params.focus < params.nodes.len() {
+                            let labels = self.editor.config().graph.labels;
+                            let graph = ui::Graph::new(params, server, labels);
+                            self.compositor
+                                .replace_or_push(ui::Graph::ID, ui::overlay::overlaid(graph));
+                        } else {
+                            log::error!("{server} sent a graph centred on no node");
+                        }
+                    }
                     Notification::ProgressMessage(params) => {
                         // The status line holds the prompt while it's open
                         let show_status = !self

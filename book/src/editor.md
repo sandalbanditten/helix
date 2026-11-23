@@ -12,6 +12,7 @@
 - [`[editor.dired]` Section](#editordired-section)
 - [`[editor.compilation]` Section](#editorcompilation-section)
 - [`[editor.undo]` Section](#editorundo-section)
+- [`[editor.graph]` Section](#editorgraph-section)
 - [`[editor.buffer-picker]` Section](#editorbuffer-picker-section)
 - [`[editor.auto-pairs]` Section](#editorauto-pairs-section)
 - [`[editor.auto-save]` Section](#editorauto-save-section)
@@ -357,6 +358,14 @@ Options for the [diff view](./diff-view.md).
 | --- | --- | --- |
 | `tool` | What lines up the two versions: `"difftastic"`, which falls back to `"builtin"` where `difft` isn't installed, or `"builtin"` for Helix's own line diff | `"difftastic"` |
 | `filler-character` | A character to draw filler rows with, like `"╱"` | unset |
+
+### `[editor.graph]` Section
+
+Options for the [graphs](./lsp.md#graphs) that language servers show.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `labels` | Which documents are named beside their dots: `"all"`, where the names fit, or `"linked"`, the centre, the one under the cursor and those it links with | `"all"` |
 
 ### `[editor.buffer-picker]` Section
 

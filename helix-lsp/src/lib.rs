@@ -599,6 +599,36 @@ pub enum Notification {
     ShowMessage(lsp::ShowMessageParams),
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
+    ShowGraph(ShowGraphParams),
+}
+
+/// Asks to show a graph of documents, like notes and the links between them. Sent to clients
+/// with the experimental capability `helixGraph`.
+pub enum ShowGraph {}
+
+impl lsp::notification::Notification for ShowGraph {
+    type Params = ShowGraphParams;
+    const METHOD: &'static str = "helix/showGraph";
+}
+
+/// The parameters of [`ShowGraph`].
+#[derive(Debug, PartialEq, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ShowGraphParams {
+    pub nodes: Vec<GraphNode>,
+    /// The links between nodes, as indices into `nodes`, from the linking node.
+    pub edges: Vec<(usize, usize)>,
+    /// The node the graph is centred on.
+    pub focus: usize,
+}
+
+/// A document of a [`ShowGraph`].
+#[derive(Debug, PartialEq, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GraphNode {
+    pub label: String,
+    pub uri: lsp::Url,
+    /// A preview of the document, like a hover.
+    #[serde(default)]
+    pub preview: Option<lsp::MarkupContent>,
 }
 
 impl Notification {
@@ -625,6 +655,7 @@ impl Notification {
                 let params: lsp::ProgressParams = params.parse()?;
                 Self::ProgressMessage(params)
             }
+            ShowGraph::METHOD => Self::ShowGraph(params.parse()?),
             _ => {
                 return Err(Error::Unhandled);
             }
