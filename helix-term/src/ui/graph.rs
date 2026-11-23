@@ -85,9 +85,9 @@ pub struct Graph {
     screen: Rect,
     bordered: bool,
     inner: Rect,
-    /// Whether to fit the graph into its area when it's drawn next, and to scroll the cursor to
-    /// the middle of the area then.
-    fit: bool,
+    /// The least size of the popup's inside, which only shrinks when the graph is fitted again.
+    least: (i32, i32),
+    /// Whether to scroll the cursor to the middle of the area when the graph is drawn next.
     recentre: bool,
     pending: Vec<KeyEvent>,
     info: Option<Info>,
@@ -150,12 +150,13 @@ impl Graph {
             screen: Rect::default(),
             bordered: true,
             inner: Rect::default(),
-            fit: true,
+            least: (0, 0),
             recentre: true,
             pending: Vec::new(),
             info: None,
         };
         graph.relayout();
+        graph.cursor = graph.cell(0);
         graph
     }
 
@@ -316,6 +317,7 @@ impl Graph {
 
     /// Scales the graph to fill the room it gets, the cursor on the shown node `on`.
     fn fit_view(&mut self, on: usize) {
+        self.least = (0, 0);
         if self.view == GraphView::Map {
             self.arrange_map();
             self.cursor = self.cell(on);
@@ -1037,22 +1039,25 @@ impl Component for Graph {
 impl Graph {
     /// Draws the popup in the middle of `area`.
     fn paint(&mut self, area: Rect, surface: &mut Surface, theme: &Theme, bordered: bool) {
+        let resized = (area.width, area.height, bordered)
+            != (self.screen.width, self.screen.height, self.bordered);
         self.screen = area;
         self.bordered = bordered;
-        if self.fit {
-            self.fit = false;
-            self.fit_view(0);
+        if resized {
+            self.fit_view(self.hovered().unwrap_or(0));
         }
 
         // A popup in the middle of the screen as big as the graph, or as much of it as fits.
         let title = format!(" {} ", self.params.nodes[self.centre].label);
         let (room, (min, max)) = (self.room(), self.content());
-        let size = (
+        self.least = (
             (max.0 - min.0)
                 .max(title.width() as i32 + 2)
-                .min(i32::from(room.0)) as u16,
-            (max.1 - min.1).min(i32::from(room.1)) as u16,
+                .max(self.least.0)
+                .min(i32::from(room.0)),
+            (max.1 - min.1).max(self.least.1).min(i32::from(room.1)),
         );
+        let size = (self.least.0 as u16, self.least.1 as u16);
         let chrome = if self.bordered { (2, 2) } else { (0, 1) };
         let popup = Rect::new(
             area.x + area.width.saturating_sub(size.0 + chrome.0) / 2,
@@ -1233,7 +1238,6 @@ mod tests {
     fn capital_motions_go_to_the_nearest_node_that_way() {
         let mut graph = graph(&[(0, 1), (0, 2), (0, 3)], 4);
         graph.inner = Rect::new(0, 0, 80, 20);
-        graph.fit = false;
         let place = |x, y| Place { x, y, left: false };
         graph.placed = vec![place(0, 0), place(20, 1), place(10, 0), place(2, 9)];
         graph.cursor = (0, 0);
@@ -1312,6 +1316,26 @@ mod tests {
             graph.cursor = cursor;
             assert_eq!(graph.hovered(), hovered, "{cursor:?}");
         }
+    }
+
+    #[test]
+    fn popups_fit_the_screen_and_keep_their_size_when_zoomed_out() {
+        let mut graph = graph(&[(0, 1), (0, 2), (1, 3), (2, 4), (1, 4)], 5);
+        let theme = Theme::default();
+        let paint = |graph: &mut Graph, width, height| {
+            let area = Rect::new(0, 0, width, height);
+            graph.paint(area, &mut Surface::empty(area), &theme, true);
+            graph.inner
+        };
+        let small = paint(&mut graph, 60, 16);
+        graph.zoom_by(1.0 / ZOOM_STEP);
+        assert_eq!(paint(&mut graph, 60, 16), small);
+        let big = paint(&mut graph, 160, 48);
+        assert!(
+            big.width > small.width && big.height > small.height,
+            "{small:?} {big:?}"
+        );
+        assert_eq!(paint(&mut graph, 60, 16), small);
     }
 
     #[test]
