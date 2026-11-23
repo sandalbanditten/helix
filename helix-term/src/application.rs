@@ -908,13 +908,12 @@ impl Application {
                         log::info!("window/logMessage: {:?}", params);
                     }
                     Notification::ShowGraph(params) => {
-                        let server = language_server!().name().to_owned();
                         if params.focus < params.nodes.len() {
                             let labels = self.editor.config().graph.labels;
-                            let graph = ui::Graph::new(params, server, labels);
-                            self.compositor
-                                .replace_or_push(ui::Graph::ID, ui::overlay::overlaid(graph));
+                            let graph = ui::Graph::new(params, server_id, labels);
+                            self.compositor.replace_or_push(ui::Graph::ID, graph);
                         } else {
+                            let server = language_server!().name();
                             log::error!("{server} sent a graph centred on no node");
                         }
                     }

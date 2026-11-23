@@ -66,12 +66,13 @@ experimental client capability `helixGraph`, and servers send the notification
 
 | Field | Description |
 | --- | --- |
-| `nodes` | The documents, each with a `label`, a `uri` and optionally a `preview`, markup content like a hover's |
+| `nodes` | The documents, each with a `label`, a `uri` and optionally a `preview`, markup content like a hover's, `missing` for a document that doesn't exist yet, and a `command` that opening it runs instead, like one creating it |
 | `edges` | The links between documents, as pairs of indices into `nodes`, the linking one first |
 | `focus` | The index of the document the graph is centred on |
 
-A popup draws the documents up to two links from the centre, either way, in braille, and names
-them where the names fit (see [`[editor.graph]`](./editor.md#editorgraph-section)). Its keys:
+A popup in the middle of the screen draws the documents up to two links from the centre, either
+way, in braille, missing ones faint, and names them where the names fit (see
+[`[editor.graph]`](./editor.md#editorgraph-section)). Its keys:
 
 | Key | Description |
 | --- | --- |

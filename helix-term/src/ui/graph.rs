@@ -7,7 +7,7 @@ use helix_core::{
     unicode::width::{UnicodeWidthChar, UnicodeWidthStr},
     Position,
 };
-use helix_lsp::{lsp, ShowGraphParams};
+use helix_lsp::{lsp, LanguageServerId, ShowGraphParams};
 use helix_view::{
     editor::{Action as Open, GraphLabels},
     graphics::{Modifier, Rect},
@@ -42,8 +42,8 @@ pub struct Graph {
     params: ShowGraphParams,
     /// The nodes each node links with, either way.
     links: Vec<Vec<usize>>,
-    /// The language server, which names previews.
-    server: String,
+    /// The language server, which runs the nodes' commands.
+    server: LanguageServerId,
     labels: GraphLabels,
     centre: usize,
     /// How many links from the centre nodes are shown.
@@ -59,7 +59,10 @@ pub struct Graph {
     /// The cursor's cell and the area's top left cell on the graph's canvas.
     cursor: (i32, i32),
     scroll: (i32, i32),
-    /// The area the graph was last drawn in.
+    /// The screen, whether the popup has a border, and the area inside it that the graph was
+    /// last drawn in.
+    screen: Rect,
+    bordered: bool,
     inner: Rect,
     /// Whether to fit the graph into its area when it's drawn next.
     fit: bool,
@@ -71,7 +74,7 @@ impl Graph {
     pub const ID: &'static str = "graph";
 
     /// The graph of `params`, centred on its focus, which must be one of its nodes.
-    pub fn new(params: ShowGraphParams, server: String, labels: GraphLabels) -> Self {
+    pub fn new(params: ShowGraphParams, server: LanguageServerId, labels: GraphLabels) -> Self {
         let n = params.nodes.len();
         let mut links = vec![Vec::new(); n];
         for &(a, b) in &params.edges {
@@ -97,6 +100,8 @@ impl Graph {
             stretch: 1.0,
             cursor: (0, 0),
             scroll: (0, 0),
+            screen: Rect::default(),
+            bordered: true,
             inner: Rect::default(),
             fit: true,
             pending: Vec::new(),
@@ -154,50 +159,97 @@ impl Graph {
             })
     }
 
-    /// Zooms so that the whole graph fits, the cursor on the shown node `on`.
-    fn fit_view(&mut self, on: usize) {
-        let (width, height) = (self.inner.width as f32, self.inner.height as f32);
-        let (mut min, mut max) = ((f32::MAX, f32::MAX), (f32::MIN, f32::MIN));
-        for &(_, (x, y)) in &self.shown {
-            min = (min.0.min(x), min.1.min(y));
-            max = (max.0.max(x), max.1.max(y));
+    /// The most room the graph gets: four fifths of the screen, inside the popup's border or
+    /// above its status row.
+    fn room(&self) -> (u16, u16) {
+        let (width, height) = (self.screen.width * 4 / 5, self.screen.height * 4 / 5);
+        if self.bordered {
+            (width.saturating_sub(2), height.saturating_sub(2))
+        } else {
+            (width, height.saturating_sub(1))
         }
-        let span = ((max.0 - min.0).max(0.01), (max.1 - min.1).max(0.01));
-        // A cell of room on each side.
-        let fits = ((width - 2.0) * 2.0 / span.0, (height - 2.0) * 4.0 / span.1);
-        self.zoom = fits.0.min(fits.1).clamp(MIN_ZOOM, FIT_ZOOM);
-        self.stretch = (fits.0 / self.zoom).clamp(1.0, 2.0);
-        let middle = (
-            ((min.0 + max.0) / 2.0 * self.zoom * self.stretch / 2.0).floor() as i32,
-            ((min.1 + max.1) / 2.0 * self.zoom / 4.0).floor() as i32,
-        );
-        self.scroll = (
-            middle.0 - self.inner.width as i32 / 2,
-            middle.1 - self.inner.height as i32 / 2,
-        );
-        self.cursor = self.cell(on);
-        self.follow();
     }
 
-    /// Scrolls the cursor into view.
-    fn follow(&mut self) {
-        let (width, height) = (
-            (self.inner.width as i32).max(1),
-            (self.inner.height as i32).max(1),
+    /// The cells the nodes and their names cover, with a column of room on either side: the top
+    /// left one and the one past the bottom right.
+    fn content(&self) -> ((i32, i32), (i32, i32)) {
+        let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+        for (i, &(n, _)) in self.shown.iter().enumerate() {
+            let (x, y) = self.cell(i);
+            // The node, a space and its name.
+            let end = x + 2 + self.params.nodes[n].label.width() as i32;
+            min = (min.0.min(x - 1), min.1.min(y));
+            max = (max.0.max(end + 1), max.1.max(y + 1));
+        }
+        (min, max)
+    }
+
+    /// Zooms so that the whole graph fits, names and all, the cursor on the shown node `on`.
+    fn fit_view(&mut self, on: usize) {
+        let (width, height) = self.room();
+        let (top, bottom) = self
+            .shown
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(top, bottom), n| {
+                (top.min(n.1 .1), bottom.max(n.1 .1))
+            });
+        let down =
+            ((f32::from(height) - 2.0) * 4.0 / (bottom - top).max(0.01)).clamp(MIN_ZOOM, FIT_ZOOM);
+        // As wide as the names leave room for, up to twice as wide as high.
+        let (mut fits, mut over) = (MIN_ZOOM, 2.0 * down);
+        for _ in 0..24 {
+            let across = (fits + over) / 2.0;
+            self.set_zoom(down, across);
+            let (min, max) = self.content();
+            if max.0 - min.0 <= i32::from(width) {
+                fits = across;
+            } else {
+                over = across;
+            }
+        }
+        self.set_zoom(down, fits);
+        self.cursor = self.cell(on);
+        self.settle();
+    }
+
+    /// Sets the dots per link length down and across, no more down than across.
+    fn set_zoom(&mut self, down: f32, across: f32) {
+        self.zoom = down.min(across);
+        self.stretch = across / self.zoom;
+    }
+
+    /// Keeps the cursor on the graph and in view, and the graph in the middle where it fits.
+    fn settle(&mut self) {
+        let (min, max) = self.content();
+        self.cursor = (
+            self.cursor.0.clamp(min.0, max.0 - 1),
+            self.cursor.1.clamp(min.1, max.1 - 1),
         );
-        self.scroll.0 = self
-            .scroll
-            .0
-            .clamp(self.cursor.0 - width + 1, self.cursor.0);
-        self.scroll.1 = self
-            .scroll
-            .1
-            .clamp(self.cursor.1 - height + 1, self.cursor.1);
+        let axis = |scroll: i32, cursor: i32, min: i32, max: i32, size: u16| {
+            let size = i32::from(size).max(1);
+            if max - min <= size {
+                min - (size - (max - min)) / 2
+            } else {
+                scroll
+                    .clamp(cursor - size + 1, cursor)
+                    .clamp(min, max - size)
+            }
+        };
+        self.scroll = (
+            axis(self.scroll.0, self.cursor.0, min.0, max.0, self.inner.width),
+            axis(
+                self.scroll.1,
+                self.cursor.1,
+                min.1,
+                max.1,
+                self.inner.height,
+            ),
+        );
     }
 
     fn step(&mut self, (dx, dy): (i32, i32)) {
         self.cursor = (self.cursor.0 + dx, self.cursor.1 + dy);
-        self.follow();
+        self.settle();
     }
 
     /// Moves the cursor to the nearest node in the direction `(dx, dy)`, at most 45° off it.
@@ -214,14 +266,13 @@ impl Graph {
             .min();
         if let Some((_, i)) = nearest {
             self.cursor = self.cell(i);
-            self.follow();
+            self.settle();
         }
     }
 
-    /// Zooms by `factor`, keeping the cursor where it is on the screen and on the node it's on.
+    /// Zooms by `factor`, keeping the cursor on the node it's on.
     fn zoom_by(&mut self, factor: f32) {
         let hovered = self.hovered();
-        let screen = (self.cursor.0 - self.scroll.0, self.cursor.1 - self.scroll.1);
         let ratio = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM) / self.zoom;
         self.zoom *= ratio;
         self.cursor = match hovered {
@@ -231,7 +282,7 @@ impl Graph {
                 ((self.cursor.1 as f32 + 0.5) * ratio).floor() as i32,
             ),
         };
-        self.scroll = (self.cursor.0 - screen.0, self.cursor.1 - screen.1);
+        self.settle();
     }
 
     fn run(&mut self, action: Action, cx: &mut Context) -> EventResult {
@@ -264,8 +315,12 @@ impl Graph {
             Action::Preview => return self.preview(cx),
             Action::Open => {
                 if let Some(i) = self.hovered() {
-                    let uri = self.params.nodes[self.shown[i].0].uri.clone();
-                    let opened = helix_core::Uri::try_from(uri)
+                    let node = &self.params.nodes[self.shown[i].0];
+                    if let Some(command) = node.command.clone() {
+                        cx.editor.execute_lsp_command(command, self.server);
+                        return close();
+                    }
+                    let opened = helix_core::Uri::try_from(node.uri.clone())
                         .map_err(|err| err.to_string())
                         .and_then(|uri| {
                             let path = uri.as_path().ok_or("not a file")?.to_path_buf();
@@ -298,10 +353,11 @@ impl Graph {
             contents: lsp::HoverContents::Markup(preview),
             range: None,
         };
-        let contents = Hover::new(
-            vec![(self.server.clone(), hover)],
-            cx.editor.syn_loader.clone(),
-        );
+        let server = cx
+            .editor
+            .language_server_by_id(self.server)
+            .map_or_else(String::new, |server| server.name().to_owned());
+        let contents = Hover::new(vec![(server, hover)], cx.editor.syn_loader.clone());
         let at = Position::new(
             (self.inner.y as i32 + self.cursor.1 - self.scroll.1) as usize,
             (self.inner.x as i32 + self.cursor.0 - self.scroll.0) as usize,
@@ -353,14 +409,17 @@ impl Graph {
             }
         }
 
-        // The nodes, then their names where they fit.
+        // The nodes, then their names where they fit; those of missing documents faint.
         let centre = theme.get("ui.text.focus");
+        let missing = |i: usize| self.params.nodes[self.shown[i].0].missing;
         let mut taken = vec![false; width * height];
         for i in 0..self.shown.len() {
             if let Some((x, y)) = at(self.cell(i)) {
                 taken[y * width + x] = true;
                 let (symbol, style) = if i == 0 {
                     ('◉', centre)
+                } else if missing(i) {
+                    ('○', link)
                 } else {
                     ('●', text)
                 };
@@ -406,10 +465,15 @@ impl Graph {
             };
             let style = if i == 0 {
                 centre
-            } else if Some(i) == hovered {
-                text.add_modifier(Modifier::BOLD)
+            } else if missing(i) {
+                link
             } else {
                 text
+            };
+            let style = if Some(i) == hovered {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
             };
             surface.set_stringn(
                 inner.x + start as u16,
@@ -560,17 +624,42 @@ impl Component for Graph {
     }
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        let theme = &cx.editor.theme;
-        let text = theme.get("ui.text");
-        surface.clear_with(area, theme.get("ui.background").patch(text));
-        let title = format!(" {} ", self.params.nodes[self.centre].label);
-        let block = Block::bordered().title(title);
-        self.inner = block.inner(area);
-        block.render(area, surface);
+        self.screen = area;
+        self.bordered = cx.editor.popup_border();
         if self.fit {
             self.fit = false;
             self.fit_view(0);
         }
+
+        // A popup in the middle of the screen as big as the graph, or as much of it as fits.
+        let title = format!(" {} ", self.params.nodes[self.centre].label);
+        let (room, (min, max)) = (self.room(), self.content());
+        let size = (
+            (max.0 - min.0)
+                .max(title.width() as i32 + 2)
+                .min(i32::from(room.0)) as u16,
+            (max.1 - min.1).min(i32::from(room.1)) as u16,
+        );
+        let chrome = if self.bordered { (2, 2) } else { (0, 1) };
+        let popup = Rect::new(
+            area.x + area.width.saturating_sub(size.0 + chrome.0) / 2,
+            area.y + area.height.saturating_sub(size.1 + chrome.1) / 2,
+            size.0 + chrome.0,
+            size.1 + chrome.1,
+        )
+        .intersection(area);
+        let theme = &cx.editor.theme;
+        let text = theme.get("ui.text");
+        surface.clear_with(popup, theme.get("ui.popup"));
+        self.inner = if self.bordered {
+            let block = Block::bordered().title(title);
+            let inner = block.inner(popup);
+            block.render(popup, surface);
+            inner
+        } else {
+            popup.clip_bottom(1)
+        };
+        self.settle();
         self.draw(surface, theme);
 
         let hovered = self
@@ -578,11 +667,12 @@ impl Component for Graph {
             .map(|i| format!("{} · ", self.params.nodes[self.shown[i].0].label))
             .unwrap_or_default();
         let status = format!(" {hovered}depth {} ", self.depth);
+        let indent = u16::from(self.bordered);
         surface.set_stringn(
-            area.x + 1,
-            area.bottom().saturating_sub(1),
+            popup.x + indent,
+            popup.bottom().saturating_sub(1),
             &status,
-            area.width.saturating_sub(2) as usize,
+            popup.width.saturating_sub(2 * indent) as usize,
             text,
         );
         if let Some(info) = &mut self.info {
@@ -670,6 +760,8 @@ mod tests {
                 label: format!("Note {i}"),
                 uri: lsp::Url::parse(&format!("file:///vault/Note{i}.typ")).unwrap(),
                 preview: None,
+                missing: false,
+                command: None,
             })
             .collect();
         let params = ShowGraphParams {
@@ -677,7 +769,7 @@ mod tests {
             edges: edges.to_vec(),
             focus: 0,
         };
-        Graph::new(params, "server".into(), GraphLabels::All)
+        Graph::new(params, LanguageServerId::default(), GraphLabels::All)
     }
 
     #[test]
@@ -752,6 +844,11 @@ mod tests {
         assert_eq!(graph.hovered(), Some(3));
         graph.step((1, 0));
         assert_eq!(graph.hovered(), None);
+        // The cursor stays on the graph: a column left of its leftmost node.
+        for _ in 0..20 {
+            graph.step((-1, 0));
+        }
+        assert_eq!(graph.cursor, (-7, 5));
     }
 
     #[test]

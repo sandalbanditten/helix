@@ -629,6 +629,12 @@ pub struct GraphNode {
     /// A preview of the document, like a hover.
     #[serde(default)]
     pub preview: Option<lsp::MarkupContent>,
+    /// Whether the document doesn't exist yet, which is drawn faint.
+    #[serde(default)]
+    pub missing: bool,
+    /// What opening the node runs instead of opening its document, like creating it.
+    #[serde(default)]
+    pub command: Option<lsp::Command>,
 }
 
 impl Notification {
