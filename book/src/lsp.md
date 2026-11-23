@@ -70,17 +70,21 @@ experimental client capability `helixGraph`, and servers send the notification
 | `edges` | The links between documents, as pairs of indices into `nodes`, the linking one first |
 | `focus` | The index of the document the graph is centred on |
 
-A popup in the middle of the screen draws the documents up to two links from the centre, either
-way, in braille, missing ones faint, and names them where the names fit (see
-[`[editor.graph]`](./editor.md#editorgraph-section)). Its keys:
+A popup in the middle of the screen shows the documents up to two links from the centre, either
+way, missing ones faint (see [`[editor.graph]`](./editor.md#editorgraph-section)). The graph
+puts them on rings around the centre, one ring for each link away, with braille lines between
+them. The mind map puts them in columns beside the centre, each next to the document it hangs
+off, with lines to it; the other links of the document under the cursor are underlined. The
+cursor is on a document on its dot or its name. Its keys:
 
 | Key | Description |
 | --- | --- |
 | `h`, `j`, `k`, `l`, arrow keys | Move the cursor |
 | `H`, `J`, `K`, `L` | Go to the nearest document on the left, below, above, on the right |
-| `+`, `-` | Zoom in, out |
+| `+`, `-` | Zoom in, out, in the graph |
 | `0` | Fit the whole graph |
-| `d` | Toggle one and two links out |
+| `1`, `2`, `3` | Show the documents up to one, two or three links away |
+| `m` | Toggle the mind map |
 | `Enter` | Centre the graph on the document under the cursor |
 | `Space-k` | Preview the document under the cursor |
 | `Space-Enter` | Open the document under the cursor |

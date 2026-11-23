@@ -909,8 +909,7 @@ impl Application {
                     }
                     Notification::ShowGraph(params) => {
                         if params.focus < params.nodes.len() {
-                            let labels = self.editor.config().graph.labels;
-                            let graph = ui::Graph::new(params, server_id, labels);
+                            let graph = ui::Graph::new(params, server_id, &self.editor.config());
                             self.compositor.replace_or_push(ui::Graph::ID, graph);
                         } else {
                             let server = language_server!().name();

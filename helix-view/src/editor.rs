@@ -333,13 +333,27 @@ pub struct DiffConfig {
 pub struct GraphConfig {
     /// Which documents are named beside their dots. Defaults to `all`.
     pub labels: GraphLabels,
+    /// How the graph is drawn when it opens. Defaults to `graph`.
+    pub view: GraphView,
+}
+
+/// How the graph is drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphView {
+    /// The documents on rings around the centre, with braille links between them.
+    #[default]
+    Graph,
+    /// A mind map: columns of documents beside the centre, with lines to the ones they hang
+    /// off.
+    Map,
 }
 
 /// Which documents of the graph are named.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GraphLabels {
-    /// All, where the names fit.
+    /// All of them.
     #[default]
     All,
     /// The centre, the one under the cursor and those it links with.

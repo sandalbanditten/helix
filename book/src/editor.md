@@ -365,7 +365,8 @@ Options for the [graphs](./lsp.md#graphs) that language servers show.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `labels` | Which documents are named beside their dots: `"all"`, where the names fit, or `"linked"`, the centre, the one under the cursor and those it links with | `"all"` |
+| `labels` | Which documents are named beside their dots: `"all"`, or `"linked"`, the centre, the one under the cursor and those it links with | `"all"` |
+| `view` | How the graph opens: `"graph"`, on rings around the centre, or `"map"`, as a mind map | `"graph"` |
 
 ### `[editor.buffer-picker]` Section
 
